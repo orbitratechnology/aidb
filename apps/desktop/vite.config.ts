@@ -1,3 +1,5 @@
+import { fileURLToPath, URL } from 'node:url'
+import tailwindcss from '@tailwindcss/vite'
 import react from '@vitejs/plugin-react'
 import { defineConfig } from 'vite'
 
@@ -7,7 +9,12 @@ const isDebug = Boolean(process.env.TAURI_ENV_DEBUG)
 
 // https://vite.dev/config/
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), tailwindcss()],
+  resolve: {
+    alias: {
+      '@': fileURLToPath(new URL('./src', import.meta.url)),
+    },
+  },
   // Keep Rust compiler output visible in the terminal.
   clearScreen: false,
   server: {

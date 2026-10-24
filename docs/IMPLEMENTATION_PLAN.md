@@ -19,9 +19,11 @@ Status legend: `[x]` done · `[~]` in progress · `[ ]` not started
       `src-tauri` (Tauri 2) at the root, Cargo workspace, `rust-toolchain.toml`, pinned versions,
       `pnpm tauri dev/build` wiring, minimal capability file and CSP. Verify `cargo check`,
       `cargo clippy`, `pnpm build`.
-- [ ] **1.2 Tailwind v4 + shadcn/ui.** Initialize shadcn (Radix base, neutral palette), semantic
+- [x] **1.2 Tailwind v4 + shadcn/ui.** Initialize shadcn (Radix base, neutral palette), semantic
       tokens for light and dark themes, theme provider (system/light/dark), reduced-motion support,
-      system UI and monospace font stacks, base components.
+      system UI and monospace font stacks, base components. Uses the `vega` style (the successor
+      to `new-york`) and a local theme provider instead of `next-themes`, whose inline script the
+      CSP would block.
 - [ ] **1.3 Responsive app shell.** Routes for Ask, Data, SQL, Changes, Settings. Desktop sidebar,
       compact bottom navigation with 44px targets, Settings in a top-level menu on narrow screens,
       top bar with active-connection and environment identity (text, not only color). Empty states

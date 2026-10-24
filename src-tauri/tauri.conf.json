@@ -2,7 +2,7 @@
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "aidb",
   "version": "0.1.0",
-  "identifier": "com.orbitratechnology.aidb",
+  "identifier": "com.orbitratech.aidb",
   "build": {
     "frontendDist": "../apps/desktop/dist",
     "devUrl": "http://localhost:5173",

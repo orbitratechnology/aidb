@@ -24,10 +24,11 @@ Status legend: `[x]` done · `[~]` in progress · `[ ]` not started
       system UI and monospace font stacks, base components. Uses the `vega` style (the successor
       to `new-york`) and a local theme provider instead of `next-themes`, whose inline script the
       CSP would block.
-- [ ] **1.3 Responsive app shell.** Routes for Ask, Data, SQL, Changes, Settings. Desktop sidebar,
+- [x] **1.3 Responsive app shell.** Routes for Ask, Data, SQL, Changes, Settings. Desktop sidebar,
       compact bottom navigation with 44px targets, Settings in a top-level menu on narrow screens,
       top bar with active-connection and environment identity (text, not only color). Empty states
-      that explain the next action; no mock data.
+      that explain the next action; no mock data. Hash router with lazy feature routes; sidebar
+      expanded at 1024px+, icons at 640–1023px, bottom navigation below 640px.
 - [ ] **1.4 Quality tooling and CI.** Linting (oxlint from the Vite template, or ESLint if a needed
       rule is missing), Prettier, Vitest + React Testing Library, rustfmt and clippy configuration,
       GitHub Actions for lint, typecheck, unit tests and a Linux build.

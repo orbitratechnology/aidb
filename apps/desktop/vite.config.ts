@@ -29,5 +29,8 @@ export default defineConfig({
     target: process.env.TAURI_ENV_PLATFORM === 'windows' ? 'chrome111' : 'safari16.4',
     minify: !isDebug,
     sourcemap: isDebug,
+    // Assets load from local disk, not the network. The shell (React, router, Radix) is ~520 kB;
+    // feature screens are split per route. Raise this only with a reason.
+    chunkSizeWarningLimit: 600,
   },
 })

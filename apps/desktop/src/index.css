@@ -1,0 +1,9 @@
+/* Replaced by Tailwind CSS and shadcn/ui tokens in task 1.2. */
+:root {
+  color-scheme: light dark;
+  font-family: system-ui, sans-serif;
+}
+
+body {
+  margin: 0;
+}

@@ -15,7 +15,7 @@ Status legend: `[x]` done · `[~]` in progress · `[ ]` not started
 
 ## Phase 1: Scaffold and design system
 
-- [ ] **1.1 Workspace scaffold.** pnpm workspace, `apps/desktop` (Vite + React + strict TypeScript),
+- [x] **1.1 Workspace scaffold.** pnpm workspace, `apps/desktop` (Vite + React + strict TypeScript),
       `src-tauri` (Tauri 2) at the root, Cargo workspace, `rust-toolchain.toml`, pinned versions,
       `pnpm tauri dev/build` wiring, minimal capability file and CSP. Verify `cargo check`,
       `cargo clippy`, `pnpm build`.
@@ -26,8 +26,9 @@ Status legend: `[x]` done · `[~]` in progress · `[ ]` not started
       compact bottom navigation with 44px targets, Settings in a top-level menu on narrow screens,
       top bar with active-connection and environment identity (text, not only color). Empty states
       that explain the next action; no mock data.
-- [ ] **1.4 Quality tooling and CI.** ESLint, Prettier, Vitest + React Testing Library, rustfmt and
-      clippy configuration, GitHub Actions for lint, typecheck, unit tests and a Linux build.
+- [ ] **1.4 Quality tooling and CI.** Linting (oxlint from the Vite template, or ESLint if a needed
+      rule is missing), Prettier, Vitest + React Testing Library, rustfmt and clippy configuration,
+      GitHub Actions for lint, typecheck, unit tests and a Linux build.
 
 ## Phase 2: Native command boundary
 

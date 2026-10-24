@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main-window",
+  "description": "Permissions for the main application window. Keep this list minimal.",
+  "windows": ["main"],
+  "permissions": ["core:app:default", "core:event:default"]
+}

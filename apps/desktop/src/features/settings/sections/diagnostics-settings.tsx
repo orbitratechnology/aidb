@@ -7,9 +7,7 @@ import { getAppInfo, type AppInfo } from '@/lib/tauri'
 import { SettingsSection } from '../settings-section'
 
 type NativeStatus =
-  | { state: 'loading' }
-  | { state: 'ready'; info: AppInfo }
-  | { state: 'error'; message: string }
+  { state: 'loading' } | { state: 'ready'; info: AppInfo } | { state: 'error'; message: string }
 
 export function DiagnosticsSettings() {
   const [status, setStatus] = useState<NativeStatus>({ state: 'loading' })

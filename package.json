@@ -15,9 +15,14 @@
     "dev:web": "pnpm --filter @aidb/desktop dev",
     "build:web": "pnpm --filter @aidb/desktop build",
     "typecheck": "pnpm -r typecheck",
-    "lint": "pnpm -r lint"
+    "lint": "pnpm -r lint",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "pnpm -r test"
   },
   "devDependencies": {
-    "@tauri-apps/cli": "2.12.4"
+    "@tauri-apps/cli": "2.12.4",
+    "prettier": "^3.9.10",
+    "prettier-plugin-tailwindcss": "^0.8.1"
   }
 }

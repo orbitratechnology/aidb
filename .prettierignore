@@ -1,0 +1,9 @@
+# Generated or vendored
+pnpm-lock.yaml
+target/
+dist/
+src-tauri/gen/
+.claude/
+
+# shadcn/ui components stay as the CLI writes them, so upstream diffs stay readable.
+apps/desktop/src/components/ui/

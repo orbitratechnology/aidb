@@ -29,9 +29,10 @@ Status legend: `[x]` done · `[~]` in progress · `[ ]` not started
       top bar with active-connection and environment identity (text, not only color). Empty states
       that explain the next action; no mock data. Hash router with lazy feature routes; sidebar
       expanded at 1024px+, icons at 640–1023px, bottom navigation below 640px.
-- [ ] **1.4 Quality tooling and CI.** Linting (oxlint from the Vite template, or ESLint if a needed
-      rule is missing), Prettier, Vitest + React Testing Library, rustfmt and clippy configuration,
-      GitHub Actions for lint, typecheck, unit tests and a Linux build.
+- [x] **1.4 Quality tooling and CI.** oxlint, Prettier (with Tailwind class sorting), Vitest for
+      pure frontend logic, rustfmt and clippy configuration, GitHub Actions for format, lint,
+      typecheck, unit tests, Rust checks and a Linux `.deb` build. No React Testing Library
+      component tests (maintainer decision); UI behavior is verified end to end instead.
 
 ## Phase 2: Native command boundary
 
@@ -145,15 +146,15 @@ Status legend: `[x]` done · `[~]` in progress · `[ ]` not started
 
 ## Version baseline (checked 24 October 2026)
 
-| Component        | Pinned       | Notes                                                             |
-| ---------------- | ------------ | ----------------------------------------------------------------- |
-| Rust             | 1.99.1       | `rust-toolchain.toml`                                             |
-| Tauri (crate/JS) | 2.12.x       | 3.0 is alpha; stay on 2.x                                         |
-| React            | 19.3         |                                                                   |
-| Vite             | 8.3          |                                                                   |
-| TypeScript       | 6.0          | 7.0 is out, but `typescript-eslint` supports only `<6.1` for now |
-| Tailwind CSS     | 4.3          |                                                                   |
-| SQLx             | 0.9          |                                                                   |
-| reqwest          | 0.13         |                                                                   |
-| keyring          | 4.x          |                                                                   |
-| sqlparser        | 0.63         |                                                                   |
+| Component        | Pinned | Notes                                                            |
+| ---------------- | ------ | ---------------------------------------------------------------- |
+| Rust             | 1.99.1 | `rust-toolchain.toml`                                            |
+| Tauri (crate/JS) | 2.12.x | 3.0 is alpha; stay on 2.x                                        |
+| React            | 19.3   |                                                                  |
+| Vite             | 8.3    |                                                                  |
+| TypeScript       | 6.0    | 7.0 is out, but `typescript-eslint` supports only `<6.1` for now |
+| Tailwind CSS     | 4.3    |                                                                  |
+| SQLx             | 0.9    |                                                                  |
+| reqwest          | 0.13   |                                                                  |
+| keyring          | 4.x    |                                                                  |
+| sqlparser        | 0.63   |                                                                  |

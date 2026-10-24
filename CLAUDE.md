@@ -31,8 +31,15 @@ Run `scripts/install-agent-skills.sh` once per fresh checkout. It installs pinne
 - `pnpm install`: install JS dependencies.
 - `pnpm dev`: run the desktop app (`tauri dev`).
 - `pnpm build:web`: build the frontend only.
-- `cargo check --workspace` / `cargo clippy --workspace --all-targets -- -D warnings` /
-  `cargo test --workspace`: Rust checks.
+- `pnpm format` / `pnpm format:check` / `pnpm lint` / `pnpm typecheck` / `pnpm test`: web checks.
+- `cargo fmt --all --check` / `cargo clippy --workspace --all-targets -- -D warnings` /
+  `cargo test --workspace`: Rust checks. `pnpm build:web` must run first (Tauri embeds the dist).
+
+## Testing
+
+- Rust: unit and integration tests for all policy, persistence and database logic.
+- Frontend: Vitest only for pure logic (`src/**/*.test.ts`). Do not write React Testing Library
+  component tests. UI behavior is verified end to end (Playwright, running app).
 
 ## Non-negotiables (from the PRD)
 

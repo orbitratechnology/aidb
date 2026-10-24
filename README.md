@@ -12,8 +12,15 @@ Prerequisites:
 - Rust via `rustup` (the toolchain is pinned in `rust-toolchain.toml`)
 - Node.js 22+ and pnpm 10
 - Tauri system dependencies for your OS: <https://v2.tauri.app/start/prerequisites/>
-  (on Debian/Ubuntu: `libwebkit2gtk-4.1-dev build-essential libxdo-dev libssl-dev
-  libayatana-appindicator3-dev librsvg2-dev`)
+
+On Debian/Ubuntu:
+
+```sh
+sudo apt install libwebkit2gtk-4.1-dev build-essential libxdo-dev libssl-dev \
+  libayatana-appindicator3-dev librsvg2-dev
+```
+
+Then:
 
 ```sh
 pnpm install
@@ -22,10 +29,10 @@ pnpm build        # build release bundles for the current OS
 pnpm dev:web      # frontend only, in a browser (native calls are unavailable)
 ```
 
-Checks:
+Checks (CI runs the same):
 
 ```sh
-pnpm lint && pnpm typecheck
+pnpm format:check && pnpm lint && pnpm typecheck && pnpm test
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace

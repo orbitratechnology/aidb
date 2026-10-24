@@ -1,3 +1,4 @@
+/// <reference types="vitest/config" />
 import { fileURLToPath, URL } from 'node:url'
 import tailwindcss from '@tailwindcss/vite'
 import react from '@vitejs/plugin-react'
@@ -32,5 +33,10 @@ export default defineConfig({
     // Assets load from local disk, not the network. The shell (React, router, Radix) is ~520 kB;
     // feature screens are split per route. Raise this only with a reason.
     chunkSizeWarningLimit: 600,
+  },
+  test: {
+    // Unit tests cover pure logic only; UI behavior is checked end to end.
+    environment: 'node',
+    include: ['src/**/*.test.ts'],
   },
 })

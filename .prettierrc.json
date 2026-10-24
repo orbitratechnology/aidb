@@ -1,0 +1,15 @@
+{
+  "semi": false,
+  "singleQuote": true,
+  "printWidth": 100,
+  "trailingComma": "all",
+  "plugins": ["prettier-plugin-tailwindcss"],
+  "tailwindStylesheet": "./apps/desktop/src/index.css",
+  "tailwindFunctions": ["cn", "cva"],
+  "overrides": [
+    {
+      "files": "*.md",
+      "options": { "proseWrap": "preserve" }
+    }
+  ]
+}

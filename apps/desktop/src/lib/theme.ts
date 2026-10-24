@@ -37,7 +37,10 @@ export function resolveTheme(theme: Theme, system: ResolvedTheme): ResolvedTheme
   return theme === 'system' ? system : theme
 }
 
-export function applyTheme(resolved: ResolvedTheme, root: HTMLElement = document.documentElement): void {
+export function applyTheme(
+  resolved: ResolvedTheme,
+  root: HTMLElement = document.documentElement,
+): void {
   root.classList.toggle('dark', resolved === 'dark')
 }
 

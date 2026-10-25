@@ -5,6 +5,7 @@ use tauri::{AppHandle, Manager, Runtime};
 use crate::commands;
 use crate::errors::AppResult;
 use crate::logging;
+use crate::navigation;
 use crate::state::{AppPaths, AppState};
 
 /// Builds and runs the Tauri application.
@@ -14,6 +15,13 @@ use crate::state::{AppPaths, AppState};
 /// Panics if the Tauri runtime fails to start, which leaves no UI to report the error to.
 pub fn run() {
     tauri::Builder::default()
+        .plugin(navigation::guard())
+        // Used only from Rust after validation; the webview is not granted its commands.
+        .plugin(
+            tauri_plugin_opener::Builder::new()
+                .open_js_links_on_click(false)
+                .build(),
+        )
         .setup(|app| {
             setup(app.handle())?;
             Ok(())

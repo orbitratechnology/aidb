@@ -41,8 +41,13 @@ Status legend: `[x]` done · `[~]` in progress · `[ ]` not started
       crosses IPC), secret redaction for all outgoing and logged text, `tracing` logs to a rotating
       local file with a redacting panic hook, and `AppState` with the app's data and log folders.
       `domain/`, `services/`, `adapters/` and `events/` are added with the features that need them.
-- [ ] **2.2 Typed IPC.** Typed commands and events, Zod-validated DTOs in `packages/contracts`,
-      `lib/tauri.ts` invoke wrappers, capability allowlist, strict CSP, external-link handling.
+- [x] **2.2 Typed IPC.** Rust DTOs generate TypeScript types into `packages/contracts` (ts-rs,
+      checked for drift in CI); Zod schemas are type-checked against them. `callCommand` validates
+      results and turns failures into a typed `NativeError`. App commands go through Tauri's ACL
+      (`build.rs` manifest + capability), so unknown, ungranted-window and ungranted-plugin calls
+      are rejected (tested). A navigation guard keeps the webview on the app; external links open
+      in the system browser through a validated `open_external_url` command. Typed events arrive
+      with the first feature that emits them.
 - [ ] **2.3 Security documentation.** `docs/architecture.md`, `docs/security-model.md`,
       `docs/threat-model.md`, written before any database writes exist.
 

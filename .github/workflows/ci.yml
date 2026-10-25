@@ -60,6 +60,11 @@ jobs:
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo test --workspace --locked
+      # `cargo test` regenerates the TypeScript contracts; committed copies must match.
+      - name: Check generated TypeScript contracts are current
+        run: |
+          git status --porcelain -- packages/contracts/src/generated
+          test -z "$(git status --porcelain -- packages/contracts/src/generated)"
 
   linux-bundle:
     name: Linux release bundle

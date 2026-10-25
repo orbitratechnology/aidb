@@ -7,6 +7,7 @@
 //! - `commands`: thin IPC adapters (validation, delegation, error mapping).
 //! - [`errors`]: the error contract sent to the webview, and secret redaction.
 //! - [`logging`]: local, redacted diagnostic logs.
+//! - `navigation`: keeps the webview on the app's own content.
 //! - [`state`]: state shared with commands.
 //!
 //! Feature code lands in `domain/` (rules and types), `services/` (use cases) and `adapters/`
@@ -17,6 +18,7 @@ mod app;
 mod commands;
 pub mod errors;
 pub mod logging;
+mod navigation;
 pub mod state;
 
 pub use app::run;

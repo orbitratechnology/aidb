@@ -1,10 +1,14 @@
 import { useEffect, useState } from 'react'
-import { CircleAlertIcon } from 'lucide-react'
+import { CircleAlertIcon, ExternalLinkIcon } from 'lucide-react'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
+import { Button } from '@/components/ui/button'
 import { Item, ItemContent, ItemDescription, ItemGroup, ItemTitle } from '@/components/ui/item'
 import { Skeleton } from '@/components/ui/skeleton'
-import { getAppInfo, type AppInfo } from '@/lib/tauri'
+import type { AppInfo } from '@aidb/contracts'
+import { getAppInfo } from '@/lib/commands'
 import { SettingsSection } from '../settings-section'
+
+const ISSUES_URL = 'https://github.com/orbitratechnology/aidb/issues'
 
 type NativeStatus =
   { state: 'loading' } | { state: 'ready'; info: AppInfo } | { state: 'error'; message: string }
@@ -46,6 +50,12 @@ export function DiagnosticsSettings() {
           <DetailRow label="Platform" value={status.info.platform} />
         </ItemGroup>
       )}
+      <Button variant="outline" asChild className="min-h-11 self-start sm:min-h-0">
+        <a href={ISSUES_URL}>
+          Report a problem
+          <ExternalLinkIcon data-icon="inline-end" />
+        </a>
+      </Button>
     </SettingsSection>
   )
 }

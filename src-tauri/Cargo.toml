@@ -20,10 +20,16 @@ regex = "1.13.1"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tauri = { version = "2.12.5", features = [] }
+tauri-plugin-opener = "2.7.2"
 thiserror = "2.0.21"
 tracing = "0.1.44"
 tracing-appender = "0.2.5"
 tracing-subscriber = { version = "0.3.23", default-features = false, features = ["fmt", "env-filter", "ansi", "registry", "std"] }
+url = "2.5.8"
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+tauri = { version = "2.12.5", features = ["test"] }
+ts-rs = "12.0.1"

@@ -3,6 +3,7 @@ use tauri::{AppHandle, Runtime};
 
 /// Basic build information shown in the UI and diagnostics.
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 #[serde(rename_all = "camelCase")]
 pub struct AppInfo {
     pub name: String,

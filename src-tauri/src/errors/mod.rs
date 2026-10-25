@@ -22,6 +22,7 @@ type BoxedCause = Box<dyn StdError + Send + Sync + 'static>;
 
 /// Stable, machine-readable error category. The webview branches on this, never on messages.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum ErrorCode {
@@ -221,6 +222,7 @@ impl StdError for AppError {}
 
 /// The wire shape of an error, as the webview receives it.
 #[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 #[serde(rename_all = "camelCase")]
 struct ErrorPayload<'a> {
     code: ErrorCode,

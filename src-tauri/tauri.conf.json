@@ -31,12 +31,17 @@
         "font-src": "'self' data:",
         "connect-src": "ipc: http://ipc.localhost",
         "object-src": "'none'",
-        "frame-src": "'none'",
         "base-uri": "'self'",
         "form-action": "'none'"
       },
       "dangerousDisableAssetCspModification": ["style-src"],
-      "freezePrototype": true
+      "freezePrototype": true,
+      "pattern": {
+        "use": "isolation",
+        "options": {
+          "dir": "isolation"
+        }
+      }
     }
   },
   "bundle": {

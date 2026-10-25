@@ -10,7 +10,7 @@ Status: early development. See [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION
 Prerequisites:
 
 - Rust via `rustup` (the toolchain is pinned in `rust-toolchain.toml`)
-- Node.js 22+ and pnpm 10
+- Node.js 24 LTS (22.12+ works) and pnpm 10
 - Tauri system dependencies for your OS: <https://v2.tauri.app/start/prerequisites/>
 
 On Debian/Ubuntu:

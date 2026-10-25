@@ -48,8 +48,10 @@ Status legend: `[x]` done · `[~]` in progress · `[ ]` not started
       are rejected (tested). A navigation guard keeps the webview on the app; external links open
       in the system browser through a validated `open_external_url` command. Typed events arrive
       with the first feature that emits them.
-- [ ] **2.3 Security documentation.** `docs/architecture.md`, `docs/security-model.md`,
-      `docs/threat-model.md`, written before any database writes exist.
+- [x] **2.3 Security hardening and documentation.** `docs/architecture.md`,
+      `docs/security-model.md`, `docs/threat-model.md` and `docs/decisions.md` (decision rule:
+      reliability and maturity first, then official recommendations). Adopted Tauri's isolation
+      pattern with a validating hook (tested), and moved CI to Node 24 LTS.
 
 ## Phase 3: Local persistence and credentials
 

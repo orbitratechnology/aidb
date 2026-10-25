@@ -9,6 +9,12 @@ Stack: Rust + Tauri 2 core, React + TypeScript + Vite + Tailwind v4 + shadcn/ui 
   tick it in the plan, commit, push, then **stop and wait** for the maintainer to say continue.
 - Never replace working functionality with mock data. Fixtures belong only in tests.
 
+## Choosing tools and patterns
+
+Prefer reliability and maturity, then the tool maintainers' official recommendations: stable
+releases only (no alpha, beta, RC or nightly), official templates, plugins and documented
+patterns. Make the call without asking, and record it in `docs/decisions.md` with the reason.
+
 ## Agent skills
 
 Run `scripts/install-agent-skills.sh` once per fresh checkout. It installs pinned skills into
@@ -27,7 +33,8 @@ Run `scripts/install-agent-skills.sh` once per fresh checkout. It installs pinne
   the typed wrappers in `src/lib/commands.ts`.
 - `packages/contracts/`: IPC contracts. `src/generated/` is written by ts-rs during `cargo test`
   (commit it); Zod schemas next to it are type-checked against the generated types.
-- `docs/`: plan, architecture, security model.
+- `docs/`: plan, decision log, architecture, security model, threat model. Update the security
+  docs whenever a feature adds an input, permission, plugin or dependency.
 
 Adding a native command: implement it in `src-tauri/src/commands/`, register it in
 `commands::handler`, list it in `src-tauri/build.rs`, grant `allow-<name>` in

@@ -27,13 +27,12 @@ Run `scripts/install-agent-skills.sh` once per fresh checkout. It installs pinne
   the typed wrappers in `src/lib/commands.ts`.
 - `packages/contracts/`: IPC contracts. `src/generated/` is written by ts-rs during `cargo test`
   (commit it); Zod schemas next to it are type-checked against the generated types.
+- `docs/`: plan, architecture, security model.
 
 Adding a native command: implement it in `src-tauri/src/commands/`, register it in
 `commands::handler`, list it in `src-tauri/build.rs`, grant `allow-<name>` in
 `src-tauri/capabilities/default.json`, add its name to `COMMANDS` in the contracts package, and
 derive `ts_rs::TS` (under `cfg(test)`) on its DTOs.
-
-- `docs/`: plan, architecture, security model.
 
 ## Commands
 

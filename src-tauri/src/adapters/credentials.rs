@@ -291,9 +291,7 @@ mod tests {
         );
         let key = SecretRef::connection(ConnectionId::new());
 
-        credentials
-            .store(&key, &secret("hunter2"))
-            .expect("store");
+        credentials.store(&key, &secret("hunter2")).expect("store");
         credentials
             .store(&key, &secret("hunter3"))
             .expect("replace");

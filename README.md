@@ -38,6 +38,15 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
 
+Database integration tests need a disposable PostgreSQL (Docker, or local PostgreSQL binaries):
+
+```sh
+scripts/postgres-fixture.sh start 17
+source target/postgres-fixture/env
+cargo test -p aidb --test postgres -- --ignored
+scripts/postgres-fixture.sh stop
+```
+
 ## Repository layout
 
 ```text

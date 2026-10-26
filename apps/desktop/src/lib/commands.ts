@@ -1,9 +1,11 @@
 import {
+  ActiveSessionSchema,
   AppInfoSchema,
   AppSettingsSchema,
   ClearResultSchema,
   COMMANDS,
   ConnectionDetailsSchema,
+  ConnectionTestReportSchema,
   CredentialBackendSchema,
   DiagnosticsInfoSchema,
   ExportOutcomeSchema,
@@ -11,6 +13,7 @@ import {
   ImportPreviewSchema,
   ParsedConnectionUriSchema,
   StorageSummarySchema,
+  type ActiveSession,
   type AppInfo,
   type AppSettings,
   type ClearResult,
@@ -18,6 +21,7 @@ import {
   type ConnectionDetails,
   type ConnectionDraft,
   type ConnectionId,
+  type ConnectionTestReport,
   type CredentialBackend,
   type DiagnosticsInfo,
   type ExportOutcome,
@@ -130,6 +134,39 @@ export function importConnections(
     connections,
     allowUnencrypted,
   })
+}
+
+/**
+ * Tests connection settings, saved or not. With no password, the one saved for `savedId` is
+ * used. Nothing is kept open.
+ */
+export function testConnection(
+  connection: ConnectionDraft,
+  {
+    password,
+    savedId,
+    allowUnencrypted,
+  }: SaveOptions & { password?: string; savedId?: ConnectionId },
+): Promise<ConnectionTestReport> {
+  return callCommand(COMMANDS.testConnection, ConnectionTestReportSchema, {
+    connection,
+    password: password ?? null,
+    savedId: savedId ?? null,
+    allowUnencrypted,
+  })
+}
+
+/** Opens a session for a saved profile. A password given here is used for this session only. */
+export function connect(id: ConnectionId, password?: string): Promise<ActiveSession> {
+  return callCommand(COMMANDS.connect, ActiveSessionSchema, { id, password: password ?? null })
+}
+
+export function disconnect(id: ConnectionId): Promise<boolean> {
+  return callCommand(COMMANDS.disconnect, z.boolean(), { id })
+}
+
+export function activeSessions(): Promise<ActiveSession[]> {
+  return callCommand(COMMANDS.activeSessions, z.array(ActiveSessionSchema))
 }
 
 const EXTERNAL_URL = z.url({ protocol: /^(https?|mailto)$/ })

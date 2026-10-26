@@ -7,7 +7,9 @@ use tauri::{AppHandle, Manager, Runtime};
 
 use crate::adapters::credentials::Credentials;
 use crate::adapters::local_store::LocalStore;
+use crate::adapters::postgres::PostgresAdapter;
 use crate::errors::{AppError, AppResult, ErrorCode};
+use crate::services::sessions::Sessions;
 
 /// Directories the app owns on this device.
 #[derive(Debug, Clone)]
@@ -42,6 +44,15 @@ impl AppPaths {
     pub fn log_dir(&self) -> &Path {
         &self.log_dir
     }
+
+    /// Paths under a test's temporary directory.
+    #[cfg(test)]
+    pub(crate) fn under(dir: &Path) -> Self {
+        Self {
+            data_dir: dir.join("data"),
+            log_dir: dir.join("logs"),
+        }
+    }
 }
 
 fn storage_error(cause: impl Into<Box<dyn std::error::Error + Send + Sync>>) -> AppError {
@@ -66,6 +77,7 @@ pub struct AppState {
     paths: AppPaths,
     local_store: LocalStoreState,
     credentials: Credentials,
+    sessions: Sessions<PostgresAdapter>,
 }
 
 impl AppState {
@@ -75,7 +87,14 @@ impl AppState {
             paths,
             local_store,
             credentials,
+            sessions: Sessions::new(PostgresAdapter),
         }
+    }
+
+    /// Open database sessions.
+    #[must_use]
+    pub fn sessions(&self) -> &Sessions<PostgresAdapter> {
+        &self.sessions
     }
 
     /// Where secrets are kept: the OS credential store, or memory for this session.

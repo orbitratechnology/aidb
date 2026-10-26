@@ -74,11 +74,13 @@ fn setup<R: Runtime>(app: &AppHandle<R>) -> AppResult<()> {
     Ok(())
 }
 
-/// Closes the local store cleanly so its write-ahead log is checkpointed.
+/// Closes database sessions, then the local store so its write-ahead log is checkpointed.
 fn shutdown<R: Runtime>(app: &AppHandle<R>) {
-    if let Some(state) = app.try_state::<AppState>()
-        && let LocalStoreState::Ready(store) = state.local_store_state()
-    {
+    let Some(state) = app.try_state::<AppState>() else {
+        return;
+    };
+    tauri::async_runtime::block_on(state.sessions().close_all());
+    if let LocalStoreState::Ready(store) = state.local_store_state() {
         tauri::async_runtime::block_on(store.close());
         tracing::info!("local database closed");
     }

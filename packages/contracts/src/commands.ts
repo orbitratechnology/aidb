@@ -20,6 +20,10 @@ export const COMMANDS = {
   exportConnections: 'export_connections',
   previewConnectionImport: 'preview_connection_import',
   importConnections: 'import_connections',
+  testConnection: 'test_connection',
+  connect: 'connect',
+  disconnect: 'disconnect',
+  activeSessions: 'active_sessions',
 } as const
 
 export type CommandName = (typeof COMMANDS)[keyof typeof COMMANDS]

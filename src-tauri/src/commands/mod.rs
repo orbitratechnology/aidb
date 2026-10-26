@@ -14,6 +14,7 @@ mod app;
 mod connections;
 mod diagnostics;
 mod external;
+mod sessions;
 mod settings;
 
 use tauri::Runtime;
@@ -38,7 +39,11 @@ pub(crate) fn handler<R: Runtime>() -> impl Fn(Invoke<R>) -> bool + Send + Sync 
         connections::parse_connection_uri,
         connections::export_connections,
         connections::preview_connection_import,
-        connections::import_connections
+        connections::import_connections,
+        sessions::test_connection,
+        sessions::connect,
+        sessions::disconnect,
+        sessions::active_sessions
     ]
 }
 
@@ -159,6 +164,83 @@ mod tests {
                 "{cmd}: {error}"
             );
         }
+    }
+
+    /// Runs the session commands against the PostgreSQL fixture through the real IPC path, to
+    /// check argument names and response shapes. See `tests/postgres.rs` for the fixture.
+    #[test]
+    #[ignore = "needs PostgreSQL: run scripts/postgres-fixture.sh start"]
+    fn session_commands_work_over_ipc() {
+        use crate::adapters::credentials::Credentials;
+        use crate::adapters::local_store::test_support::temp_store;
+        use crate::domain::connection_uri;
+        use crate::domain::connections::{ConnectionDraft, SslMode};
+        use crate::state::{AppPaths, AppState, LocalStoreState};
+        use secrecy::ExposeSecret;
+
+        let url = std::env::var("AIDB_TEST_POSTGRES_URL").expect("fixture env is loaded");
+        let parsed = connection_uri::parse(&url).expect("fixture URL parses");
+        let password = parsed.password.expect("fixture password").0;
+        let (dir, store) = tauri::async_runtime::block_on(temp_store());
+        let mut settings = ConnectionDraft::new(
+            "Fixture",
+            parsed.host,
+            parsed.database.expect("database"),
+            parsed.username.expect("user"),
+        );
+        settings.port = parsed.port;
+        settings.ssl_mode = SslMode::Disable;
+        let saved = tauri::async_runtime::block_on(store.connections().insert(&settings))
+            .expect("profile saved");
+        let state = AppState::new(
+            AppPaths::under(dir.path()),
+            LocalStoreState::Ready(store),
+            Credentials::session_only("tests"),
+        );
+        let app = mock_builder()
+            .manage(state)
+            .invoke_handler(handler())
+            .build(tauri::generate_context!())
+            .expect("mock app builds");
+        let main = window(&app, "main");
+        let connection = serde_json::to_value(&settings).expect("draft serializes");
+
+        let report = invoke(
+            &main,
+            "test_connection",
+            json!({
+                "connection": connection,
+                "password": password.expose_secret(),
+                "savedId": null,
+                "allowUnencrypted": false,
+            }),
+        )
+        .expect("test_connection");
+        let without_password = invoke(
+            &main,
+            "connect",
+            json!({ "id": saved.id.to_string(), "password": null }),
+        )
+        .expect_err("no password saved");
+        let session = invoke(
+            &main,
+            "connect",
+            json!({ "id": saved.id.to_string(), "password": password.expose_secret() }),
+        )
+        .expect("connect");
+        let open = invoke(&main, "active_sessions", json!({})).expect("active_sessions");
+        let closed =
+            invoke(&main, "disconnect", json!({ "id": saved.id.to_string() })).expect("disconnect");
+        let after = invoke(&main, "active_sessions", json!({})).expect("active_sessions");
+
+        assert_eq!(report["server"]["readOnly"], true);
+        assert!(report["roundTripMs"].is_u64());
+        assert_eq!(without_password["code"], "permission_denied");
+        assert_eq!(session["connectionId"], saved.id.to_string());
+        assert_eq!(session["capabilities"]["cancelStatements"], true);
+        assert_eq!(open.as_array().map(Vec::len), Some(1));
+        assert_eq!(closed, true);
+        assert_eq!(after.as_array().map(Vec::len), Some(0));
     }
 
     #[test]

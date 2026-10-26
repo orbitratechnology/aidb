@@ -71,7 +71,7 @@ export function SafetySettings() {
   return (
     <SettingsSection
       title="Safety"
-      description="Limits applied to every query, whether you or the agent runs it."
+      description="Limits applied to every query, whether you or the agent runs it. Changes apply from the next connection."
     >
       <Alert>
         <ShieldCheckIcon />

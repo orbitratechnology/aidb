@@ -76,7 +76,7 @@ Status legend: `[x]` done · `[~]` in progress · `[ ]` not started
 - [x] **4.1 Connection profiles.** Validation, environment labels, SSL modes, URI convenience input
       parsed without persisting passwords, CRUD commands, versioned JSON export and import with
       secrets omitted.
-- [ ] **4.2 PostgreSQL adapter.** `DatabaseAdapter` trait with capabilities, SQLx Postgres pools,
+- [x] **4.2 PostgreSQL adapter.** `DatabaseAdapter` trait with capabilities, SQLx Postgres pools,
       TLS options, connect/test/disconnect, connection and statement timeouts, cancellation, error
       mapping, and integration fixtures against a disposable PostgreSQL.
 - [ ] **4.3 Connections UI.** Connection form (React Hook Form + Zod), list, test, connect and

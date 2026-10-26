@@ -71,6 +71,46 @@ jobs:
           git status --porcelain -- packages/contracts/src/generated
           test -z "$(git status --porcelain -- packages/contracts/src/generated)"
 
+  postgres:
+    name: PostgreSQL ${{ matrix.postgres }} integration
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The PRD's supported range; each runs the latest minor release of the official image.
+        postgres: ['15', '16', '17', '18']
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install Tauri system dependencies and the PostgreSQL client
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libxdo-dev libssl-dev \
+            libayatana-appindicator3-dev librsvg2-dev postgresql-client
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: postgres
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build:web
+      # Docker image with TLS on and a throwaway CA; prints the exact server version.
+      - name: Start PostgreSQL ${{ matrix.postgres }}
+        run: scripts/postgres-fixture.sh start ${{ matrix.postgres }}
+      - name: Run the adapter and IPC tests against it
+        run: |
+          source target/postgres-fixture/env
+          cargo test -p aidb --locked --test postgres -- --ignored
+          cargo test -p aidb --locked --lib session_commands_work_over_ipc -- --ignored
+      - name: Stop PostgreSQL
+        if: always()
+        run: scripts/postgres-fixture.sh stop
+
   linux-bundle:
     name: Linux release bundle
     needs: [web, rust]

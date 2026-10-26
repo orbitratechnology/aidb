@@ -21,6 +21,10 @@
     "allow-parse-connection-uri",
     "allow-export-connections",
     "allow-preview-connection-import",
-    "allow-import-connections"
+    "allow-import-connections",
+    "allow-test-connection",
+    "allow-connect",
+    "allow-disconnect",
+    "allow-active-sessions"
   ]
 }

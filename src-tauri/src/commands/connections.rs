@@ -44,14 +44,17 @@ pub async fn update_connection(
     connection: ConnectionDraft,
     allow_unencrypted: bool,
 ) -> AppResult<ConnectionDetails> {
-    connections::update(
+    let updated = connections::update(
         state.local_store()?,
         state.credentials(),
         id,
         connection,
         allow_unencrypted,
     )
-    .await
+    .await?;
+    // An open session keeps the settings it started with; close it so the new ones apply.
+    state.sessions().close(id).await;
+    Ok(updated)
 }
 
 #[tauri::command]
@@ -67,7 +70,9 @@ pub async fn delete_connection(
         id,
         forget_password,
     )
-    .await
+    .await?;
+    state.sessions().close(id).await;
+    Ok(())
 }
 
 #[tauri::command]

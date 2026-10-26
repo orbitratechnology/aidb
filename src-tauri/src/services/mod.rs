@@ -3,6 +3,7 @@
 
 pub mod connection_secrets;
 pub mod connections;
+pub mod sessions;
 pub mod settings;
 
 use crate::errors::{AppError, AppResult};

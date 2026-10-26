@@ -62,13 +62,13 @@ docs/                     plan, architecture, security, decisions
 
 Layering, from the IPC edge inward:
 
-| Layer      | Responsibility                                                                                                       | Status                                                                |
-| ---------- | -------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------- |
-| `commands` | Deserialize and validate input, call a service, map errors to `AppError`. No business logic.                         | Implemented                                                           |
-| `services` | Use cases that coordinate domain rules and adapters (connect, run query, apply approved change).                     | `connection_secrets`, `settings` implemented; more from 4.1           |
-| `domain`   | Types and rules with no I/O: connection profiles, policy classification, approvals, plans, migrations.               | Connection profiles, settings implemented; rest _Planned_             |
-| `adapters` | I/O: `local_store` (SQLite) and `credentials` (OS keychain) today; `postgres` (SQLx) and `ai_providers` (HTTP) next. | `local_store`, `credentials` implemented; others _Planned_ (4.2, 7.1) |
-| `events`   | Typed core-to-UI events and channels (connection status, streaming results, agent progress).                         | _Planned_ (with the first emitter)                                    |
+| Layer      | Responsibility                                                                                                                                              | Status                                                                  |
+| ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| `commands` | Deserialize and validate input, call a service, map errors to `AppError`. No business logic.                                                                | Implemented                                                             |
+| `services` | Use cases that coordinate domain rules and adapters (connect, run query, apply approved change).                                                            | `connection_secrets`, `connections`, `sessions`, `settings` implemented |
+| `domain`   | Types and rules with no I/O: connection profiles, database capabilities and limits, policy classification, approvals, plans, migrations.                    | Connections, database types, settings implemented; rest _Planned_       |
+| `adapters` | I/O: `local_store` (SQLite), `credentials` (OS keychain), `files` (dialogs), `database` (engine traits) with `postgres` (SQLx); `ai_providers` (HTTP) next. | Implemented except `ai_providers` (7.1)                                 |
+| `events`   | Typed core-to-UI events and channels (connection status, streaming results, agent progress).                                                                | _Planned_ (with the first emitter)                                      |
 
 Cross-cutting modules that exist today:
 
@@ -130,7 +130,8 @@ Current commands: `app_info`, `diagnostics`, `open_external_url`, `get_settings`
 `update_settings`, `storage_summary`, `clear_local_data`, `list_connections`,
 `create_connection`, `update_connection`, `delete_connection`, `save_connection_password`,
 `forget_connection_password`, `parse_connection_uri`, `export_connections`,
-`preview_connection_import`, `import_connections`.
+`preview_connection_import`, `import_connections`, `test_connection`, `connect`, `disconnect`,
+`active_sessions`.
 
 ## Connection profiles
 
@@ -175,6 +176,29 @@ Current commands: `app_info`, `diagnostics`, `open_external_url`, `get_settings`
   The core shows the native dialog and reads (at most 1 MB, 1,000 entries) or writes the file.
   Import is two steps: a preview that marks each entry ready, duplicate or invalid, then an
   import of the chosen entries, which the core validates again and saves read-only.
+
+## Database sessions
+
+- **Adapter boundary** (`adapters::database`): `DatabaseAdapter` declares its `Capabilities`
+  (cancellation, timeouts, read-only sessions, transactional DDL, TLS) and opens sessions;
+  `DatabaseSession` reports `ServerInfo`, pings, cancels operations and closes. Failures are
+  `DbError`s with a driver-neutral kind and a message that never contains the password.
+  `tests/postgres.rs` holds the contract checks a future engine must also pass.
+- **PostgreSQL** (`adapters::postgres`): a session is a lazy SQLx pool of up to 4 connections.
+  The first connection is opened directly (so failures report their real cause), within the
+  profile's connect timeout, and reads the server version, user, database, TLS state, read-only
+  setting and standby status. Supported servers are PostgreSQL 15–18; others connect with
+  `supportedVersion: false`.
+- **Limits** are sent as server settings when each connection starts: `statement_timeout` and
+  `lock_timeout` from Safety settings, a 5-minute `idle_in_transaction_session_timeout`, and
+  `default_transaction_read_only` from the profile. A session keeps its limits; editing or
+  deleting the profile closes it.
+- **Cancellation**: an operation takes a connection with `begin_operation`, which records the
+  backend PID. `cancel` sends `pg_cancel_backend` from a separate connection; the cancelled
+  connection is then closed rather than reused.
+- **Registry** (`services::sessions`): at most one session per profile. `connect` uses the saved
+  password unless one is given for this session; `test_connection` checks unsaved settings
+  (including TLS consent), makes one round trip and keeps nothing open. All sessions close at exit.
 
 ## Frontend
 

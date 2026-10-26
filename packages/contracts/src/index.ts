@@ -1,13 +1,16 @@
 // Types under `generated/` come from the Rust core via ts-rs (`cargo test` regenerates them).
 // The schemas here validate data at runtime and are type-checked against those types.
+export type { ActiveSession } from './generated/ActiveSession'
 export type { AppearanceSettings } from './generated/AppearanceSettings'
 export type { AppInfo } from './generated/AppInfo'
 export type { AppSettings } from './generated/AppSettings'
+export type { Capabilities } from './generated/Capabilities'
 export type { ClearResult } from './generated/ClearResult'
 export type { ClearTarget } from './generated/ClearTarget'
 export type { ConnectionDetails } from './generated/ConnectionDetails'
 export type { ConnectionDraft } from './generated/ConnectionDraft'
 export type { ConnectionId } from './generated/ConnectionId'
+export type { ConnectionTestReport } from './generated/ConnectionTestReport'
 export type { CredentialBackend } from './generated/CredentialBackend'
 export type { CredentialStoreStatus } from './generated/CredentialStoreStatus'
 export type { DiagnosticsInfo } from './generated/DiagnosticsInfo'
@@ -22,9 +25,11 @@ export type { ImportPreview } from './generated/ImportPreview'
 export type { ImportStatus } from './generated/ImportStatus'
 export type { LocalStoreHealth } from './generated/LocalStoreHealth'
 export type { LocalStoreStatus } from './generated/LocalStoreStatus'
+export type { OperationId } from './generated/OperationId'
 export type { ParsedConnectionUri } from './generated/ParsedConnectionUri'
 export type { PasswordStorage } from './generated/PasswordStorage'
 export type { SafetySettings } from './generated/SafetySettings'
+export type { ServerInfo } from './generated/ServerInfo'
 export type { SettingsPatch } from './generated/SettingsPatch'
 export type { SkippedImport } from './generated/SkippedImport'
 export type { SslMode } from './generated/SslMode'
@@ -57,6 +62,12 @@ export {
   LocalStoreStatusSchema,
 } from './diagnostics'
 export { ERROR_CODES, ErrorCodeSchema, ErrorPayloadSchema } from './errors'
+export {
+  ActiveSessionSchema,
+  CapabilitiesSchema,
+  ConnectionTestReportSchema,
+  ServerInfoSchema,
+} from './sessions'
 export {
   AppSettingsSchema,
   AppearanceSettingsSchema,

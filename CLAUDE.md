@@ -53,6 +53,9 @@ derive `ts_rs::TS` (under `cfg(test)`) on its DTOs.
 ## Testing
 
 - Rust: unit and integration tests for all policy, persistence and database logic.
+- PostgreSQL: `scripts/postgres-fixture.sh start [15-18]`, `source target/postgres-fixture/env`,
+  then `cargo test -p aidb --test postgres -- --ignored`. These tests are ignored by default;
+  CI runs them against PostgreSQL 15–18.
 - Frontend: Vitest only for pure logic (`src/**/*.test.ts`). Do not write React Testing Library
   component tests. UI behavior is verified end to end (Playwright, running app).
 

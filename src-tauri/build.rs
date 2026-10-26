@@ -18,6 +18,10 @@ const COMMANDS: &[&str] = &[
     "export_connections",
     "preview_connection_import",
     "import_connections",
+    "test_connection",
+    "connect",
+    "disconnect",
+    "active_sessions",
 ];
 
 fn main() {

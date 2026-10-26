@@ -62,13 +62,13 @@ docs/                     plan, architecture, security, decisions
 
 Layering, from the IPC edge inward:
 
-| Layer      | Responsibility                                                                                         | Status                             |
-| ---------- | ------------------------------------------------------------------------------------------------------ | ---------------------------------- |
-| `commands` | Deserialize and validate input, call a service, map errors to `AppError`. No business logic.           | Implemented                        |
-| `services` | Use cases that coordinate domain rules and adapters (connect, run query, apply approved change).       | _Planned_ (from 3.1)               |
-| `domain`   | Types and rules with no I/O: connection profiles, policy classification, approvals, plans, migrations. | _Planned_ (from 3.1)               |
-| `adapters` | I/O: `postgres` (SQLx), `local_store` (SQLite), `credentials` (OS keychain), `ai_providers` (HTTP).    | _Planned_ (3.1, 3.2, 4.2, 7.1)     |
-| `events`   | Typed core-to-UI events and channels (connection status, streaming results, agent progress).           | _Planned_ (with the first emitter) |
+| Layer      | Responsibility                                                                                                 | Status                                                      |
+| ---------- | -------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
+| `commands` | Deserialize and validate input, call a service, map errors to `AppError`. No business logic.                   | Implemented                                                 |
+| `services` | Use cases that coordinate domain rules and adapters (connect, run query, apply approved change).               | _Planned_ (from 4.1)                                        |
+| `domain`   | Types and rules with no I/O: connection profiles, policy classification, approvals, plans, migrations.         | Connection profiles implemented; rest _Planned_             |
+| `adapters` | I/O: `local_store` (SQLite) today; `postgres` (SQLx), `credentials` (OS keychain), `ai_providers` (HTTP) next. | `local_store` implemented; others _Planned_ (3.2, 4.2, 7.1) |
+| `events`   | Typed core-to-UI events and channels (connection status, streaming results, agent progress).                   | _Planned_ (with the first emitter)                          |
 
 Cross-cutting modules that exist today:
 
@@ -77,8 +77,28 @@ Cross-cutting modules that exist today:
   causes pass through `redact`.
 - **`logging`**: `tracing` to a daily-rotated file (7 kept) in the app log directory, stderr in
   debug builds, `AIDB_LOG` filter override, and a panic hook that logs redacted panics.
-- **`state`**: `AppState` holds resolved directories; feature state (pools, repositories, approval
-  store) is added here as features land.
+- **`state`**: `AppState` holds resolved directories and the local store (or the reason it could
+  not open); feature state (pools, approval store) is added here as features land.
+
+## Local metadata store
+
+SQLite through SQLx (`src-tauri/src/adapters/local_store/`), schema in
+`src-tauri/migrations/` (embedded, applied at startup).
+
+| Table                   | Holds                                                                   | Repository           |
+| ----------------------- | ----------------------------------------------------------------------- | -------------------- |
+| `app_settings`          | JSON preferences under dotted keys                                      | `Settings`           |
+| `connection_profiles`   | Connection settings, environment, read-only flag, credential-store ref  | `ConnectionProfiles` |
+| `provider_profiles`     | AI provider settings and credential-store ref                           | with task 7.2        |
+| `saved_queries`         | User-authored SQL                                                       | with task 6.3        |
+| `agent_tasks`           | Task summaries and plans                                                | with task 8.2        |
+| `operation_audit`       | Redacted operation records; append-only (updates rejected by a trigger) | with task 9.3        |
+| `schema_cache_metadata` | Cache freshness per connection; never row data                          | with task 5.1        |
+| `migration_records`     | Applied migration files, hashes and outcomes                            | with task 11.2       |
+
+Rules: `STRICT` tables with CHECK constraints mirroring domain limits; WAL journal; foreign keys
+on; deleting a connection removes its cache but keeps saved queries, tasks, audit and migration
+history (detached). Secrets and query results are never stored.
 
 ## IPC contract
 
@@ -96,7 +116,7 @@ Error codes: `invalid_input`, `not_found`, `conflict`, `permission_denied`, `app
 `timeout`, `cancelled`, `unavailable`, `storage`, `credential_store`, `internal`. Only `timeout`
 and `unavailable` are retryable by default.
 
-Current commands: `app_info`, `open_external_url`.
+Current commands: `app_info`, `diagnostics`, `open_external_url`.
 
 ## Frontend
 
@@ -110,12 +130,12 @@ Current commands: `app_info`, `open_external_url`.
 
 ## Data on disk
 
-| What                                 | Where                                                                              |
-| ------------------------------------ | ---------------------------------------------------------------------------------- |
-| App data (SQLite metadata, from 3.1) | Tauri app data directory, e.g. `~/.local/share/com.orbitratech.aidb/` on Linux     |
-| Logs                                 | Tauri app log directory, e.g. `~/.local/share/com.orbitratech.aidb/logs/` on Linux |
-| Secrets (from 3.2)                   | OS credential store only (Keychain, Credential Manager, Secret Service)            |
-| Webview storage (theme preference)   | Webview local storage inside the app data directory; theme moves to SQLite in 3.3  |
+| What                               | Where                                                                                                                                                               |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Local metadata database            | `aidb.sqlite3` in the Tauri app data directory, e.g. `~/.local/share/com.orbitratech.aidb/` on Linux; `aidb.sqlite3.v<N>.bak` is written before each schema upgrade |
+| Logs                               | Tauri app log directory, e.g. `~/.local/share/com.orbitratech.aidb/logs/` on Linux                                                                                  |
+| Secrets (from 3.2)                 | OS credential store only (Keychain, Credential Manager, Secret Service)                                                                                             |
+| Webview storage (theme preference) | Webview local storage inside the app data directory; theme moves to SQLite in 3.3                                                                                   |
 
 Directories follow each OS's conventions through Tauri's path resolver; exact locations per
 platform are documented with release hardening (task 12.3).

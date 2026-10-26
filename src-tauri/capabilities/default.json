@@ -3,5 +3,10 @@
   "identifier": "main-window",
   "description": "Permissions for the main application window. Grant only what the UI calls.",
   "windows": ["main"],
-  "permissions": ["core:event:default", "allow-app-info", "allow-open-external-url"]
+  "permissions": [
+    "core:event:default",
+    "allow-app-info",
+    "allow-diagnostics",
+    "allow-open-external-url"
+  ]
 }

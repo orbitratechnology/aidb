@@ -1,12 +1,13 @@
-//! Application assembly: startup, managed state and command registration.
+//! Application assembly: startup, managed state, command registration and shutdown.
 
-use tauri::{AppHandle, Manager, Runtime};
+use tauri::{AppHandle, Manager, RunEvent, Runtime};
 
+use crate::adapters::local_store::LocalStore;
 use crate::commands;
 use crate::errors::AppResult;
 use crate::logging;
 use crate::navigation;
-use crate::state::{AppPaths, AppState};
+use crate::state::{AppPaths, AppState, LocalStoreState};
 
 /// Builds and runs the Tauri application.
 ///
@@ -14,7 +15,7 @@ use crate::state::{AppPaths, AppState};
 ///
 /// Panics if the Tauri runtime fails to start, which leaves no UI to report the error to.
 pub fn run() {
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .plugin(navigation::guard())
         // Used only from Rust after validation; the webview is not granted its commands.
         .plugin(
@@ -27,8 +28,14 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(commands::handler())
-        .run(tauri::generate_context!())
+        .build(tauri::generate_context!())
         .expect("failed to start the aidb runtime");
+
+    app.run(|handle, event| {
+        if let RunEvent::Exit = event {
+            shutdown(handle);
+        }
+    });
 }
 
 fn setup<R: Runtime>(app: &AppHandle<R>) -> AppResult<()> {
@@ -45,6 +52,27 @@ fn setup<R: Runtime>(app: &AppHandle<R>) -> AppResult<()> {
         "aidb core started"
     );
 
-    app.manage(AppState::new(paths));
+    let local_store = match tauri::async_runtime::block_on(LocalStore::open(paths.data_dir())) {
+        Ok(store) => LocalStoreState::Ready(store),
+        Err(error) => {
+            tracing::error!(error = ?crate::errors::AppError::from(error), "local database unavailable");
+            LocalStoreState::Unavailable {
+                reason: "The local database could not be opened or upgraded. Details are in the local log."
+                    .to_owned(),
+            }
+        }
+    };
+
+    app.manage(AppState::new(paths, local_store));
     Ok(())
+}
+
+/// Closes the local store cleanly so its write-ahead log is checkpointed.
+fn shutdown<R: Runtime>(app: &AppHandle<R>) {
+    if let Some(state) = app.try_state::<AppState>()
+        && let LocalStoreState::Ready(store) = state.local_store_state()
+    {
+        tauri::async_runtime::block_on(store.close());
+        tracing::info!("local database closed");
+    }
 }

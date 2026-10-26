@@ -1,9 +1,19 @@
-import { AppInfoSchema, COMMANDS, type AppInfo } from '@aidb/contracts'
+import {
+  AppInfoSchema,
+  COMMANDS,
+  DiagnosticsInfoSchema,
+  type AppInfo,
+  type DiagnosticsInfo,
+} from '@aidb/contracts'
 import { z } from 'zod'
 import { callCommand, NativeError } from './native'
 
 export function getAppInfo(): Promise<AppInfo> {
   return callCommand(COMMANDS.appInfo, AppInfoSchema)
+}
+
+export function getDiagnostics(): Promise<DiagnosticsInfo> {
+  return callCommand(COMMANDS.diagnostics, DiagnosticsInfoSchema)
 }
 
 const EXTERNAL_URL = z.url({ protocol: /^(https?|mailto)$/ })

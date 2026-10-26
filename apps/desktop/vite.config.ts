@@ -30,9 +30,25 @@ export default defineConfig({
     target: process.env.TAURI_ENV_PLATFORM === 'windows' ? 'chrome111' : 'safari16.4',
     minify: !isDebug,
     sourcemap: isDebug,
-    // Assets load from local disk, not the network. The shell (React, router, Radix) is ~520 kB;
-    // feature screens are split per route. Raise this only with a reason.
-    chunkSizeWarningLimit: 600,
+    rolldownOptions: {
+      output: {
+        // Stable libraries get their own chunks; feature screens are split per route. Vite's
+        // default size warning then applies to our own code.
+        codeSplitting: {
+          groups: [
+            {
+              name: 'react',
+              test: /[\\/]node_modules[\\/](react|react-dom|react-router|scheduler)[\\/]/,
+            },
+            {
+              name: 'ui',
+              test: /[\\/]node_modules[\\/](@radix-ui[\\/]|radix-ui[\\/]|lucide-react[\\/]|sonner[\\/])/,
+            },
+            { name: 'zod', test: /[\\/]node_modules[\\/]zod[\\/]/ },
+          ],
+        },
+      },
+    },
   },
   test: {
     // Unit tests cover pure logic only; UI behavior is checked end to end.

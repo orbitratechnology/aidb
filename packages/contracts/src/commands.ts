@@ -4,6 +4,7 @@
  */
 export const COMMANDS = {
   appInfo: 'app_info',
+  diagnostics: 'diagnostics',
   openExternalUrl: 'open_external_url',
 } as const
 

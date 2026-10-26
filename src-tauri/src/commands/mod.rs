@@ -11,6 +11,7 @@
 //! missing from a capability is rejected by Tauri before it runs.
 
 mod app;
+mod diagnostics;
 mod external;
 
 use tauri::Runtime;
@@ -18,7 +19,11 @@ use tauri::ipc::Invoke;
 
 /// The complete list of commands the webview may invoke.
 pub(crate) fn handler<R: Runtime>() -> impl Fn(Invoke<R>) -> bool + Send + Sync + 'static {
-    tauri::generate_handler![app::app_info, external::open_external_url]
+    tauri::generate_handler![
+        app::app_info,
+        diagnostics::diagnostics,
+        external::open_external_url
+    ]
 }
 
 #[cfg(test)]

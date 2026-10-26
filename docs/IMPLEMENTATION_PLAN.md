@@ -55,9 +55,12 @@ Status legend: `[x]` done · `[~]` in progress · `[ ]` not started
 
 ## Phase 3: Local persistence and credentials
 
-- [ ] **3.1 Local SQLite store.** SQLx SQLite with versioned migrations for `connection_profiles`,
-      `provider_profiles`, `app_settings`, `saved_queries`, `agent_tasks`, `operation_audit`,
-      `schema_cache_metadata`, `migration_records`. Repository layer and tests.
+- [x] **3.1 Local SQLite store.** SQLx 0.9 SQLite (bundled, no extension loading), WAL and
+      foreign keys, embedded migration `0001` for all eight entities as `STRICT` tables with CHECK
+      constraints and an append-only audit trigger, `VACUUM INTO` backup before upgrades. Domain
+      types for connection profiles with validation; repositories for settings and connection
+      profiles (others arrive with their features). The app stays up if the store cannot open,
+      and Diagnostics shows its status, folders and schema version.
 - [ ] **3.2 Credential store.** OS keyring backend (Windows Credential Manager, macOS Keychain,
       Secret Service) with a session-only fallback and no plaintext fallback. Tests proving secrets
       never reach SQLite, logs or exports.

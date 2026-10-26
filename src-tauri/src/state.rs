@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 
 use tauri::{AppHandle, Manager, Runtime};
 
+use crate::adapters::local_store::LocalStore;
 use crate::errors::{AppError, AppResult, ErrorCode};
 
 /// Directories the app owns on this device.
@@ -50,20 +51,49 @@ fn storage_error(cause: impl Into<Box<dyn std::error::Error + Send + Sync>>) -> 
     .with_cause(cause)
 }
 
+/// The local store, or why it could not be opened. The app keeps running without it so the user
+/// can see the problem in Diagnostics.
+#[derive(Debug)]
+pub enum LocalStoreState {
+    Ready(LocalStore),
+    Unavailable { reason: String },
+}
+
 /// Core state available to every command via `tauri::State<AppState>`.
 #[derive(Debug)]
 pub struct AppState {
     paths: AppPaths,
+    local_store: LocalStoreState,
 }
 
 impl AppState {
     #[must_use]
-    pub fn new(paths: AppPaths) -> Self {
-        Self { paths }
+    pub fn new(paths: AppPaths, local_store: LocalStoreState) -> Self {
+        Self { paths, local_store }
     }
 
     #[must_use]
     pub fn paths(&self) -> &AppPaths {
         &self.paths
+    }
+
+    #[must_use]
+    pub fn local_store_state(&self) -> &LocalStoreState {
+        &self.local_store
+    }
+
+    /// The local store, for commands that need persistence.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`ErrorCode::Storage`] error if the store failed to open at startup.
+    pub fn local_store(&self) -> AppResult<&LocalStore> {
+        match &self.local_store {
+            LocalStoreState::Ready(store) => Ok(store),
+            LocalStoreState::Unavailable { .. } => Err(AppError::new(
+                ErrorCode::Storage,
+                "The app's local database is unavailable. See Settings › Diagnostics.",
+            )),
+        }
     }
 }

@@ -1,11 +1,22 @@
 import { useEffect, useState, type ReactNode } from 'react'
-import { CircleAlertIcon, CircleCheckIcon, ExternalLinkIcon } from 'lucide-react'
+import {
+  CircleAlertIcon,
+  CircleCheckIcon,
+  ExternalLinkIcon,
+  KeyRoundIcon,
+  TimerIcon,
+} from 'lucide-react'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Item, ItemContent, ItemDescription, ItemGroup, ItemTitle } from '@/components/ui/item'
 import { Skeleton } from '@/components/ui/skeleton'
-import type { AppInfo, DiagnosticsInfo, LocalStoreStatus } from '@aidb/contracts'
+import type {
+  AppInfo,
+  CredentialStoreStatus,
+  DiagnosticsInfo,
+  LocalStoreStatus,
+} from '@aidb/contracts'
 import { getAppInfo, getDiagnostics } from '@/lib/commands'
 import { SettingsSection } from '../settings-section'
 
@@ -59,8 +70,22 @@ export function DiagnosticsSettings() {
 
 function ReportDetails({ report: { app, diagnostics } }: { report: Report }) {
   const store = diagnostics.localStore
+  const credentials = diagnostics.credentialStore
   return (
     <>
+      {credentials.backend === 'session_only' && (
+        <Alert>
+          <TimerIcon />
+          <AlertTitle>Passwords are kept for this session only</AlertTitle>
+          <AlertDescription>
+            <p>
+              The system keychain is unavailable, so saved passwords and API keys last only until
+              aidb quits. They are never written to disk.
+            </p>
+            {credentials.reason && <p className="font-mono text-xs">{credentials.reason}</p>}
+          </AlertDescription>
+        </Alert>
+      )}
       {store.state === 'unavailable' && (
         <Alert variant="destructive">
           <CircleAlertIcon />
@@ -76,6 +101,9 @@ function ReportDetails({ report: { app, diagnostics } }: { report: Report }) {
         <DetailRow label="Platform" value={app.platform} />
         <DetailRow label="Local database">
           <StoreBadge store={store} />
+        </DetailRow>
+        <DetailRow label="Credential storage">
+          <CredentialBadge credentials={credentials} />
         </DetailRow>
         <DetailRow label="Data folder" value={diagnostics.dataDir} />
         <DetailRow label="Log folder" value={diagnostics.logDir} />
@@ -97,6 +125,23 @@ function StoreBadge({ store }: { store: LocalStoreStatus }) {
     <Badge variant="destructive">
       <CircleAlertIcon data-icon="inline-start" />
       Unavailable
+    </Badge>
+  )
+}
+
+function CredentialBadge({ credentials }: { credentials: CredentialStoreStatus }) {
+  if (credentials.backend === 'os_store') {
+    return (
+      <Badge variant="outline">
+        <KeyRoundIcon data-icon="inline-start" />
+        System keychain
+      </Badge>
+    )
+  }
+  return (
+    <Badge variant="secondary">
+      <TimerIcon data-icon="inline-start" />
+      This session only
     </Badge>
   )
 }

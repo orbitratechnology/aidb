@@ -62,13 +62,13 @@ docs/                     plan, architecture, security, decisions
 
 Layering, from the IPC edge inward:
 
-| Layer      | Responsibility                                                                                                 | Status                                                      |
-| ---------- | -------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
-| `commands` | Deserialize and validate input, call a service, map errors to `AppError`. No business logic.                   | Implemented                                                 |
-| `services` | Use cases that coordinate domain rules and adapters (connect, run query, apply approved change).               | _Planned_ (from 4.1)                                        |
-| `domain`   | Types and rules with no I/O: connection profiles, policy classification, approvals, plans, migrations.         | Connection profiles implemented; rest _Planned_             |
-| `adapters` | I/O: `local_store` (SQLite) today; `postgres` (SQLx), `credentials` (OS keychain), `ai_providers` (HTTP) next. | `local_store` implemented; others _Planned_ (3.2, 4.2, 7.1) |
-| `events`   | Typed core-to-UI events and channels (connection status, streaming results, agent progress).                   | _Planned_ (with the first emitter)                          |
+| Layer      | Responsibility                                                                                                       | Status                                                                |
+| ---------- | -------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------- |
+| `commands` | Deserialize and validate input, call a service, map errors to `AppError`. No business logic.                         | Implemented                                                           |
+| `services` | Use cases that coordinate domain rules and adapters (connect, run query, apply approved change).                     | `connection_secrets` implemented; more from 4.1                       |
+| `domain`   | Types and rules with no I/O: connection profiles, policy classification, approvals, plans, migrations.               | Connection profiles implemented; rest _Planned_                       |
+| `adapters` | I/O: `local_store` (SQLite) and `credentials` (OS keychain) today; `postgres` (SQLx) and `ai_providers` (HTTP) next. | `local_store`, `credentials` implemented; others _Planned_ (4.2, 7.1) |
+| `events`   | Typed core-to-UI events and channels (connection status, streaming results, agent progress).                         | _Planned_ (with the first emitter)                                    |
 
 Cross-cutting modules that exist today:
 
@@ -134,7 +134,7 @@ Current commands: `app_info`, `diagnostics`, `open_external_url`.
 | ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Local metadata database            | `aidb.sqlite3` in the Tauri app data directory, e.g. `~/.local/share/com.orbitratech.aidb/` on Linux; `aidb.sqlite3.v<N>.bak` is written before each schema upgrade |
 | Logs                               | Tauri app log directory, e.g. `~/.local/share/com.orbitratech.aidb/logs/` on Linux                                                                                  |
-| Secrets (from 3.2)                 | OS credential store only (Keychain, Credential Manager, Secret Service)                                                                                             |
+| Secrets                            | OS credential store (service `com.orbitratech.aidb`, entries such as `connection:<id>`), or memory for the session when no store is available                       |
 | Webview storage (theme preference) | Webview local storage inside the app data directory; theme moves to SQLite in 3.3                                                                                   |
 
 Directories follow each OS's conventions through Tauri's path resolver; exact locations per

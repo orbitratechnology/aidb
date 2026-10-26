@@ -2,6 +2,7 @@
 
 use tauri::{AppHandle, Manager, RunEvent, Runtime};
 
+use crate::adapters::credentials::Credentials;
 use crate::adapters::local_store::LocalStore;
 use crate::commands;
 use crate::errors::AppResult;
@@ -63,7 +64,10 @@ fn setup<R: Runtime>(app: &AppHandle<R>) -> AppResult<()> {
         }
     };
 
-    app.manage(AppState::new(paths, local_store));
+    let credentials = Credentials::detect();
+    tracing::info!(backend = ?credentials.backend(), "credential storage selected");
+
+    app.manage(AppState::new(paths, local_store, credentials));
     Ok(())
 }
 

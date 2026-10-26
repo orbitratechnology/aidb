@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 
 use tauri::{AppHandle, Manager, Runtime};
 
+use crate::adapters::credentials::Credentials;
 use crate::adapters::local_store::LocalStore;
 use crate::errors::{AppError, AppResult, ErrorCode};
 
@@ -64,12 +65,23 @@ pub enum LocalStoreState {
 pub struct AppState {
     paths: AppPaths,
     local_store: LocalStoreState,
+    credentials: Credentials,
 }
 
 impl AppState {
     #[must_use]
-    pub fn new(paths: AppPaths, local_store: LocalStoreState) -> Self {
-        Self { paths, local_store }
+    pub fn new(paths: AppPaths, local_store: LocalStoreState, credentials: Credentials) -> Self {
+        Self {
+            paths,
+            local_store,
+            credentials,
+        }
+    }
+
+    /// Where secrets are kept: the OS credential store, or memory for this session.
+    #[must_use]
+    pub fn credentials(&self) -> &Credentials {
+        &self.credentials
     }
 
     #[must_use]

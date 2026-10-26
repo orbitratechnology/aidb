@@ -1,6 +1,7 @@
 use serde::Serialize;
 use tauri::State;
 
+use crate::adapters::credentials::CredentialBackend;
 use crate::errors::AppResult;
 use crate::state::{AppState, LocalStoreState};
 
@@ -12,6 +13,16 @@ pub struct DiagnosticsInfo {
     pub data_dir: String,
     pub log_dir: String,
     pub local_store: LocalStoreStatus,
+    pub credential_store: CredentialStoreStatus,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
+#[serde(rename_all = "camelCase")]
+pub struct CredentialStoreStatus {
+    pub backend: CredentialBackend,
+    /// Why secrets are session-only, when they are. Technical; shown as detail only.
+    pub reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -63,9 +74,17 @@ pub async fn diagnostics(state: State<'_, AppState>) -> AppResult<DiagnosticsInf
         },
     };
 
+    let credentials = state.credentials();
     Ok(DiagnosticsInfo {
         data_dir: state.paths().data_dir().display().to_string(),
         log_dir: state.paths().log_dir().display().to_string(),
         local_store,
+        credential_store: CredentialStoreStatus {
+            backend: credentials.backend(),
+            reason: credentials
+                .fallback_reason()
+                .map(crate::errors::redact)
+                .map(Into::into),
+        },
     })
 }

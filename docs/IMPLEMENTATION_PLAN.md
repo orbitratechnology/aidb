@@ -61,9 +61,13 @@ Status legend: `[x]` done · `[~]` in progress · `[ ]` not started
       types for connection profiles with validation; repositories for settings and connection
       profiles (others arrive with their features). The app stays up if the store cannot open,
       and Diagnostics shows its status, folders and schema version.
-- [ ] **3.2 Credential store.** OS keyring backend (Windows Credential Manager, macOS Keychain,
-      Secret Service) with a session-only fallback and no plaintext fallback. Tests proving secrets
-      never reach SQLite, logs or exports.
+- [x] **3.2 Credential store.** `keyring` 4 (`v1` mode: Keychain, Credential Manager, Secret
+      Service) with an explicit session-only fallback chosen at startup and shown in Diagnostics;
+      secrets held as `SecretString`; keyring errors carrying secret bytes are zeroed and dropped.
+      `connection_secrets` service saves, loads and forgets passwords, recording a reference only
+      for durable secrets and cleaning up on failure. Tests scan database files and captured logs
+      for the secret; CI round-trips a secret through a real gnome-keyring. Export checks follow
+      with the export feature in 4.1.
 - [ ] **3.3 Settings.** Settings commands and UI: appearance, safety defaults, storage controls
       (clear history, clear schema cache), diagnostics.
 

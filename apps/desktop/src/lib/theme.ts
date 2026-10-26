@@ -1,9 +1,12 @@
-export type Theme = 'light' | 'dark' | 'system'
+import type { ThemePreference } from '@aidb/contracts'
+
+export type Theme = ThemePreference
 export type ResolvedTheme = 'light' | 'dark'
 
 export const THEMES: readonly Theme[] = ['light', 'dark', 'system']
 
-// UI preference only. Moves to the native settings store in task 3.3.
+// The local database holds the theme. This copy only lets the first frame paint in the right
+// colors before the native core answers.
 const STORAGE_KEY = 'aidb.theme'
 const DARK_QUERY = '(prefers-color-scheme: dark)'
 

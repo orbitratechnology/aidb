@@ -68,7 +68,7 @@ Status legend: `[x]` done · `[~]` in progress · `[ ]` not started
       for durable secrets and cleaning up on failure. Tests scan database files and captured logs
       for the secret; CI round-trips a secret through a real gnome-keyring. Export checks follow
       with the export feature in 4.1.
-- [ ] **3.3 Settings.** Settings commands and UI: appearance, safety defaults, storage controls
+- [x] **3.3 Settings.** Settings commands and UI: appearance, safety defaults, storage controls
       (clear history, clear schema cache), diagnostics.
 
 ## Phase 4: PostgreSQL connections

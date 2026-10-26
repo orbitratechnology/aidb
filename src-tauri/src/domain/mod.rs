@@ -2,3 +2,4 @@
 //! coordinate them.
 
 pub mod connections;
+pub mod settings;

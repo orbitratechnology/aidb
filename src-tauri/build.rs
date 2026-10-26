@@ -1,6 +1,14 @@
 // App commands listed here get generated `allow-*` / `deny-*` permissions. Once listed, a command
 // runs only in windows whose capability grants it. Keep in sync with `commands::handler`.
-const COMMANDS: &[&str] = &["app_info", "diagnostics", "open_external_url"];
+const COMMANDS: &[&str] = &[
+    "app_info",
+    "diagnostics",
+    "open_external_url",
+    "get_settings",
+    "update_settings",
+    "storage_summary",
+    "clear_local_data",
+];
 
 fn main() {
     // Migrations are embedded by `sqlx::migrate!`; rebuild when they change.

@@ -65,8 +65,8 @@ Layering, from the IPC edge inward:
 | Layer      | Responsibility                                                                                                       | Status                                                                |
 | ---------- | -------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------- |
 | `commands` | Deserialize and validate input, call a service, map errors to `AppError`. No business logic.                         | Implemented                                                           |
-| `services` | Use cases that coordinate domain rules and adapters (connect, run query, apply approved change).                     | `connection_secrets` implemented; more from 4.1                       |
-| `domain`   | Types and rules with no I/O: connection profiles, policy classification, approvals, plans, migrations.               | Connection profiles implemented; rest _Planned_                       |
+| `services` | Use cases that coordinate domain rules and adapters (connect, run query, apply approved change).                     | `connection_secrets`, `settings` implemented; more from 4.1           |
+| `domain`   | Types and rules with no I/O: connection profiles, policy classification, approvals, plans, migrations.               | Connection profiles, settings implemented; rest _Planned_             |
 | `adapters` | I/O: `local_store` (SQLite) and `credentials` (OS keychain) today; `postgres` (SQLx) and `ai_providers` (HTTP) next. | `local_store`, `credentials` implemented; others _Planned_ (4.2, 7.1) |
 | `events`   | Typed core-to-UI events and channels (connection status, streaming results, agent progress).                         | _Planned_ (with the first emitter)                                    |
 
@@ -87,7 +87,7 @@ SQLite through SQLx (`src-tauri/src/adapters/local_store/`), schema in
 
 | Table                   | Holds                                                                   | Repository           |
 | ----------------------- | ----------------------------------------------------------------------- | -------------------- |
-| `app_settings`          | JSON preferences under dotted keys                                      | `Settings`           |
+| `app_settings`          | JSON preferences, one key per section (`appearance`, `safety`)          | `Settings`           |
 | `connection_profiles`   | Connection settings, environment, read-only flag, credential-store ref  | `ConnectionProfiles` |
 | `provider_profiles`     | AI provider settings and credential-store ref                           | with task 7.2        |
 | `saved_queries`         | User-authored SQL                                                       | with task 6.3        |
@@ -100,12 +100,22 @@ Rules: `STRICT` tables with CHECK constraints mirroring domain limits; WAL journ
 on; deleting a connection removes its cache but keeps saved queries, tasks, audit and migration
 history (detached). Secrets and query results are never stored.
 
+Settings are stored per section and validated in Rust on save. Loading is lenient: a section that
+is unreadable or out of range falls back to its defaults (logged), so a damaged preference cannot
+lock the user out.
+
+`Maintenance` reports row counts for Settings › Storage and clears agent task history, the audit
+log or the schema cache when the user confirms. Connections and saved queries are not cleared
+from there.
+
 ## IPC contract
 
 1. Rust DTOs derive `ts_rs::TS` (test builds only). `cargo test` writes the TypeScript types to
    `packages/contracts/src/generated/`; CI fails if the committed copies are stale.
 2. Zod schemas in `packages/contracts` are type-checked against the generated types. A missing
    error code fails the TypeScript build.
+   Constants the UI must share, such as the safety defaults and limits, are written to
+   `generated/SafetyLimits.ts` by a test in the same way.
 3. The UI calls the core only through `callCommand` (`apps/desktop/src/lib/native.ts`), which
    validates the response and converts failures into `NativeError { code, message, retryable }`.
 4. Every command is listed in `src-tauri/build.rs`, which generates its `allow-<command>`
@@ -116,26 +126,30 @@ Error codes: `invalid_input`, `not_found`, `conflict`, `permission_denied`, `app
 `timeout`, `cancelled`, `unavailable`, `storage`, `credential_store`, `internal`. Only `timeout`
 and `unavailable` are retryable by default.
 
-Current commands: `app_info`, `diagnostics`, `open_external_url`.
+Current commands: `app_info`, `diagnostics`, `open_external_url`, `get_settings`,
+`update_settings`, `storage_summary`, `clear_local_data`.
 
 ## Frontend
 
 - **Shell**: sidebar at 1024px and wider, icon sidebar from 640px, bottom navigation below 640px.
   The top bar always shows the active connection, database, environment and access mode as text.
 - **Routing**: hash history with lazy-loaded feature routes, so editors and grids load on demand.
-- **State**: Zustand for cross-screen UI state (for example the active connection); local state
-  for forms. The core is authoritative for anything security-relevant.
+- **State**: Zustand for cross-screen UI state (for example the active connection); TanStack
+  Query for data read from the core; React Hook Form with the contracts' Zod schemas for forms.
+  The core is authoritative for anything security-relevant.
+- **Native data**: reads are queries that retry only errors the core marks retryable; writes are
+  mutations that never retry. Settings saves run one at a time, so the last change wins.
 - **External links**: clicks on `http(s)` and `mailto` links go to `open_external_url`, which
   validates them and opens the system browser.
 
 ## Data on disk
 
-| What                               | Where                                                                                                                                                               |
-| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Local metadata database            | `aidb.sqlite3` in the Tauri app data directory, e.g. `~/.local/share/com.orbitratech.aidb/` on Linux; `aidb.sqlite3.v<N>.bak` is written before each schema upgrade |
-| Logs                               | Tauri app log directory, e.g. `~/.local/share/com.orbitratech.aidb/logs/` on Linux                                                                                  |
-| Secrets                            | OS credential store (service `com.orbitratech.aidb`, entries such as `connection:<id>`), or memory for the session when no store is available                       |
-| Webview storage (theme preference) | Webview local storage inside the app data directory; theme moves to SQLite in 3.3                                                                                   |
+| What                          | Where                                                                                                                                                               |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Local metadata database       | `aidb.sqlite3` in the Tauri app data directory, e.g. `~/.local/share/com.orbitratech.aidb/` on Linux; `aidb.sqlite3.v<N>.bak` is written before each schema upgrade |
+| Logs                          | Tauri app log directory, e.g. `~/.local/share/com.orbitratech.aidb/logs/` on Linux                                                                                  |
+| Secrets                       | OS credential store (service `com.orbitratech.aidb`, entries such as `connection:<id>`), or memory for the session when no store is available                       |
+| Webview storage (theme cache) | Webview local storage inside the app data directory; holds a copy of the saved theme so the first frame paints in the right colors                                  |
 
 Directories follow each OS's conventions through Tauri's path resolver; exact locations per
 platform are documented with release hardening (task 12.3).

@@ -300,6 +300,10 @@ mod tests {
             .with_max_level(tracing::Level::TRACE)
             .with_writer(move || writer.clone())
             .finish();
+        // While only one dispatcher exists, tracing-core asks the registering thread's default
+        // instead of every dispatcher, so a callsite first hit by a parallel test would be cached
+        // as disabled. A second, idle dispatcher makes it consult the capturing one too.
+        let _idle = tracing::Dispatch::new(tracing_subscriber::registry());
         let _guard = tracing::subscriber::set_default(subscriber);
 
         let (_dir, store) = temp_store().await;

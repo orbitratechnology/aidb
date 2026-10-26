@@ -13,6 +13,7 @@
 mod app;
 mod diagnostics;
 mod external;
+mod settings;
 
 use tauri::Runtime;
 use tauri::ipc::Invoke;
@@ -22,7 +23,11 @@ pub(crate) fn handler<R: Runtime>() -> impl Fn(Invoke<R>) -> bool + Send + Sync 
     tauri::generate_handler![
         app::app_info,
         diagnostics::diagnostics,
-        external::open_external_url
+        external::open_external_url,
+        settings::get_settings,
+        settings::update_settings,
+        settings::storage_summary,
+        settings::clear_local_data
     ]
 }
 

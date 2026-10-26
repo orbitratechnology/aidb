@@ -2,6 +2,7 @@
 //! adapters directly.
 
 pub mod connection_secrets;
+pub mod settings;
 
 use crate::errors::{AppError, AppResult};
 

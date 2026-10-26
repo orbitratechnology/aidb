@@ -5,6 +5,7 @@
 //! data. Secrets and query results are never stored here.
 
 mod connections;
+mod maintenance;
 mod settings;
 
 use std::path::{Path, PathBuf};
@@ -19,6 +20,7 @@ use thiserror::Error;
 use crate::errors::{AppError, ErrorCode};
 
 pub use connections::ConnectionProfiles;
+pub use maintenance::{ClearTarget, Maintenance, StorageSummary};
 pub use settings::Settings;
 
 /// File name of the local database inside the app data directory.
@@ -136,6 +138,11 @@ impl LocalStore {
     #[must_use]
     pub fn connections(&self) -> ConnectionProfiles<'_> {
         ConnectionProfiles::new(&self.pool)
+    }
+
+    #[must_use]
+    pub fn maintenance(&self) -> Maintenance<'_> {
+        Maintenance::new(&self.pool)
     }
 
     /// Closes all connections, checkpointing the write-ahead log.

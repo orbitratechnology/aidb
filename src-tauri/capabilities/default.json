@@ -7,6 +7,10 @@
     "core:event:default",
     "allow-app-info",
     "allow-diagnostics",
-    "allow-open-external-url"
+    "allow-open-external-url",
+    "allow-get-settings",
+    "allow-update-settings",
+    "allow-storage-summary",
+    "allow-clear-local-data"
   ]
 }

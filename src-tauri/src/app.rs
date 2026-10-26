@@ -24,6 +24,9 @@ pub fn run() {
                 .open_js_links_on_click(false)
                 .build(),
         )
+        // Native file dialogs, shown by the core for imports and exports. The webview is not
+        // granted the plugin's commands, so it never gets file paths or file access.
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             setup(app.handle())?;
             Ok(())

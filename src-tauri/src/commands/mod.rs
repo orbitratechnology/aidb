@@ -11,6 +11,7 @@
 //! missing from a capability is rejected by Tauri before it runs.
 
 mod app;
+mod connections;
 mod diagnostics;
 mod external;
 mod settings;
@@ -27,7 +28,17 @@ pub(crate) fn handler<R: Runtime>() -> impl Fn(Invoke<R>) -> bool + Send + Sync 
         settings::get_settings,
         settings::update_settings,
         settings::storage_summary,
-        settings::clear_local_data
+        settings::clear_local_data,
+        connections::list_connections,
+        connections::create_connection,
+        connections::update_connection,
+        connections::delete_connection,
+        connections::save_connection_password,
+        connections::forget_connection_password,
+        connections::parse_connection_uri,
+        connections::export_connections,
+        connections::preview_connection_import,
+        connections::import_connections
     ]
 }
 
@@ -44,6 +55,7 @@ mod tests {
 
     fn app() -> App<MockRuntime> {
         mock_builder()
+            .plugin(tauri_plugin_dialog::init())
             .invoke_handler(handler())
             .build(tauri::generate_context!())
             .expect("mock app builds")
@@ -95,6 +107,58 @@ mod tests {
 
         assert_eq!(error["code"], "invalid_input");
         assert_eq!(error["retryable"], false);
+    }
+
+    #[test]
+    fn connection_uris_are_parsed_without_state_or_logging() {
+        let app = app();
+        let main = window(&app, "main");
+
+        let parsed = invoke(
+            &main,
+            "parse_connection_uri",
+            json!({ "uri": "postgres://reader:pw@db.internal:6432/orders?sslmode=require" }),
+        )
+        .expect("parse_connection_uri is allowed");
+        let rejected = invoke(
+            &main,
+            "parse_connection_uri",
+            json!({ "uri": "mysql://reader:pw@db.internal/orders" }),
+        )
+        .expect_err("not PostgreSQL");
+
+        assert_eq!(parsed["host"], "db.internal");
+        assert_eq!(parsed["port"], 6432);
+        assert_eq!(parsed["sslMode"], "require");
+        assert_eq!(parsed["password"], "pw");
+        assert_eq!(rejected["code"], "invalid_input");
+        assert!(
+            !rejected["message"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("pw")
+        );
+    }
+
+    /// The dialog plugin is registered (the core uses it), but no capability grants it.
+    #[test]
+    fn dialog_and_file_plugins_are_not_reachable_from_the_webview() {
+        let app = app();
+        let main = window(&app, "main");
+
+        for cmd in [
+            "plugin:dialog|open",
+            "plugin:dialog|save",
+            "plugin:fs|read_file",
+        ] {
+            let error = invoke(&main, cmd, json!({})).expect_err(cmd);
+            assert!(
+                error
+                    .as_str()
+                    .is_some_and(|text| text.contains("not allowed")),
+                "{cmd}: {error}"
+            );
+        }
     }
 
     #[test]

@@ -73,7 +73,7 @@ Status legend: `[x]` done · `[~]` in progress · `[ ]` not started
 
 ## Phase 4: PostgreSQL connections
 
-- [ ] **4.1 Connection profiles.** Validation, environment labels, SSL modes, URI convenience input
+- [x] **4.1 Connection profiles.** Validation, environment labels, SSL modes, URI convenience input
       parsed without persisting passwords, CRUD commands, versioned JSON export and import with
       secrets omitted.
 - [ ] **4.2 PostgreSQL adapter.** `DatabaseAdapter` trait with capabilities, SQLx Postgres pools,

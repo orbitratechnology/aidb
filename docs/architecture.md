@@ -127,7 +127,54 @@ Error codes: `invalid_input`, `not_found`, `conflict`, `permission_denied`, `app
 and `unavailable` are retryable by default.
 
 Current commands: `app_info`, `diagnostics`, `open_external_url`, `get_settings`,
-`update_settings`, `storage_summary`, `clear_local_data`.
+`update_settings`, `storage_summary`, `clear_local_data`, `list_connections`,
+`create_connection`, `update_connection`, `delete_connection`, `save_connection_password`,
+`forget_connection_password`, `parse_connection_uri`, `export_connections`,
+`preview_connection_import`, `import_connections`.
+
+## Connection profiles
+
+- **Validation** happens in `domain::connections` for every source (form, URI, import file):
+  trimmed names, host names or IP addresses only, PostgreSQL's 63-byte identifier limit, no
+  control characters, an absolute CA path used only with `verify-ca`/`verify-full`, and a
+  1–300 s connect timeout. New profiles default to `verify-full` and read-only.
+- **TLS off for a remote host** (not `localhost`, `*.localhost` or a loopback address) is saved
+  only when the request carries the user's consent (`allowUnencrypted`); it is asked again on
+  every save and import.
+- **URIs** (`postgres://` or `postgresql://`) are split into fields by `domain::connection_uri`.
+  The password, if any, goes back to the form once and is never stored with the profile; the
+  URI itself is never stored or logged.
+- **Passwords** are saved separately (`save_connection_password`) in the OS credential store, or
+  for the session. The list reports where each password is without reading the keychain.
+- **Deleting** a profile can also remove its password; the password goes first, so a failure
+  leaves the profile to retry.
+- **Export and import** use a versioned JSON file:
+
+  ```json
+  {
+    "format": "aidb.connections",
+    "version": 1,
+    "exportedAt": "2026-10-26T10:00:00Z",
+    "connections": [
+      {
+        "name": "Orders (staging)",
+        "engine": "postgres",
+        "host": "orders-staging.internal",
+        "port": 5432,
+        "database": "orders",
+        "username": "app_reader",
+        "sslMode": "verify-full",
+        "connectTimeoutSecs": 10,
+        "environment": "staging",
+        "readOnly": true
+      }
+    ]
+  }
+  ```
+
+  The core shows the native dialog and reads (at most 1 MB, 1,000 entries) or writes the file.
+  Import is two steps: a preview that marks each entry ready, duplicate or invalid, then an
+  import of the chosen entries, which the core validates again and saves read-only.
 
 ## Frontend
 

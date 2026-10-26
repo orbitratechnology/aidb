@@ -11,6 +11,16 @@
     "allow-get-settings",
     "allow-update-settings",
     "allow-storage-summary",
-    "allow-clear-local-data"
+    "allow-clear-local-data",
+    "allow-list-connections",
+    "allow-create-connection",
+    "allow-update-connection",
+    "allow-delete-connection",
+    "allow-save-connection-password",
+    "allow-forget-connection-password",
+    "allow-parse-connection-uri",
+    "allow-export-connections",
+    "allow-preview-connection-import",
+    "allow-import-connections"
   ]
 }

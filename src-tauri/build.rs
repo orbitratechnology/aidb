@@ -8,6 +8,16 @@ const COMMANDS: &[&str] = &[
     "update_settings",
     "storage_summary",
     "clear_local_data",
+    "list_connections",
+    "create_connection",
+    "update_connection",
+    "delete_connection",
+    "save_connection_password",
+    "forget_connection_password",
+    "parse_connection_uri",
+    "export_connections",
+    "preview_connection_import",
+    "import_connections",
 ];
 
 fn main() {

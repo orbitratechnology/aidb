@@ -230,6 +230,18 @@ impl Credentials {
         }
     }
 
+    /// Whether a session-only secret is held in memory. Never touches the OS store, so it is
+    /// safe to call for every row of a list.
+    #[must_use]
+    pub fn holds_in_session(&self, key: &SecretRef) -> bool {
+        match &self.inner.backend {
+            Backend::Memory(map) if self.inner.kind == CredentialBackend::SessionOnly => {
+                lock(map).contains_key(key)
+            }
+            _ => false,
+        }
+    }
+
     /// Deletes a secret. Returns whether one existed. Blocking when the OS store is used.
     ///
     /// # Errors

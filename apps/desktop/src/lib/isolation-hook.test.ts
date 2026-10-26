@@ -39,7 +39,10 @@ describe('isolation hook', () => {
   it('reroutes other plugins and malformed names so the core rejects them', () => {
     for (const cmd of [
       'plugin:opener|open_url',
+      'plugin:dialog|open',
+      'plugin:dialog|save',
       'plugin:fs|read_file',
+      'plugin:fs|write_file',
       'plugin:event|other',
       'App_Info',
       '../app_info',

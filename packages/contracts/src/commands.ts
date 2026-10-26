@@ -10,6 +10,16 @@ export const COMMANDS = {
   updateSettings: 'update_settings',
   storageSummary: 'storage_summary',
   clearLocalData: 'clear_local_data',
+  listConnections: 'list_connections',
+  createConnection: 'create_connection',
+  updateConnection: 'update_connection',
+  deleteConnection: 'delete_connection',
+  saveConnectionPassword: 'save_connection_password',
+  forgetConnectionPassword: 'forget_connection_password',
+  parseConnectionUri: 'parse_connection_uri',
+  exportConnections: 'export_connections',
+  previewConnectionImport: 'preview_connection_import',
+  importConnections: 'import_connections',
 } as const
 
 export type CommandName = (typeof COMMANDS)[keyof typeof COMMANDS]

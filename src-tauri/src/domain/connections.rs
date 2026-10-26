@@ -3,6 +3,8 @@
 //! A profile never holds a password. `secret_ref` names an entry in the OS credential store.
 
 use std::fmt;
+use std::net::IpAddr;
+use std::path::Path;
 use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
@@ -13,6 +15,7 @@ use crate::errors::AppError;
 
 /// Stable identifier of a saved connection profile.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export, type = "string"))]
 pub struct ConnectionId(Uuid);
 
 impl ConnectionId {
@@ -42,8 +45,22 @@ impl FromStr for ConnectionId {
     }
 }
 
+impl Serialize for ConnectionId {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_str(self)
+    }
+}
+
+impl<'de> Deserialize<'de> for ConnectionId {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let text = <std::borrow::Cow<'de, str>>::deserialize(deserializer)?;
+        text.parse().map_err(serde::de::Error::custom)
+    }
+}
+
 /// Database engines aidb can connect to. PostgreSQL only for the MVP.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 #[serde(rename_all = "snake_case")]
 pub enum Engine {
     #[default]
@@ -52,6 +69,7 @@ pub enum Engine {
 
 /// Deployment environment of a connection. Shown everywhere the connection is active.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 #[serde(rename_all = "snake_case")]
 pub enum Environment {
     Local,
@@ -64,6 +82,7 @@ pub enum Environment {
 
 /// How the PostgreSQL connection uses TLS. Defaults to full certificate verification.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 #[serde(rename_all = "kebab-case")]
 pub enum SslMode {
     Disable,
@@ -129,10 +148,14 @@ pub mod limits {
     pub const IDENTIFIER_MAX: usize = 63;
     pub const CA_CERT_PATH_MAX: usize = 4096;
     pub const CONNECT_TIMEOUT_SECS: std::ops::RangeInclusive<u32> = 1..=300;
+    /// DNS limits a label to 63 bytes.
+    pub const HOST_LABEL_MAX: usize = 63;
 }
 
 /// Editable fields of a connection profile, validated before they are stored.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ConnectionDraft {
     pub name: String,
     pub host: String,
@@ -169,7 +192,7 @@ impl ConnectionDraft {
         }
     }
 
-    /// Trims text fields and checks every limit.
+    /// Trims text fields, removes brackets around an IPv6 host, and checks every limit.
     ///
     /// # Errors
     ///
@@ -177,6 +200,13 @@ impl ConnectionDraft {
     pub fn validated(mut self) -> Result<Self, DraftError> {
         self.name = self.name.trim().to_owned();
         self.host = self.host.trim().to_owned();
+        if let Some(inner) = self
+            .host
+            .strip_prefix('[')
+            .and_then(|rest| rest.strip_suffix(']'))
+        {
+            self.host = inner.to_owned();
+        }
         self.ca_cert_path = self
             .ca_cert_path
             .map(|path| path.trim().to_owned())
@@ -184,8 +214,11 @@ impl ConnectionDraft {
 
         check_text(&self.name, Field::Name, limits::NAME_MAX)?;
         check_text(&self.host, Field::Host, limits::HOST_MAX)?;
-        if self.host.chars().any(char::is_whitespace) {
-            return Err(DraftError::Invalid(Field::Host, "must not contain spaces"));
+        if !is_valid_host(&self.host) {
+            return Err(DraftError::Invalid(
+                Field::Host,
+                "must be a host name or an IP address",
+            ));
         }
         if self.port == 0 {
             return Err(DraftError::Invalid(
@@ -195,13 +228,25 @@ impl ConnectionDraft {
         }
         check_identifier(&self.database, Field::Database)?;
         check_identifier(&self.username, Field::Username)?;
-        if let Some(path) = &self.ca_cert_path
-            && path.len() > limits::CA_CERT_PATH_MAX
-        {
-            return Err(DraftError::TooLong(
-                Field::CaCertPath,
-                limits::CA_CERT_PATH_MAX,
-            ));
+        if let Some(path) = &self.ca_cert_path {
+            if path.len() > limits::CA_CERT_PATH_MAX {
+                return Err(DraftError::TooLong(
+                    Field::CaCertPath,
+                    limits::CA_CERT_PATH_MAX,
+                ));
+            }
+            if path.chars().any(char::is_control) || !Path::new(path).is_absolute() {
+                return Err(DraftError::Invalid(
+                    Field::CaCertPath,
+                    "must be an absolute file path",
+                ));
+            }
+            if !matches!(self.ssl_mode, SslMode::VerifyCa | SslMode::VerifyFull) {
+                return Err(DraftError::Invalid(
+                    Field::CaCertPath,
+                    "is used only with verify-ca or verify-full",
+                ));
+            }
         }
         if !limits::CONNECT_TIMEOUT_SECS.contains(&self.connect_timeout_secs) {
             return Err(DraftError::Invalid(
@@ -211,6 +256,26 @@ impl ConnectionDraft {
         }
         Ok(self)
     }
+
+    /// Whether the password and data would cross the network unencrypted: TLS is off and the
+    /// host is not this machine.
+    #[must_use]
+    pub fn is_unencrypted_remote(&self) -> bool {
+        self.ssl_mode == SslMode::Disable && !is_loopback_host(&self.host)
+    }
+
+    /// Refuses an unencrypted connection to another machine unless the user agreed to it.
+    ///
+    /// # Errors
+    ///
+    /// [`DraftError::UnencryptedRemote`] when consent is needed and was not given.
+    pub fn check_transport(&self, unencrypted_allowed: bool) -> Result<(), DraftError> {
+        if self.is_unencrypted_remote() && !unencrypted_allowed {
+            Err(DraftError::UnencryptedRemote)
+        } else {
+            Ok(())
+        }
+    }
 }
 
 fn check_text(value: &str, field: Field, max: usize) -> Result<(), DraftError> {
@@ -218,6 +283,11 @@ fn check_text(value: &str, field: Field, max: usize) -> Result<(), DraftError> {
         Err(DraftError::Missing(field))
     } else if value.chars().count() > max {
         Err(DraftError::TooLong(field, max))
+    } else if value.chars().any(char::is_control) {
+        Err(DraftError::Invalid(
+            field,
+            "must not contain control characters",
+        ))
     } else {
         Ok(())
     }
@@ -228,9 +298,39 @@ fn check_identifier(value: &str, field: Field) -> Result<(), DraftError> {
         Err(DraftError::Missing(field))
     } else if value.len() > limits::IDENTIFIER_MAX {
         Err(DraftError::TooLong(field, limits::IDENTIFIER_MAX))
+    } else if value.chars().any(char::is_control) {
+        Err(DraftError::Invalid(
+            field,
+            "must not contain control characters",
+        ))
     } else {
         Ok(())
     }
+}
+
+/// An IP address, or a DNS name made of letters, digits, hyphens and underscores.
+fn is_valid_host(host: &str) -> bool {
+    if host.parse::<IpAddr>().is_ok() {
+        return true;
+    }
+    host.split('.').all(|label| {
+        !label.is_empty()
+            && label.len() <= limits::HOST_LABEL_MAX
+            && !label.starts_with('-')
+            && !label.ends_with('-')
+            && label
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+    })
+}
+
+/// Whether `host` names this machine.
+#[must_use]
+pub fn is_loopback_host(host: &str) -> bool {
+    let host = host.trim_end_matches('.').to_ascii_lowercase();
+    host == "localhost"
+        || host.ends_with(".localhost")
+        || host.parse::<IpAddr>().is_ok_and(|ip| ip.is_loopback())
 }
 
 /// A saved connection profile.
@@ -279,6 +379,11 @@ pub enum DraftError {
     TooLong(Field, usize),
     #[error("{0} {1}")]
     Invalid(Field, &'static str),
+    #[error(
+        "TLS is off for a remote host, so the password and data would cross the network \
+         unencrypted. Confirm this to save the connection"
+    )]
+    UnencryptedRemote,
 }
 
 impl From<DraftError> for AppError {
@@ -327,7 +432,7 @@ mod tests {
             (|d| d.name = "   ".into(), DraftError::Missing(Field::Name)),
             (
                 |d| d.host = "db internal".into(),
-                DraftError::Invalid(Field::Host, "must not contain spaces"),
+                DraftError::Invalid(Field::Host, "must be a host name or an IP address"),
             ),
             (
                 |d| d.port = 0,
@@ -352,6 +457,150 @@ mod tests {
             mutate(&mut input);
             assert_eq!(input.validated(), Err(expected));
         }
+    }
+
+    #[test]
+    fn hosts_must_be_names_or_addresses() {
+        for good in [
+            "db.internal",
+            "db-1.example.com",
+            "pg_primary",
+            "10.0.0.5",
+            "::1",
+            "LOCALHOST",
+        ] {
+            let mut input = draft();
+            input.host = good.into();
+            assert!(input.validated().is_ok(), "{good} should be accepted");
+        }
+        for bad in [
+            "db/primary",
+            "user@db",
+            "db:5432",
+            "-db",
+            "db..internal",
+            "db.internal?sslmode=disable",
+        ] {
+            let mut input = draft();
+            input.host = bad.into();
+            assert_eq!(
+                input.validated(),
+                Err(DraftError::Invalid(
+                    Field::Host,
+                    "must be a host name or an IP address"
+                )),
+                "{bad} should be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn bracketed_ipv6_hosts_are_stored_without_brackets() {
+        let mut input = draft();
+        input.host = "[2001:db8::10]".into();
+
+        assert_eq!(
+            input.validated().map(|d| d.host),
+            Ok("2001:db8::10".to_owned())
+        );
+    }
+
+    #[test]
+    fn control_characters_are_rejected_in_names_and_identifiers() {
+        let mut input = draft();
+        input.name = "Orders\u{7}".into();
+        assert_eq!(
+            input.validated(),
+            Err(DraftError::Invalid(
+                Field::Name,
+                "must not contain control characters"
+            ))
+        );
+
+        let mut input = draft();
+        input.username = "app\nreader".into();
+        assert_eq!(
+            input.validated(),
+            Err(DraftError::Invalid(
+                Field::Username,
+                "must not contain control characters"
+            ))
+        );
+    }
+
+    #[test]
+    fn ca_certificates_need_an_absolute_path_and_a_verifying_mode() {
+        let absolute = if cfg!(windows) {
+            r"C:\certs\ca.pem"
+        } else {
+            "/etc/ssl/ca.pem"
+        };
+
+        let mut input = draft();
+        input.ca_cert_path = Some(absolute.into());
+        assert!(input.validated().is_ok());
+
+        let mut input = draft();
+        input.ca_cert_path = Some("certs/ca.pem".into());
+        assert_eq!(
+            input.validated(),
+            Err(DraftError::Invalid(
+                Field::CaCertPath,
+                "must be an absolute file path"
+            ))
+        );
+
+        let mut input = draft();
+        input.ssl_mode = SslMode::Require;
+        input.ca_cert_path = Some(absolute.into());
+        assert_eq!(
+            input.validated(),
+            Err(DraftError::Invalid(
+                Field::CaCertPath,
+                "is used only with verify-ca or verify-full"
+            ))
+        );
+    }
+
+    #[test]
+    fn unencrypted_connections_to_other_machines_need_consent() {
+        let mut remote = draft();
+        remote.ssl_mode = SslMode::Disable;
+        assert!(remote.is_unencrypted_remote());
+        assert_eq!(
+            remote.check_transport(false),
+            Err(DraftError::UnencryptedRemote)
+        );
+        assert_eq!(remote.check_transport(true), Ok(()));
+
+        for host in ["localhost", "db.localhost", "127.0.0.1", "127.8.0.1", "::1"] {
+            let mut local = draft();
+            local.ssl_mode = SslMode::Disable;
+            local.host = host.into();
+            assert_eq!(
+                local.check_transport(false),
+                Ok(()),
+                "{host} is this machine"
+            );
+        }
+
+        assert_eq!(
+            draft().check_transport(false),
+            Ok(()),
+            "TLS on needs no consent"
+        );
+    }
+
+    #[test]
+    fn drafts_use_camel_case_on_the_wire_and_reject_unknown_fields() {
+        let value = serde_json::to_value(draft()).expect("serializes");
+        assert_eq!(value["sslMode"], "verify-full");
+        assert_eq!(value["connectTimeoutSecs"], 10);
+        assert_eq!(value["readOnly"], true);
+
+        let mut with_password = value;
+        with_password["password"] = "hunter2".into();
+        assert!(serde_json::from_value::<ConnectionDraft>(with_password).is_err());
     }
 
     #[test]
@@ -392,5 +641,10 @@ mod tests {
     fn connection_ids_round_trip_through_text() {
         let id = ConnectionId::new();
         assert_eq!(id.to_string().parse::<ConnectionId>().ok(), Some(id));
+
+        let json = serde_json::to_value(id).expect("serializes");
+        assert_eq!(json, id.to_string());
+        assert_eq!(serde_json::from_value::<ConnectionId>(json).ok(), Some(id));
+        assert!(serde_json::from_value::<ConnectionId>("not-an-id".into()).is_err());
     }
 }

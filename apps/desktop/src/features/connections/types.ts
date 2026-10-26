@@ -1,6 +1,8 @@
-export const ENVIRONMENTS = ['local', 'development', 'staging', 'production', 'other'] as const
+import { EnvironmentSchema, type Environment } from '@aidb/contracts'
 
-export type EnvironmentKind = (typeof ENVIRONMENTS)[number]
+export const ENVIRONMENTS = EnvironmentSchema.options
+
+export type EnvironmentKind = Environment
 
 /** Identity of the connection the workspace is bound to. Never carries secrets. */
 export type ActiveConnection = {

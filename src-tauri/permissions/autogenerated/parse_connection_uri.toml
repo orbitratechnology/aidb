@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-parse-connection-uri"
+description = "Enables the parse_connection_uri command without any pre-configured scope."
+commands.allow = ["parse_connection_uri"]
+
+[[permission]]
+identifier = "deny-parse-connection-uri"
+description = "Denies the parse_connection_uri command without any pre-configured scope."
+commands.deny = ["parse_connection_uri"]

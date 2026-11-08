@@ -14,7 +14,9 @@ export const router = createHashRouter([
         lazy: async () => ({ Component: (await import('@/features/ask/ask-page')).AskPage }),
       },
       {
-        path: 'data',
+        // The selected table or view lives in the URL, so back and forward walk the history.
+        // One route with optional segments keeps the tree mounted while the selection changes.
+        path: 'data/:schema?/:name?',
         lazy: async () => ({ Component: (await import('@/features/data/data-page')).DataPage }),
       },
       {

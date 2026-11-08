@@ -27,7 +27,7 @@ import {
 import { Skeleton } from '@/components/ui/skeleton'
 import { Spinner } from '@/components/ui/spinner'
 import { clearLocalData, getStorageSummary } from '@/lib/commands'
-import { LoadError } from '../load-error'
+import { LoadError } from '@/components/shared/load-error'
 import { SettingsSection } from '../settings-section'
 
 const STORAGE_QUERY_KEY = ['storage-summary'] as const

@@ -86,7 +86,7 @@ Status legend: `[x]` done · `[~]` in progress · `[ ]` not started
 
 - [x] **5.1 Catalog introspection.** Schemas, tables, views, columns, types, nullability, primary,
       foreign and unique keys, indexes, row estimates. In-memory cache with invalidation.
-- [ ] **5.2 Schema browser UI.** Searchable object tree, table definition and relationship panels,
+- [x] **5.2 Schema browser UI.** Searchable object tree, table definition and relationship panels,
       sheet-based object picker on compact screens.
 - [ ] **5.3 Table paging.** Validated identifiers, parameterized filters, sorting, bounded pages,
       safe type mapping (NULL, JSON/JSONB, arrays, UUID, numeric, timestamps, long text).

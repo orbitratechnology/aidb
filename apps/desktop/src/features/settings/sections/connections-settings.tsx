@@ -16,7 +16,7 @@ import { ImportConnectionsDialog } from '@/features/connections/import-dialog'
 import { useConnections } from '@/features/connections/queries'
 import { useActiveSessions, useDisconnect } from '@/features/connections/sessions'
 import { exportConnections, previewConnectionImport } from '@/lib/commands'
-import { LoadError } from '../load-error'
+import { LoadError } from '@/components/shared/load-error'
 import { SettingsSection } from '../settings-section'
 
 export function ConnectionsSettings() {

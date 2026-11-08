@@ -27,7 +27,7 @@ import {
 import { Skeleton } from '@/components/ui/skeleton'
 import { Spinner } from '@/components/ui/spinner'
 import { useSettings, useUpdateSettings } from '@/hooks/use-settings'
-import { LoadError } from '../load-error'
+import { LoadError } from '@/components/shared/load-error'
 import { SettingsSection } from '../settings-section'
 
 type FieldSpec = {

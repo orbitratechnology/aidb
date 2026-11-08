@@ -215,8 +215,9 @@ Current commands: `app_info`, `diagnostics`, `open_external_url`, `get_settings`
   `VACUUM` and data changes leave it alone. Approvals will bind to it (phase 9).
 - **Cache** (`services::catalog`): in memory, per connection and per session (a reconnect starts
   empty). A cached overview older than 15 s is revalidated with the fingerprint and reloaded,
-  with its object details dropped, when the structure changed. `refresh_catalog` forces a
-  reload. Only the fingerprint, object count and time are written to `schema_cache_metadata`;
+  with its object details dropped, when the structure changed. Describing a listed object that
+  no longer exists marks the overview for a fingerprint check on its next read, so a dropped
+  table leaves the tree at once. `refresh_catalog` forces a reload. Only the fingerprint, object count and time are written to `schema_cache_metadata`;
   Settings › Storage › Clear cache removes those rows and the memory cache.
 
 ## Frontend
@@ -235,6 +236,14 @@ Current commands: `app_info`, `diagnostics`, `open_external_url`, `get_settings`
   time: connecting closes the others, and editing or forgetting a profile closes its session.
   The top bar shows the open connection's name, database, environment and the access mode the
   server enforces (read-only, or writes enabled at every width).
+- **Schema browser** (Data): the selected object lives in the URL (`#/data/<schema>/<name>`,
+  URI-encoded), so back and forward work and relationships link to the tables they name. From
+  1024px a searchable tree sits beside the definition; narrower windows show the definition full
+  width with a "Browse" button that opens the tree in a full-height sheet. Search matches
+  `schema.name` in memory; each schema renders 200 objects at a time with "Show more". The
+  definition shows columns with PK/FK/UQ text markers, keys, references in both directions with
+  their actions, indexes and a view's query. Object kinds and missing read access are shown
+  with icons and text, never color alone.
 - **Native data**: reads are queries that retry only errors the core marks retryable; writes are
   mutations that never retry. Settings saves run one at a time, so the last change wins.
 - **External links**: clicks on `http(s)` and `mailto` links go to `open_external_url`, which

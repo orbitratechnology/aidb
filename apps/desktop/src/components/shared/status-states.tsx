@@ -50,13 +50,13 @@ export function RequireConnection({
   ...empty
 }: Omit<StateProps, 'children'> & { children: ReactNode }) {
   const active = useActiveConnection()
+  return active ? children : <ConnectionRequired {...empty} />
+}
 
-  if (active) {
-    return children
-  }
-
+/** Explains that a screen needs a connection and links to setting one up. */
+export function ConnectionRequired(props: Omit<StateProps, 'children'>) {
   return (
-    <EmptyState {...empty}>
+    <EmptyState {...props}>
       <Button asChild className="min-h-11 sm:min-h-0">
         <Link to="/settings/connections">
           <PlugIcon data-icon="inline-start" />

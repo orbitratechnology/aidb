@@ -14,7 +14,7 @@ use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
 use super::sessions::Sessions;
-use crate::adapters::database::{DatabaseAdapter, DatabaseSession};
+use crate::adapters::database::{DatabaseAdapter, DatabaseSession, DbErrorKind};
 use crate::adapters::local_store::{LocalStore, StoreError};
 use crate::domain::catalog::{CatalogOverview, ObjectDetails, ObjectName};
 use crate::domain::connections::ConnectionId;
@@ -38,7 +38,8 @@ struct Entry {
     session_serial: u64,
     snapshot: Arc<CatalogSnapshot>,
     details: HashMap<ObjectName, Arc<ObjectDetails>>,
-    checked_at: Instant,
+    /// When the fingerprint was last confirmed. `None` checks it again before the next use.
+    checked_at: Option<Instant>,
 }
 
 /// Cached catalogs, one per open connection.
@@ -66,11 +67,24 @@ impl CatalogCache {
     }
 
     /// The cached entry for this session, if it is still the open one.
-    fn current(&self, id: ConnectionId, serial: u64) -> Option<(Arc<CatalogSnapshot>, Instant)> {
+    fn current(
+        &self,
+        id: ConnectionId,
+        serial: u64,
+    ) -> Option<(Arc<CatalogSnapshot>, Option<Instant>)> {
         self.lock()
             .get(&id)
             .filter(|entry| entry.session_serial == serial)
             .map(|entry| (Arc::clone(&entry.snapshot), entry.checked_at))
+    }
+
+    /// Makes the next use of this snapshot check the fingerprint, unless it was replaced already.
+    fn recheck_soon(&self, id: ConnectionId, snapshot: &Arc<CatalogSnapshot>) {
+        if let Some(entry) = self.lock().get_mut(&id)
+            && Arc::ptr_eq(&entry.snapshot, snapshot)
+        {
+            entry.checked_at = None;
+        }
     }
 }
 
@@ -90,13 +104,13 @@ pub async fn overview<A: DatabaseAdapter>(
     let (session, serial) = sessions.get_with_serial(id).ok_or_else(not_connected)?;
 
     if !refresh && let Some((snapshot, checked_at)) = cache.current(id, serial) {
-        if checked_at.elapsed() < RECHECK_AFTER {
+        if checked_at.is_some_and(|at| at.elapsed() < RECHECK_AFTER) {
             return Ok(snapshot);
         }
         let fingerprint = session.catalog_fingerprint().await?;
         if fingerprint == snapshot.overview.fingerprint {
             if let Some(entry) = cache.lock().get_mut(&id) {
-                entry.checked_at = Instant::now();
+                entry.checked_at = Some(Instant::now());
             }
             return Ok(snapshot);
         }
@@ -126,7 +140,7 @@ pub async fn overview<A: DatabaseAdapter>(
             session_serial: serial,
             snapshot: Arc::clone(&snapshot),
             details: HashMap::new(),
-            checked_at: Instant::now(),
+            checked_at: Some(Instant::now()),
         },
     );
     tracing::info!(connection = %id, objects = object_count, truncated = snapshot.overview.truncated, "schema details loaded");
@@ -158,7 +172,17 @@ pub async fn describe<A: DatabaseAdapter>(
     }
 
     let (session, _) = sessions.get_with_serial(id).ok_or_else(not_connected)?;
-    let details = Arc::new(session.describe_object(&object).await?);
+    let details = match session.describe_object(&object).await {
+        Ok(details) => Arc::new(details),
+        Err(error) => {
+            // A listed object that is gone means the schema changed: notice it on the next read
+            // instead of up to `RECHECK_AFTER` later.
+            if error.kind() == DbErrorKind::ObjectNotFound {
+                cache.recheck_soon(id, &snapshot);
+            }
+            return Err(error.into());
+        }
+    };
     if let Some(entry) = cache.lock().get_mut(&id)
         && Arc::ptr_eq(&entry.snapshot, &snapshot)
     {
@@ -233,7 +257,7 @@ mod tests {
 
     fn age(cache: &CatalogCache, id: ConnectionId) {
         if let Some(entry) = cache.lock().get_mut(&id) {
-            entry.checked_at -= RECHECK_AFTER;
+            entry.checked_at = None;
         }
     }
 
@@ -309,6 +333,27 @@ mod tests {
         assert_eq!(reloaded.overview.fingerprint, "v2");
         assert_eq!(adapter.catalog.overview_loads.load(Ordering::SeqCst), 2);
         assert_eq!(adapter.catalog.describe_loads.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn a_missing_object_rechecks_the_schema_on_the_next_read() {
+        let (_dir, store, adapter, sessions, id) = setup().await;
+        let cache = CatalogCache::default();
+        let dropped = ObjectName {
+            schema: "public".into(),
+            name: "dropped".into(),
+        };
+        describe(&store, &sessions, &cache, id, dropped)
+            .await
+            .expect_err("gone");
+
+        adapter.catalog.set_fingerprint("v2");
+        let reloaded = overview(&store, &sessions, &cache, id, false)
+            .await
+            .expect("reload");
+
+        assert_eq!(adapter.catalog.fingerprint_checks.load(Ordering::SeqCst), 1);
+        assert_eq!(reloaded.overview.fingerprint, "v2");
     }
 
     #[tokio::test]

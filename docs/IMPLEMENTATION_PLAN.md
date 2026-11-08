@@ -79,7 +79,7 @@ Status legend: `[x]` done · `[~]` in progress · `[ ]` not started
 - [x] **4.2 PostgreSQL adapter.** `DatabaseAdapter` trait with capabilities, SQLx Postgres pools,
       TLS options, connect/test/disconnect, connection and statement timeouts, cancellation, error
       mapping, and integration fixtures against a disposable PostgreSQL.
-- [ ] **4.3 Connections UI.** Connection form (React Hook Form + Zod), list, test, connect and
+- [x] **4.3 Connections UI.** Connection form (React Hook Form + Zod), list, test, connect and
       disconnect, the "Forget connection" flow, live connection and environment identity.
 
 ## Phase 5: Schema browser and data grid

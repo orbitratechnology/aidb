@@ -10,5 +10,8 @@ export type ActiveConnection = {
   name: string
   database: string
   environment: EnvironmentKind
+  /** The server rejects writes in this session. */
   readOnly: boolean
+  encrypted: boolean
+  serverVersion: string
 }

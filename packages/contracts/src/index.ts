@@ -36,6 +36,7 @@ export type { SslMode } from './generated/SslMode'
 export type { StorageSummary } from './generated/StorageSummary'
 export type { ThemePreference } from './generated/ThemePreference'
 export { SAFETY_DEFAULTS, SAFETY_LIMITS } from './generated/SafetyLimits'
+export { CONNECTION_LIMITS } from './generated/ConnectionLimits'
 
 export { AppInfoSchema } from './app'
 export { COMMANDS, type CommandName } from './commands'

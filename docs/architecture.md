@@ -44,7 +44,7 @@ apps/desktop/             React + Vite UI
   src/components/ui/      shadcn/ui components, managed by the shadcn CLI
   src/components/shared/  product components composed from shadcn
   src/lib/                native call wrappers, pure helpers
-  src/stores/             Zustand stores for cross-screen UI state
+  src/stores/             Zustand stores for client-only UI state (none yet)
 packages/contracts/       IPC contracts: ts-rs generated types + Zod schemas
 src-tauri/                Rust core (crate `aidb`, library `aidb_lib`)
   src/commands/           thin IPC adapters
@@ -205,9 +205,17 @@ Current commands: `app_info`, `diagnostics`, `open_external_url`, `get_settings`
 - **Shell**: sidebar at 1024px and wider, icon sidebar from 640px, bottom navigation below 640px.
   The top bar always shows the active connection, database, environment and access mode as text.
 - **Routing**: hash history with lazy-loaded feature routes, so editors and grids load on demand.
-- **State**: Zustand for cross-screen UI state (for example the active connection); TanStack
-  Query for data read from the core; React Hook Form with the contracts' Zod schemas for forms.
-  The core is authoritative for anything security-relevant.
+- **State**: TanStack Query for everything the core owns, including which connection is open:
+  the active connection is derived from `active_sessions`, so the UI cannot drift from the core,
+  even after a webview reload. Zustand is reserved for client-only UI state. React Hook Form
+  with Zod schemas for forms. The core is authoritative for anything security-relevant.
+- **Connections** (Settings › Connections): add or edit in a sheet (full width on phones) with
+  URI paste, test, TLS choices, the unencrypted-host consent and the read-only switch; connect,
+  disconnect and "Forget connection" per row. Connecting without a saved password, or with one
+  the server rejects, asks for it and saves it only after it works. One connection is open at a
+  time: connecting closes the others, and editing or forgetting a profile closes its session.
+  The top bar shows the open connection's name, database, environment and the access mode the
+  server enforces (read-only, or writes enabled at every width).
 - **Native data**: reads are queries that retry only errors the core marks retryable; writes are
   mutations that never retry. Settings saves run one at a time, so the last change wins.
 - **External links**: clicks on `http(s)` and `mailto` links go to `open_external_url`, which

@@ -110,6 +110,19 @@ impl<A: DatabaseAdapter> Sessions<A> {
         }
     }
 
+    /// Closes every session except `keep`. Returns how many were closed.
+    pub async fn close_others(&self, keep: ConnectionId) -> usize {
+        let others: Vec<_> = {
+            let mut open = self.lock();
+            let ids: Vec<_> = open.keys().copied().filter(|id| *id != keep).collect();
+            ids.into_iter().filter_map(|id| open.remove(&id)).collect()
+        };
+        for entry in &others {
+            entry.session.close().await;
+        }
+        others.len()
+    }
+
     /// Closes every session, for shutdown.
     pub async fn close_all(&self) {
         let entries: Vec<_> = self.lock().drain().map(|(_, entry)| entry).collect();
@@ -154,6 +167,9 @@ impl<A: DatabaseAdapter> Sessions<A> {
 
 /// Opens a session for a saved profile. Uses `password` if given, otherwise the saved one.
 ///
+/// The workspace works with one connection at a time, so a successful connect closes any other
+/// open session: plans and approvals made for one connection never carry over to another.
+///
 /// # Errors
 ///
 /// `not_found` for an unknown profile, the credential store's or database's error otherwise.
@@ -175,8 +191,10 @@ pub async fn connect<A: DatabaseAdapter>(
     };
     let target = target(store, profile.settings, password).await?;
     let active = sessions.open(id, target).await?;
+    let closed = sessions.close_others(id).await;
     tracing::info!(
         connection = %id,
+        closed_others = closed,
         server_version = %active.server.version,
         encrypted = active.server.encrypted,
         read_only = active.server.read_only,
@@ -377,6 +395,38 @@ mod tests {
         assert!(!sessions.close(id).await);
         assert!(session.closed.load(Ordering::SeqCst));
         assert!(sessions.list().is_empty());
+    }
+
+    #[tokio::test]
+    async fn connecting_one_profile_closes_the_others() {
+        let (_dir, store) = temp_store().await;
+        let credentials = Credentials::in_memory_as_os_store();
+        let (_, sessions) = sessions();
+        let mut ids = Vec::new();
+        for name in ["Orders", "Billing"] {
+            let profile = store
+                .connections()
+                .insert(
+                    &ConnectionDraft::new(name, "db.internal", "orders", "reader")
+                        .validated()
+                        .expect("valid"),
+                )
+                .await
+                .expect("insert");
+            ids.push(profile.id);
+        }
+
+        connect(&store, &credentials, &sessions, ids[0], None)
+            .await
+            .expect("first");
+        let first = sessions.get(ids[0]).expect("open");
+        connect(&store, &credentials, &sessions, ids[1], None)
+            .await
+            .expect("second");
+
+        assert!(first.closed.load(Ordering::SeqCst));
+        let open: Vec<_> = sessions.list().iter().map(|s| s.connection_id).collect();
+        assert_eq!(open, [ids[1]]);
     }
 
     #[tokio::test]

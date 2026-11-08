@@ -11,7 +11,7 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from '@/components/ui/empty'
-import { useConnectionStore } from '@/stores/connection-store'
+import { useActiveConnection } from '@/features/connections/sessions'
 
 type StateProps = {
   icon: LucideIcon
@@ -49,7 +49,7 @@ export function RequireConnection({
   children,
   ...empty
 }: Omit<StateProps, 'children'> & { children: ReactNode }) {
-  const active = useConnectionStore((state) => state.active)
+  const active = useActiveConnection()
 
   if (active) {
     return children

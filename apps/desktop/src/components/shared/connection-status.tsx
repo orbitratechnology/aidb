@@ -1,16 +1,16 @@
-import { DatabaseIcon, LockIcon, UnplugIcon } from 'lucide-react'
+import { DatabaseIcon, LockIcon, PencilIcon, UnplugIcon } from 'lucide-react'
 import { Link } from 'react-router'
 import { EnvironmentBadge } from '@/components/shared/environment-badge'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { ENVIRONMENT_DISPLAY } from '@/features/connections/environments'
-import { useConnectionStore } from '@/stores/connection-store'
+import { useActiveConnection } from '@/features/connections/sessions'
 
 const CONNECTIONS_PATH = '/settings/connections'
 
 /** Top-bar identity of the active connection: name, database, environment and access mode. */
 export function ConnectionStatus() {
-  const active = useConnectionStore((state) => state.active)
+  const active = useActiveConnection()
 
   if (!active) {
     return (
@@ -41,10 +41,16 @@ export function ConnectionStatus() {
           </span>
         </span>
         <EnvironmentBadge environment={active.environment} />
-        {active.readOnly && (
+        {active.readOnly ? (
           <Badge variant="outline" className="hidden sm:inline-flex">
             <LockIcon data-icon="inline-start" />
             Read-only
+          </Badge>
+        ) : (
+          // Writes matter more than their absence, so this shows at every width.
+          <Badge variant="secondary">
+            <PencilIcon data-icon="inline-start" />
+            <span className="sr-only sm:not-sr-only">Writes enabled</span>
           </Badge>
         )}
       </Link>

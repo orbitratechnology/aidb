@@ -6,6 +6,7 @@
 //! was sent a cancel is closed instead of returned to the pool, so a late signal can never hit
 //! the next operation.
 
+mod catalog;
 mod errors;
 mod options;
 
@@ -21,6 +22,7 @@ use sqlx::{Connection, Postgres};
 use self::errors::{Endpoint, Phase, classify, connect_timeout};
 pub use self::options::APPLICATION_NAME;
 use super::database::{ConnectTarget, DatabaseAdapter, DatabaseSession, DbError, DbErrorKind};
+use crate::domain::catalog::{CatalogOverview, ObjectDetails, ObjectName};
 use crate::domain::connections::Engine;
 use crate::domain::database::{Capabilities, OperationId, SUPPORTED_POSTGRES_VERSIONS, ServerInfo};
 
@@ -200,6 +202,24 @@ impl DatabaseSession for PgSession {
 
     async fn close(&self) {
         self.pool.close().await;
+    }
+
+    async fn catalog_fingerprint(&self) -> Result<String, DbError> {
+        catalog::fingerprint(&self.pool)
+            .await
+            .map_err(|e| self.session_error(e))
+    }
+
+    async fn catalog_overview(&self) -> Result<CatalogOverview, DbError> {
+        catalog::overview(&self.pool)
+            .await
+            .map_err(|e| self.session_error(e))
+    }
+
+    async fn describe_object(&self, object: &ObjectName) -> Result<ObjectDetails, DbError> {
+        catalog::describe(&self.pool, object)
+            .await
+            .map_err(|e| self.session_error(e))?
     }
 }
 

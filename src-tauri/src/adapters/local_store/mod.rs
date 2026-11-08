@@ -6,6 +6,7 @@
 
 mod connections;
 mod maintenance;
+mod schema_cache;
 mod settings;
 
 use std::path::{Path, PathBuf};
@@ -21,6 +22,7 @@ use crate::errors::{AppError, ErrorCode};
 
 pub use connections::ConnectionProfiles;
 pub use maintenance::{ClearTarget, Maintenance, StorageSummary};
+pub use schema_cache::{SchemaCache, SchemaCacheRecord};
 pub use settings::Settings;
 
 /// File name of the local database inside the app data directory.
@@ -138,6 +140,11 @@ impl LocalStore {
     #[must_use]
     pub fn connections(&self) -> ConnectionProfiles<'_> {
         ConnectionProfiles::new(&self.pool)
+    }
+
+    #[must_use]
+    pub fn schema_cache(&self) -> SchemaCache<'_> {
+        SchemaCache::new(&self.pool)
     }
 
     #[must_use]

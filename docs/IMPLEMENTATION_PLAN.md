@@ -84,7 +84,7 @@ Status legend: `[x]` done · `[~]` in progress · `[ ]` not started
 
 ## Phase 5: Schema browser and data grid
 
-- [ ] **5.1 Catalog introspection.** Schemas, tables, views, columns, types, nullability, primary,
+- [x] **5.1 Catalog introspection.** Schemas, tables, views, columns, types, nullability, primary,
       foreign and unique keys, indexes, row estimates. In-memory cache with invalidation.
 - [ ] **5.2 Schema browser UI.** Searchable object tree, table definition and relationship panels,
       sheet-based object picker on compact screens.

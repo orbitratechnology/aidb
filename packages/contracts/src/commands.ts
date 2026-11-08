@@ -24,6 +24,9 @@ export const COMMANDS = {
   connect: 'connect',
   disconnect: 'disconnect',
   activeSessions: 'active_sessions',
+  catalogOverview: 'catalog_overview',
+  refreshCatalog: 'refresh_catalog',
+  describeObject: 'describe_object',
 } as const
 
 export type CommandName = (typeof COMMANDS)[keyof typeof COMMANDS]

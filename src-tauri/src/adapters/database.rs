@@ -9,6 +9,7 @@ use std::time::Duration;
 use secrecy::SecretString;
 use thiserror::Error;
 
+use crate::domain::catalog::{CatalogOverview, ObjectDetails, ObjectName};
 use crate::domain::connections::ConnectionDraft;
 use crate::domain::database::{Capabilities, OperationId, ServerInfo, SessionLimits};
 use crate::errors::{AppError, ErrorCode};
@@ -45,6 +46,19 @@ pub trait DatabaseSession: std::fmt::Debug + Send + Sync + 'static {
 
     /// Closes every connection of the session.
     fn close(&self) -> impl Future<Output = ()> + Send;
+
+    /// A digest of the database's structure. It changes when schemas, tables, views, columns,
+    /// constraints, indexes, defaults or comments change, and not when statistics are refreshed.
+    fn catalog_fingerprint(&self) -> impl Future<Output = Result<String, DbError>> + Send;
+
+    /// Schemas and the tables and views in them, without their columns.
+    fn catalog_overview(&self) -> impl Future<Output = Result<CatalogOverview, DbError>> + Send;
+
+    /// Columns, keys, references and indexes of one table or view.
+    fn describe_object(
+        &self,
+        object: &ObjectName,
+    ) -> impl Future<Output = Result<ObjectDetails, DbError>> + Send;
 }
 
 /// What went wrong, independent of the driver.
@@ -61,6 +75,8 @@ pub enum DbErrorKind {
     /// The server's access rules refuse this client.
     Rejected,
     DatabaseNotFound,
+    /// A table or view that no longer exists, or never did.
+    ObjectNotFound,
     PermissionDenied,
     /// A write was attempted in a read-only session.
     ReadOnly,
@@ -143,7 +159,7 @@ impl From<DbError> for AppError {
             Kind::Authentication | Kind::Rejected | Kind::PermissionDenied | Kind::ReadOnly => {
                 (ErrorCode::PermissionDenied, false)
             }
-            Kind::DatabaseNotFound => (ErrorCode::NotFound, false),
+            Kind::DatabaseNotFound | Kind::ObjectNotFound => (ErrorCode::NotFound, false),
             Kind::Cancelled => (ErrorCode::Cancelled, false),
             Kind::Other => (ErrorCode::Internal, false),
         };

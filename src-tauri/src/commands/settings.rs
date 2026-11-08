@@ -43,6 +43,10 @@ pub async fn clear_local_data(
     target: ClearTarget,
 ) -> AppResult<ClearResult> {
     let removed = state.local_store()?.maintenance().clear(target).await?;
+    if target == ClearTarget::SchemaCache {
+        // The freshness records are gone; drop the details they described too.
+        state.catalog().clear();
+    }
     tracing::info!(?target, removed, "local data cleared by the user");
     Ok(ClearResult { removed })
 }

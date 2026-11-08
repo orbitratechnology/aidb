@@ -429,3 +429,277 @@ mod tls {
         assert_eq!(error.kind(), DbErrorKind::Tls);
     }
 }
+
+/// Catalog introspection, each test in its own scratch database so the whole-database
+/// fingerprint is not disturbed by other tests.
+mod catalog {
+    use aidb_lib::domain::catalog::{Identity, ObjectKind, ObjectName, ReferentialAction};
+
+    use super::*;
+
+    const SCHEMA_SQL: &str = r"
+        CREATE SCHEMA shop;
+        COMMENT ON SCHEMA shop IS 'Storefront';
+        CREATE TABLE shop.customers (
+            id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+            email text NOT NULL UNIQUE,
+            name varchar(80) DEFAULT 'anonymous'
+        );
+        COMMENT ON TABLE shop.customers IS 'People who order';
+        COMMENT ON COLUMN shop.customers.email IS 'Login address';
+        CREATE TABLE shop.orders (
+            id bigserial PRIMARY KEY,
+            customer_id bigint NOT NULL REFERENCES shop.customers (id) ON DELETE CASCADE,
+            qty integer NOT NULL,
+            price numeric(10, 2) NOT NULL,
+            subtotal numeric GENERATED ALWAYS AS (qty * price) STORED,
+            created_at timestamptz NOT NULL DEFAULT now()
+        );
+        CREATE INDEX orders_created_at_idx ON shop.orders (created_at DESC);
+        CREATE VIEW shop.recent_orders AS
+            SELECT id, customer_id FROM shop.orders WHERE created_at > now() - interval '1 day';
+        CREATE MATERIALIZED VIEW shop.order_totals AS
+            SELECT customer_id, sum(subtotal) AS total FROM shop.orders GROUP BY customer_id;
+        CREATE TABLE shop.events (at date NOT NULL, kind text) PARTITION BY RANGE (at);
+        CREATE TABLE shop.events_2026 PARTITION OF shop.events
+            FOR VALUES FROM ('2026-01-01') TO ('2027-01-01');
+        INSERT INTO shop.customers (email) VALUES ('a@example.com'), ('b@example.com');
+        ANALYZE shop.customers;
+    ";
+
+    /// Creates a database with the shop schema; returns a writable session on it.
+    async fn scratch() -> (String, PgSession) {
+        let fixture = fixture();
+        let admin = open(target(&fixture, false)).await;
+        let name = format!(
+            "aidb_catalog_{}",
+            OperationId::new().to_string().replace('-', "")
+        );
+        run(&admin, &format!("CREATE DATABASE {name}"))
+            .await
+            .expect("create database");
+        admin.close().await;
+        let mut scratch = target(&fixture, false);
+        scratch.settings.database = name.clone();
+        let session = open(scratch).await;
+        run(&session, SCHEMA_SQL).await.expect("schema");
+        (name, session)
+    }
+
+    async fn drop_scratch(name: &str, session: PgSession) {
+        session.close().await;
+        let admin = open(target(&fixture(), false)).await;
+        run(&admin, &format!("DROP DATABASE {name} WITH (FORCE)"))
+            .await
+            .expect("drop database");
+    }
+
+    fn object(name: &str) -> ObjectName {
+        ObjectName {
+            schema: "shop".into(),
+            name: name.into(),
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PostgreSQL: run scripts/postgres-fixture.sh start"]
+    async fn overview_lists_schemas_tables_and_views() {
+        let (name, session) = scratch().await;
+
+        let overview = session.catalog_overview().await.expect("overview");
+
+        assert_eq!(overview.database, name);
+        let shop = overview
+            .schemas
+            .iter()
+            .find(|s| s.name == "shop")
+            .expect("schema");
+        assert_eq!(shop.comment.as_deref(), Some("Storefront"));
+        let kinds: Vec<(&str, ObjectKind)> = overview
+            .objects
+            .iter()
+            .filter(|o| o.schema == "shop")
+            .map(|o| (o.name.as_str(), o.kind))
+            .collect();
+        assert_eq!(
+            kinds,
+            [
+                ("customers", ObjectKind::Table),
+                ("events", ObjectKind::PartitionedTable),
+                ("order_totals", ObjectKind::MaterializedView),
+                ("orders", ObjectKind::Table),
+                ("recent_orders", ObjectKind::View),
+            ],
+            "partitions are listed under their parent only"
+        );
+        let customers = overview
+            .objects
+            .iter()
+            .find(|o| o.name == "customers")
+            .expect("listed");
+        assert_eq!(customers.row_estimate, Some(2));
+        assert_eq!(customers.comment.as_deref(), Some("People who order"));
+        assert!(customers.readable);
+        assert!(!overview.truncated);
+        drop_scratch(&name, session).await;
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PostgreSQL: run scripts/postgres-fixture.sh start"]
+    async fn tables_describe_columns_keys_references_and_indexes() {
+        let (name, session) = scratch().await;
+
+        let customers = session
+            .describe_object(&object("customers"))
+            .await
+            .expect("customers");
+        let orders = session
+            .describe_object(&object("orders"))
+            .await
+            .expect("orders");
+
+        let id = &customers.columns[0];
+        assert_eq!((id.name.as_str(), id.data_type.as_str()), ("id", "bigint"));
+        assert_eq!(id.identity, Some(Identity::Always));
+        assert!(!id.nullable);
+        let customer_name = &customers.columns[2];
+        assert_eq!(customer_name.data_type, "character varying(80)");
+        assert_eq!(
+            customer_name.default.as_deref(),
+            Some("'anonymous'::character varying")
+        );
+        assert_eq!(
+            customers.columns[1].comment.as_deref(),
+            Some("Login address")
+        );
+        assert_eq!(
+            customers.primary_key.as_ref().map(|k| k.columns.clone()),
+            Some(vec!["id".to_owned()])
+        );
+        assert_eq!(customers.unique_constraints[0].columns, ["email"]);
+        let incoming = &customers.referenced_by[0];
+        assert_eq!(
+            (incoming.from.name.as_str(), incoming.columns.as_slice()),
+            ("orders", &["customer_id".to_owned()][..])
+        );
+
+        let fk = &orders.foreign_keys[0];
+        assert_eq!(fk.to, object("customers"));
+        assert_eq!(fk.referenced_columns, ["id"]);
+        assert_eq!(fk.on_delete, ReferentialAction::Cascade);
+        assert_eq!(fk.on_update, ReferentialAction::NoAction);
+        let subtotal = orders
+            .columns
+            .iter()
+            .find(|c| c.name == "subtotal")
+            .expect("column");
+        assert_eq!(
+            subtotal.generated.as_deref(),
+            Some("((qty)::numeric * price)")
+        );
+        assert_eq!(subtotal.default, None);
+        let index = orders
+            .indexes
+            .iter()
+            .find(|i| i.name == "orders_created_at_idx")
+            .expect("index");
+        assert!(index.definition.contains("(created_at DESC)"));
+        assert_eq!(index.method, "btree");
+        assert!(orders.indexes.iter().any(|i| i.primary));
+        assert_eq!(orders.definition, None);
+        drop_scratch(&name, session).await;
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PostgreSQL: run scripts/postgres-fixture.sh start"]
+    async fn views_include_their_query_and_missing_objects_are_reported() {
+        let (name, session) = scratch().await;
+
+        let view = session
+            .describe_object(&object("recent_orders"))
+            .await
+            .expect("view");
+        let missing = session
+            .describe_object(&object("ghost"))
+            .await
+            .expect_err("missing");
+
+        assert_eq!(view.summary.kind, ObjectKind::View);
+        assert!(
+            view.definition
+                .as_deref()
+                .is_some_and(|d| d.contains("FROM shop.orders"))
+        );
+        assert_eq!(view.columns.len(), 2);
+        assert_eq!(missing.kind(), DbErrorKind::ObjectNotFound);
+        drop_scratch(&name, session).await;
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PostgreSQL: run scripts/postgres-fixture.sh start"]
+    async fn the_fingerprint_follows_structure_not_statistics() {
+        let (name, session) = scratch().await;
+        let before = session.catalog_fingerprint().await.expect("fingerprint");
+
+        run(
+            &session,
+            "INSERT INTO shop.customers (email) VALUES ('c@example.com'); ANALYZE",
+        )
+        .await
+        .expect("data and statistics");
+        // VACUUM cannot share a batch: a multi-statement batch is one implicit transaction.
+        run(&session, "VACUUM shop.customers")
+            .await
+            .expect("vacuum");
+        let after_stats = session.catalog_fingerprint().await.expect("fingerprint");
+        run(&session, "ALTER TABLE shop.customers ADD COLUMN phone text")
+            .await
+            .expect("ddl");
+        let after_column = session.catalog_fingerprint().await.expect("fingerprint");
+        run(
+            &session,
+            "COMMENT ON COLUMN shop.customers.phone IS 'Mobile'",
+        )
+        .await
+        .expect("comment");
+        let after_comment = session.catalog_fingerprint().await.expect("fingerprint");
+        run(
+            &session,
+            "CREATE OR REPLACE VIEW shop.recent_orders AS SELECT id, customer_id FROM shop.orders",
+        )
+        .await
+        .expect("view");
+        let after_view = session.catalog_fingerprint().await.expect("fingerprint");
+
+        assert_eq!(
+            before, after_stats,
+            "statistics and data do not change the structure"
+        );
+        assert_ne!(after_stats, after_column);
+        assert_ne!(after_column, after_comment);
+        assert_ne!(after_comment, after_view);
+        let overview = session.catalog_overview().await.expect("overview");
+        assert_eq!(overview.fingerprint, after_view);
+        drop_scratch(&name, session).await;
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PostgreSQL: run scripts/postgres-fixture.sh start"]
+    async fn read_only_sessions_can_read_the_catalog() {
+        let (name, writable) = scratch().await;
+        let mut read_only = target(&fixture(), true);
+        read_only.settings.database = name.clone();
+        let session = open(read_only).await;
+
+        let overview = session.catalog_overview().await.expect("overview");
+        let details = session
+            .describe_object(&object("orders"))
+            .await
+            .expect("details");
+
+        assert!(overview.objects.iter().any(|o| o.name == "orders"));
+        assert!(!details.columns.is_empty());
+        session.close().await;
+        drop_scratch(&name, writable).await;
+    }
+}

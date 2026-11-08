@@ -11,6 +11,7 @@
 //! missing from a capability is rejected by Tauri before it runs.
 
 mod app;
+mod catalog;
 mod connections;
 mod diagnostics;
 mod external;
@@ -43,7 +44,10 @@ pub(crate) fn handler<R: Runtime>() -> impl Fn(Invoke<R>) -> bool + Send + Sync 
         sessions::test_connection,
         sessions::connect,
         sessions::disconnect,
-        sessions::active_sessions
+        sessions::active_sessions,
+        catalog::catalog_overview,
+        catalog::refresh_catalog,
+        catalog::describe_object
     ]
 }
 
@@ -229,6 +233,27 @@ mod tests {
         )
         .expect("connect");
         let open = invoke(&main, "active_sessions", json!({})).expect("active_sessions");
+        let catalog = invoke(
+            &main,
+            "catalog_overview",
+            json!({ "connectionId": saved.id.to_string() }),
+        )
+        .expect("catalog_overview");
+        let refreshed = invoke(
+            &main,
+            "refresh_catalog",
+            json!({ "connectionId": saved.id.to_string() }),
+        )
+        .expect("refresh_catalog");
+        let missing = invoke(
+            &main,
+            "describe_object",
+            json!({
+                "connectionId": saved.id.to_string(),
+                "object": { "schema": "public", "name": "aidb_no_such_table" },
+            }),
+        )
+        .expect_err("no such table");
         let closed =
             invoke(&main, "disconnect", json!({ "id": saved.id.to_string() })).expect("disconnect");
         let after = invoke(&main, "active_sessions", json!({})).expect("active_sessions");
@@ -239,6 +264,14 @@ mod tests {
         assert_eq!(session["connectionId"], saved.id.to_string());
         assert_eq!(session["capabilities"]["cancelStatements"], true);
         assert_eq!(open.as_array().map(Vec::len), Some(1));
+        assert_eq!(catalog["database"], "postgres");
+        assert!(
+            catalog["fingerprint"]
+                .as_str()
+                .is_some_and(|f| f.len() == 32)
+        );
+        assert_eq!(refreshed["fingerprint"], catalog["fingerprint"]);
+        assert_eq!(missing["code"], "not_found");
         assert_eq!(closed, true);
         assert_eq!(after.as_array().map(Vec::len), Some(0));
     }

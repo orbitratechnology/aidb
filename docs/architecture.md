@@ -131,7 +131,7 @@ Current commands: `app_info`, `diagnostics`, `open_external_url`, `get_settings`
 `create_connection`, `update_connection`, `delete_connection`, `save_connection_password`,
 `forget_connection_password`, `parse_connection_uri`, `export_connections`,
 `preview_connection_import`, `import_connections`, `test_connection`, `connect`, `disconnect`,
-`active_sessions`.
+`active_sessions`, `catalog_overview`, `refresh_catalog`, `describe_object`.
 
 ## Connection profiles
 
@@ -199,6 +199,25 @@ Current commands: `app_info`, `diagnostics`, `open_external_url`, `get_settings`
 - **Registry** (`services::sessions`): at most one session per profile. `connect` uses the saved
   password unless one is given for this session; `test_connection` checks unsaved settings
   (including TLS consent), makes one round trip and keeps nothing open. All sessions close at exit.
+
+## Schema catalog
+
+- **What is read**: schemas, tables, partitioned tables, views, materialized views and foreign
+  tables (partitions are listed under their parent), with comments, the planner's row estimate
+  and whether the session's role may read each object. Per object on request: columns (type as
+  PostgreSQL prints it, nullability, default, identity, generated expression, comment), primary
+  key, unique constraints, outgoing and incoming foreign keys with their actions, indexes and a
+  view's query. Never row data. Queries read `pg_catalog` only, with names bound as parameters.
+- **Limits**: 20,000 objects per overview (`truncated` says when more exist); view queries cut
+  at 100 KB.
+- **Fingerprint**: an MD5 digest of structure only (names, types, nullability, constraint and
+  default definitions, view queries, indexes, comments). It uses no row versions, so `ANALYZE`,
+  `VACUUM` and data changes leave it alone. Approvals will bind to it (phase 9).
+- **Cache** (`services::catalog`): in memory, per connection and per session (a reconnect starts
+  empty). A cached overview older than 15 s is revalidated with the fingerprint and reloaded,
+  with its object details dropped, when the structure changed. `refresh_catalog` forces a
+  reload. Only the fingerprint, object count and time are written to `schema_cache_metadata`;
+  Settings › Storage › Clear cache removes those rows and the memory cache.
 
 ## Frontend
 

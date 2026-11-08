@@ -1,8 +1,11 @@
 //! Use cases that coordinate domain rules with adapters. Commands call these; they never reach
 //! adapters directly.
 
+pub mod catalog;
 pub mod connection_secrets;
 pub mod connections;
+#[cfg(test)]
+pub(crate) mod fakes;
 pub mod sessions;
 pub mod settings;
 

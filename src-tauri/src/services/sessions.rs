@@ -5,6 +5,7 @@
 //! it, so a new read-only setting can never be bypassed by an older session.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use secrecy::SecretString;
@@ -44,12 +45,15 @@ pub struct ConnectionTestReport {
 struct Entry<S> {
     session: Arc<S>,
     active: ActiveSession,
+    /// Distinguishes this session from earlier ones for the same profile.
+    serial: u64,
 }
 
 /// The sessions currently open, keyed by profile.
 pub struct Sessions<A: DatabaseAdapter> {
     adapter: A,
     open: Mutex<HashMap<ConnectionId, Entry<A::Session>>>,
+    next_serial: AtomicU64,
 }
 
 impl<A: DatabaseAdapter> std::fmt::Debug for Sessions<A> {
@@ -65,6 +69,7 @@ impl<A: DatabaseAdapter> Sessions<A> {
         Self {
             adapter,
             open: Mutex::default(),
+            next_serial: AtomicU64::new(1),
         }
     }
 
@@ -90,6 +95,7 @@ impl<A: DatabaseAdapter> Sessions<A> {
             Entry {
                 session: Arc::new(session),
                 active: active.clone(),
+                serial: self.next_serial.fetch_add(1, Ordering::Relaxed),
             },
         );
         if let Some(old) = replaced {
@@ -134,6 +140,20 @@ impl<A: DatabaseAdapter> Sessions<A> {
     #[must_use]
     pub fn get(&self, id: ConnectionId) -> Option<Arc<A::Session>> {
         self.lock().get(&id).map(|entry| Arc::clone(&entry.session))
+    }
+
+    /// The open session for a profile and its serial, which changes on every reconnect.
+    #[must_use]
+    pub fn get_with_serial(&self, id: ConnectionId) -> Option<(Arc<A::Session>, u64)> {
+        self.lock()
+            .get(&id)
+            .map(|entry| (Arc::clone(&entry.session), entry.serial))
+    }
+
+    /// Profiles with an open session.
+    #[must_use]
+    pub fn open_ids(&self) -> Vec<ConnectionId> {
+        self.lock().keys().copied().collect()
     }
 
     /// Open sessions, oldest first.
@@ -251,7 +271,7 @@ fn now() -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::atomic::Ordering;
     use std::time::Duration;
 
     use secrecy::ExposeSecret;
@@ -259,96 +279,10 @@ mod tests {
     use super::*;
     use crate::adapters::database::DbErrorKind;
     use crate::adapters::local_store::test_support::temp_store;
-    use crate::domain::connections::{Engine, SslMode};
-    use crate::domain::database::OperationId;
+    use crate::domain::connections::SslMode;
     use crate::domain::settings::{SafetySettings, SettingsPatch};
     use crate::errors::ErrorCode;
-
-    /// Records what it was asked to connect with; fails for the host `unreachable`.
-    #[derive(Default)]
-    struct FakeAdapter {
-        connects: AtomicUsize,
-        last_target: Mutex<Option<ConnectTarget>>,
-    }
-
-    #[derive(Debug)]
-    struct FakeSession {
-        info: ServerInfo,
-        closed: Arc<AtomicBool>,
-    }
-
-    impl DatabaseAdapter for Arc<FakeAdapter> {
-        type Session = FakeSession;
-
-        fn capabilities(&self) -> Capabilities {
-            Capabilities {
-                engine: Engine::Postgres,
-                cancel_statements: false,
-                statement_timeout: true,
-                lock_timeout: true,
-                read_only_sessions: true,
-                transactional_ddl: true,
-                tls: true,
-            }
-        }
-
-        async fn connect(&self, target: ConnectTarget) -> Result<FakeSession, DbError> {
-            self.connects.fetch_add(1, Ordering::SeqCst);
-            let unreachable = target.settings.host == "unreachable";
-            let read_only = target.limits.read_only;
-            *self.last_target.lock().expect("lock") = Some(target);
-            if unreachable {
-                return Err(DbError::new(DbErrorKind::Unreachable, "Nothing there."));
-            }
-            Ok(FakeSession {
-                info: ServerInfo {
-                    engine: Engine::Postgres,
-                    version: "17.2".into(),
-                    version_number: 170_002,
-                    supported_version: true,
-                    user: "reader".into(),
-                    database: "orders".into(),
-                    encrypted: true,
-                    tls_version: Some("TLSv1.3".into()),
-                    read_only,
-                    in_recovery: false,
-                },
-                closed: Arc::default(),
-            })
-        }
-    }
-
-    impl DatabaseSession for FakeSession {
-        fn server_info(&self) -> &ServerInfo {
-            &self.info
-        }
-
-        async fn ping(&self) -> Result<Duration, DbError> {
-            Ok(Duration::from_millis(3))
-        }
-
-        async fn cancel(&self, _operation: OperationId) -> Result<bool, DbError> {
-            Ok(false)
-        }
-
-        async fn close(&self) {
-            self.closed.store(true, Ordering::SeqCst);
-        }
-    }
-
-    fn sessions() -> (Arc<FakeAdapter>, Sessions<Arc<FakeAdapter>>) {
-        let adapter = Arc::new(FakeAdapter::default());
-        (Arc::clone(&adapter), Sessions::new(adapter))
-    }
-
-    fn target(host: &str) -> ConnectTarget {
-        let settings = ConnectionDraft::new("Orders", host, "orders", "reader");
-        ConnectTarget {
-            limits: SessionLimits::new(&settings, &SafetySettings::default()),
-            settings,
-            password: None,
-        }
-    }
+    use crate::services::fakes::{sessions, target};
 
     #[tokio::test]
     async fn reconnecting_replaces_and_closes_the_old_session() {

@@ -25,6 +25,9 @@
     "allow-test-connection",
     "allow-connect",
     "allow-disconnect",
-    "allow-active-sessions"
+    "allow-active-sessions",
+    "allow-catalog-overview",
+    "allow-refresh-catalog",
+    "allow-describe-object"
   ]
 }

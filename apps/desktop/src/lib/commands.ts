@@ -2,6 +2,7 @@ import {
   ActiveSessionSchema,
   AppInfoSchema,
   AppSettingsSchema,
+  CatalogSnapshotSchema,
   ClearResultSchema,
   COMMANDS,
   ConnectionDetailsSchema,
@@ -9,6 +10,7 @@ import {
   CredentialBackendSchema,
   DiagnosticsInfoSchema,
   ExportOutcomeSchema,
+  ObjectDetailsSchema,
   ImportOutcomeSchema,
   ImportPreviewSchema,
   ParsedConnectionUriSchema,
@@ -16,6 +18,7 @@ import {
   type ActiveSession,
   type AppInfo,
   type AppSettings,
+  type CatalogSnapshot,
   type ClearResult,
   type ClearTarget,
   type ConnectionDetails,
@@ -27,6 +30,8 @@ import {
   type ExportOutcome,
   type ImportOutcome,
   type ImportPreview,
+  type ObjectDetails,
+  type ObjectName,
   type ParsedConnectionUri,
   type SettingsPatch,
   type StorageSummary,
@@ -167,6 +172,24 @@ export function disconnect(id: ConnectionId): Promise<boolean> {
 
 export function activeSessions(): Promise<ActiveSession[]> {
   return callCommand(COMMANDS.activeSessions, z.array(ActiveSessionSchema))
+}
+
+/** Schemas, tables and views of an open connection; cached by the core until the schema changes. */
+export function catalogOverview(connectionId: ConnectionId): Promise<CatalogSnapshot> {
+  return callCommand(COMMANDS.catalogOverview, CatalogSnapshotSchema, { connectionId })
+}
+
+/** Reloads an open connection's schema details from the database. */
+export function refreshCatalog(connectionId: ConnectionId): Promise<CatalogSnapshot> {
+  return callCommand(COMMANDS.refreshCatalog, CatalogSnapshotSchema, { connectionId })
+}
+
+/** Columns, keys, references and indexes of one table or view. */
+export function describeObject(
+  connectionId: ConnectionId,
+  object: ObjectName,
+): Promise<ObjectDetails> {
+  return callCommand(COMMANDS.describeObject, ObjectDetailsSchema, { connectionId, object })
 }
 
 const EXTERNAL_URL = z.url({ protocol: /^(https?|mailto)$/ })

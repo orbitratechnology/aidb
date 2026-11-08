@@ -22,6 +22,9 @@ const COMMANDS: &[&str] = &[
     "connect",
     "disconnect",
     "active_sessions",
+    "catalog_overview",
+    "refresh_catalog",
+    "describe_object",
 ];
 
 fn main() {

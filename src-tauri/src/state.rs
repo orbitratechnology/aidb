@@ -9,6 +9,7 @@ use crate::adapters::credentials::Credentials;
 use crate::adapters::local_store::LocalStore;
 use crate::adapters::postgres::PostgresAdapter;
 use crate::errors::{AppError, AppResult, ErrorCode};
+use crate::services::catalog::CatalogCache;
 use crate::services::sessions::Sessions;
 
 /// Directories the app owns on this device.
@@ -78,6 +79,7 @@ pub struct AppState {
     local_store: LocalStoreState,
     credentials: Credentials,
     sessions: Sessions<PostgresAdapter>,
+    catalog: CatalogCache,
 }
 
 impl AppState {
@@ -88,7 +90,14 @@ impl AppState {
             local_store,
             credentials,
             sessions: Sessions::new(PostgresAdapter),
+            catalog: CatalogCache::default(),
         }
+    }
+
+    /// Schema details of open connections, cached in memory.
+    #[must_use]
+    pub fn catalog(&self) -> &CatalogCache {
+        &self.catalog
     }
 
     /// Open database sessions.

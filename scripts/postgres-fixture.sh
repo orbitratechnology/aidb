@@ -77,7 +77,8 @@ start_local() {
   fi
   printf '%s\n' "$PASSWORD" >"$data/pwfile"
   "${run[@]}" "$bin/initdb" -D "$data/db" -U postgres --pwfile="$data/pwfile" \
-    --auth=scram-sha-256 >/dev/null
+    --auth=scram-sha-256 \
+    --encoding=UTF8 --locale=C >/dev/null
   "${run[@]}" "$bin/pg_ctl" -D "$data/db" -l "$data/log" -w start -o \
     "-p $PORT -c listen_addresses=localhost -c unix_socket_directories=$data -c ssl=on -c ssl_cert_file=$data/server.crt -c ssl_key_file=$data/server.key" \
     >/dev/null

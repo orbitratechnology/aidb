@@ -19,7 +19,7 @@ use crate::adapters::database::{ConnectTarget, DatabaseAdapter, DatabaseSession,
 use crate::adapters::local_store::LocalStore;
 use crate::domain::connections::{ConnectionDraft, ConnectionId};
 use crate::domain::database::{Capabilities, ServerInfo, SessionLimits};
-use crate::errors::{AppError, AppResult};
+use crate::errors::{AppError, AppResult, ErrorCode};
 
 /// An open session as the UI sees it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -269,6 +269,16 @@ fn now() -> String {
         .unwrap_or_default()
 }
 
+/// The error for an operation on a connection that is not open.
+#[must_use]
+pub fn not_connected() -> AppError {
+    AppError::new(
+        ErrorCode::Unavailable,
+        "This connection is not open. Connect to it first.",
+    )
+    .with_retryable(false)
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::Ordering;
@@ -281,7 +291,6 @@ mod tests {
     use crate::adapters::local_store::test_support::temp_store;
     use crate::domain::connections::SslMode;
     use crate::domain::settings::{SafetySettings, SettingsPatch};
-    use crate::errors::ErrorCode;
     use crate::services::fakes::{sessions, target};
 
     #[tokio::test]

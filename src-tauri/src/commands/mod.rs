@@ -17,6 +17,7 @@ mod diagnostics;
 mod external;
 mod sessions;
 mod settings;
+mod table_data;
 
 use tauri::Runtime;
 use tauri::ipc::Invoke;
@@ -47,7 +48,9 @@ pub(crate) fn handler<R: Runtime>() -> impl Fn(Invoke<R>) -> bool + Send + Sync 
         sessions::active_sessions,
         catalog::catalog_overview,
         catalog::refresh_catalog,
-        catalog::describe_object
+        catalog::describe_object,
+        table_data::read_table_page,
+        table_data::cancel_operation
     ]
 }
 
@@ -254,6 +257,40 @@ mod tests {
             }),
         )
         .expect_err("no such table");
+        let page = invoke(
+            &main,
+            "read_table_page",
+            json!({
+                "connectionId": saved.id.to_string(),
+                "request": {
+                    "object": { "schema": "pg_catalog", "name": "pg_am" },
+                    "filters": [{ "column": "amname", "operator": "equals", "value": "btree" }],
+                    "limit": 5,
+                },
+            }),
+        )
+        .expect("read_table_page");
+        let bad_column = invoke(
+            &main,
+            "read_table_page",
+            json!({
+                "connectionId": saved.id.to_string(),
+                "request": {
+                    "object": { "schema": "pg_catalog", "name": "pg_am" },
+                    "sort": [{ "column": "amname; DROP TABLE x", "direction": "asc" }],
+                },
+            }),
+        )
+        .expect_err("unknown column");
+        let cancelled = invoke(
+            &main,
+            "cancel_operation",
+            json!({
+                "connectionId": saved.id.to_string(),
+                "operationId": "6f1c2a40-0000-4000-8000-000000000000",
+            }),
+        )
+        .expect("cancel_operation");
         let closed =
             invoke(&main, "disconnect", json!({ "id": saved.id.to_string() })).expect("disconnect");
         let after = invoke(&main, "active_sessions", json!({})).expect("active_sessions");
@@ -272,6 +309,10 @@ mod tests {
         );
         assert_eq!(refreshed["fingerprint"], catalog["fingerprint"]);
         assert_eq!(missing["code"], "not_found");
+        assert_eq!(page["rows"].as_array().map(Vec::len), Some(1));
+        assert_eq!(page["hasMore"], false);
+        assert_eq!(bad_column["code"], "invalid_input");
+        assert_eq!(cancelled, false);
         assert_eq!(closed, true);
         assert_eq!(after.as_array().map(Vec::len), Some(0));
     }

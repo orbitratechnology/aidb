@@ -51,8 +51,11 @@ pub(super) const fn ssl_mode(mode: SslMode) -> PgSslMode {
 }
 
 /// Server settings applied when each connection starts. The server, not aidb, enforces them.
-pub(super) fn session_settings(limits: &SessionLimits) -> [(&'static str, String); 4] {
+pub(super) fn session_settings(limits: &SessionLimits) -> [(&'static str, String); 5] {
     [
+        // ISO 8601 dates and times (with the offset for `timestamptz`), whatever the server's
+        // default style, so values read as text are unambiguous.
+        ("DateStyle", "ISO".to_owned()),
         ("statement_timeout", milliseconds(limits.statement_timeout)),
         ("lock_timeout", milliseconds(limits.lock_timeout)),
         (
@@ -109,7 +112,7 @@ mod tests {
         let options = build(&target(None));
         let sent = options.get_options().expect("options are set");
 
-        let ours = "-c statement_timeout=30000ms -c lock_timeout=5000ms \
+        let ours = "-c DateStyle=ISO -c statement_timeout=30000ms -c lock_timeout=5000ms \
                     -c idle_in_transaction_session_timeout=300000ms \
                     -c default_transaction_read_only=on";
         assert!(sent.ends_with(ours), "{sent}");
@@ -123,7 +126,7 @@ mod tests {
         let settings = session_settings(&writable.limits);
 
         assert_eq!(
-            settings[3],
+            settings[4],
             ("default_transaction_read_only", "off".to_owned())
         );
     }

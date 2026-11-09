@@ -12,6 +12,7 @@ use thiserror::Error;
 use crate::domain::catalog::{CatalogOverview, ObjectDetails, ObjectName};
 use crate::domain::connections::ConnectionDraft;
 use crate::domain::database::{Capabilities, OperationId, ServerInfo, SessionLimits};
+use crate::domain::table_data::{PageLimits, PageRequest, TablePage};
 use crate::errors::{AppError, ErrorCode};
 
 /// Everything needed to open a session. The password stays wrapped until the driver needs it.
@@ -59,6 +60,15 @@ pub trait DatabaseSession: std::fmt::Debug + Send + Sync + 'static {
         &self,
         object: &ObjectName,
     ) -> impl Future<Output = Result<ObjectDetails, DbError>> + Send;
+
+    /// One page of a table or view, read in a read-only transaction. Column names in the
+    /// request are matched against the live table; values are bound, never formatted into SQL.
+    /// The read runs as `request.operation_id` when given, so it can be cancelled.
+    fn read_page(
+        &self,
+        request: &PageRequest,
+        limits: PageLimits,
+    ) -> impl Future<Output = Result<TablePage, DbError>> + Send;
 }
 
 /// What went wrong, independent of the driver.
@@ -77,6 +87,9 @@ pub enum DbErrorKind {
     DatabaseNotFound,
     /// A table or view that no longer exists, or never did.
     ObjectNotFound,
+    /// The request does not fit the data: an unknown column, a value the column's type cannot
+    /// hold, or a comparison the type does not support.
+    InvalidRequest,
     PermissionDenied,
     /// A write was attempted in a read-only session.
     ReadOnly,
@@ -160,6 +173,7 @@ impl From<DbError> for AppError {
                 (ErrorCode::PermissionDenied, false)
             }
             Kind::DatabaseNotFound | Kind::ObjectNotFound => (ErrorCode::NotFound, false),
+            Kind::InvalidRequest => (ErrorCode::InvalidInput, false),
             Kind::Cancelled => (ErrorCode::Cancelled, false),
             Kind::Other => (ErrorCode::Internal, false),
         };
@@ -188,6 +202,7 @@ mod tests {
             (DbErrorKind::ReadOnly, ErrorCode::PermissionDenied, false),
             (DbErrorKind::DatabaseNotFound, ErrorCode::NotFound, false),
             (DbErrorKind::Cancelled, ErrorCode::Cancelled, false),
+            (DbErrorKind::InvalidRequest, ErrorCode::InvalidInput, false),
             (DbErrorKind::StatementTimeout, ErrorCode::Timeout, false),
             (DbErrorKind::ConnectionLost, ErrorCode::Unavailable, true),
         ];

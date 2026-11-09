@@ -13,12 +13,12 @@ use serde::Serialize;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
-use super::sessions::Sessions;
+use super::sessions::{Sessions, not_connected};
 use crate::adapters::database::{DatabaseAdapter, DatabaseSession, DbErrorKind};
 use crate::adapters::local_store::{LocalStore, StoreError};
 use crate::domain::catalog::{CatalogOverview, ObjectDetails, ObjectName};
 use crate::domain::connections::ConnectionId;
-use crate::errors::{AppError, AppResult, ErrorCode};
+use crate::errors::{AppError, AppResult};
 
 /// How long a cached catalog is served before its fingerprint is checked again.
 pub const RECHECK_AFTER: Duration = Duration::from_secs(15);
@@ -209,14 +209,6 @@ fn prune<A: DatabaseAdapter>(sessions: &Sessions<A>, cache: &CatalogCache) {
     cache.lock().retain(|id, _| open.contains(id));
 }
 
-fn not_connected() -> AppError {
-    AppError::new(
-        ErrorCode::Unavailable,
-        "This connection is not open. Connect to it first.",
-    )
-    .with_retryable(false)
-}
-
 fn now() -> String {
     OffsetDateTime::now_utc()
         .format(&Rfc3339)
@@ -230,6 +222,7 @@ mod tests {
     use super::*;
     use crate::adapters::local_store::test_support::temp_store;
     use crate::domain::connections::ConnectionDraft;
+    use crate::errors::ErrorCode;
     use crate::services::fakes::{sessions, target};
 
     async fn setup() -> (

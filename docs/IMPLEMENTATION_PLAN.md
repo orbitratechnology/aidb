@@ -88,7 +88,7 @@ Status legend: `[x]` done · `[~]` in progress · `[ ]` not started
       foreign and unique keys, indexes, row estimates. In-memory cache with invalidation.
 - [x] **5.2 Schema browser UI.** Searchable object tree, table definition and relationship panels,
       sheet-based object picker on compact screens.
-- [ ] **5.3 Table paging.** Validated identifiers, parameterized filters, sorting, bounded pages,
+- [x] **5.3 Table paging.** Validated identifiers, parameterized filters, sorting, bounded pages,
       safe type mapping (NULL, JSON/JSONB, arrays, UUID, numeric, timestamps, long text).
 - [ ] **5.4 Data grid UI.** TanStack Table + Virtual grid with sticky headers, column
       visibility/resize, a cell and row detail panel, and a compact record list layout.

@@ -8,6 +8,7 @@ pub mod connections;
 pub(crate) mod fakes;
 pub mod sessions;
 pub mod settings;
+pub mod table_data;
 
 use crate::errors::{AppError, AppResult};
 

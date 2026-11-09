@@ -96,6 +96,42 @@ async fn run(session: &PgSession, sql: &str) -> Result<(), DbError> {
         .map_err(|error| session.session_error(error))
 }
 
+/// Creates a UTF8 database named `<prefix>_<random>`, runs `schema` in it and returns a writable
+/// session on it. Tests that read whole-database state get a database of their own.
+async fn scratch_database(prefix: &str, schema: &str) -> (String, PgSession) {
+    scratch_database_with(prefix, "ENCODING 'UTF8'", schema).await
+}
+
+/// [`scratch_database`] with other `CREATE DATABASE` options, such as an encoding.
+async fn scratch_database_with(prefix: &str, options: &str, schema: &str) -> (String, PgSession) {
+    let fixture = fixture();
+    let admin = open(target(&fixture, false)).await;
+    let name = format!(
+        "{prefix}_{}",
+        OperationId::new().to_string().replace('-', "")
+    );
+    run(
+        &admin,
+        &format!("CREATE DATABASE {name} TEMPLATE template0 {options}"),
+    )
+    .await
+    .expect("create database");
+    admin.close().await;
+    let mut scratch = target(&fixture, false);
+    scratch.settings.database = name.clone();
+    let session = open(scratch).await;
+    run(&session, schema).await.expect("schema");
+    (name, session)
+}
+
+async fn drop_scratch(name: &str, session: PgSession) {
+    session.close().await;
+    let admin = open(target(&fixture(), false)).await;
+    run(&admin, &format!("DROP DATABASE {name} WITH (FORCE)"))
+        .await
+        .expect("drop database");
+}
+
 /// Checks every adapter must pass, whatever its engine.
 mod contract {
     use super::*;
@@ -469,29 +505,7 @@ mod catalog {
 
     /// Creates a database with the shop schema; returns a writable session on it.
     async fn scratch() -> (String, PgSession) {
-        let fixture = fixture();
-        let admin = open(target(&fixture, false)).await;
-        let name = format!(
-            "aidb_catalog_{}",
-            OperationId::new().to_string().replace('-', "")
-        );
-        run(&admin, &format!("CREATE DATABASE {name}"))
-            .await
-            .expect("create database");
-        admin.close().await;
-        let mut scratch = target(&fixture, false);
-        scratch.settings.database = name.clone();
-        let session = open(scratch).await;
-        run(&session, SCHEMA_SQL).await.expect("schema");
-        (name, session)
-    }
-
-    async fn drop_scratch(name: &str, session: PgSession) {
-        session.close().await;
-        let admin = open(target(&fixture(), false)).await;
-        run(&admin, &format!("DROP DATABASE {name} WITH (FORCE)"))
-            .await
-            .expect("drop database");
+        scratch_database("aidb_catalog", SCHEMA_SQL).await
     }
 
     fn object(name: &str) -> ObjectName {
@@ -701,5 +715,536 @@ mod catalog {
         assert!(!details.columns.is_empty());
         session.close().await;
         drop_scratch(&name, writable).await;
+    }
+}
+
+/// Pages of rows: type mapping, bounds, filters, sorting, privileges and cancellation.
+mod table_data {
+    use std::sync::Arc;
+
+    use aidb_lib::domain::catalog::ObjectName;
+    use aidb_lib::domain::table_data::{
+        CELL_CHAR_LIMIT, Filter, FilterOperator, PageLimits, PageRequest, SortDirection, SortKey,
+        TablePage, ValueKind,
+    };
+
+    use super::*;
+
+    const SCHEMA_SQL: &str = r#"
+        CREATE TYPE mood AS ENUM ('ok', 'great');
+        CREATE DOMAIN positive AS integer CHECK (VALUE > 0);
+        CREATE TABLE samples (
+            id integer PRIMARY KEY,
+            flag boolean,
+            amount numeric,
+            doc jsonb,
+            raw json,
+            tags text[],
+            grid integer[][],
+            ref uuid,
+            at timestamptz,
+            day date,
+            body text,
+            bytes bytea,
+            feeling mood,
+            qty positive,
+            span interval,
+            "Weird ""Name""" text
+        );
+        INSERT INTO samples VALUES (
+            1, true, 12345678901234567890.123456789, '{"a": [1, 2]}', '{"b":1}',
+            ARRAY['x', 'y,z'], ARRAY[[1, 2], [3, 4]], 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11',
+            '2026-01-02 03:04:05+00', '2026-01-02', repeat('é', 5000), '\x00ff', 'great', 5,
+            '1 day 2 hours', 'odd'
+        );
+        INSERT INTO samples (id) VALUES (2);
+        CREATE TABLE items (id integer PRIMARY KEY, label text NOT NULL);
+        INSERT INTO items SELECT g, 'item ' || lpad(g::text, 2, '0') FROM generate_series(1, 25) g;
+        INSERT INTO items VALUES (26, '50%_off'), (27, '50x_off');
+        CREATE TABLE numbers AS SELECT g AS n FROM generate_series(1, 5) g;
+        CREATE TABLE staff (id integer PRIMARY KEY, name text, salary numeric);
+        INSERT INTO staff VALUES (1, 'Ada', 100);
+        CREATE TABLE counter (n integer);
+        CREATE FUNCTION bump() RETURNS integer LANGUAGE sql VOLATILE
+            AS 'INSERT INTO counter VALUES (1) RETURNING 1';
+        CREATE VIEW sneaky AS SELECT bump() AS b;
+        CREATE VIEW slow AS SELECT 1 AS x FROM pg_sleep(20);
+    "#;
+
+    const LIMITS: PageLimits = PageLimits {
+        max_rows: 500,
+        max_bytes: 16 * 1024 * 1024,
+    };
+
+    fn request(table: &str) -> PageRequest {
+        PageRequest {
+            object: ObjectName {
+                schema: "public".into(),
+                name: table.into(),
+            },
+            filters: Vec::new(),
+            sort: Vec::new(),
+            offset: 0,
+            limit: None,
+            operation_id: None,
+        }
+    }
+
+    fn filter(column: &str, operator: FilterOperator, value: Option<&str>) -> Filter {
+        Filter {
+            column: column.into(),
+            operator,
+            value: value.map(Into::into),
+        }
+    }
+
+    fn cell<'a>(page: &'a TablePage, row: usize, column: &str) -> Option<&'a str> {
+        let index = page
+            .columns
+            .iter()
+            .position(|c| c.name == column)
+            .unwrap_or_else(|| panic!("no column {column}"));
+        page.rows[row][index].as_deref()
+    }
+
+    fn kind(page: &TablePage, column: &str) -> ValueKind {
+        page.columns
+            .iter()
+            .find(|c| c.name == column)
+            .map(|c| c.kind)
+            .unwrap_or_else(|| panic!("no column {column}"))
+    }
+
+    fn ids(page: &TablePage) -> Vec<&str> {
+        page.rows
+            .iter()
+            .map(|row| row[0].as_deref().unwrap_or("NULL"))
+            .collect()
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PostgreSQL: run scripts/postgres-fixture.sh start"]
+    async fn values_arrive_as_exact_text_with_their_kind() {
+        let (name, session) = scratch_database("aidb_pages", SCHEMA_SQL).await;
+        let mut read = request("samples");
+        read.sort = vec![SortKey {
+            column: "id".into(),
+            direction: SortDirection::Asc,
+        }];
+
+        let page = session.read_page(&read, LIMITS).await.expect("page");
+
+        let expected = [
+            ("flag", "true", ValueKind::Boolean),
+            (
+                "amount",
+                "12345678901234567890.123456789",
+                ValueKind::Number,
+            ),
+            ("doc", r#"{"a": [1, 2]}"#, ValueKind::Json),
+            ("raw", r#"{"b":1}"#, ValueKind::Json),
+            ("tags", r#"["x","y,z"]"#, ValueKind::Array),
+            ("grid", "[[1,2],[3,4]]", ValueKind::Array),
+            (
+                "ref",
+                "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11",
+                ValueKind::Uuid,
+            ),
+            ("day", "2026-01-02", ValueKind::DateTime),
+            ("bytes", r"\x00ff", ValueKind::Binary),
+            ("feeling", "great", ValueKind::Text),
+            ("qty", "5", ValueKind::Number),
+            ("span", "1 day 02:00:00", ValueKind::Other),
+            ("Weird \"Name\"", "odd", ValueKind::Text),
+        ];
+        for (column, value, value_kind) in expected {
+            assert_eq!(cell(&page, 0, column), Some(value), "{column}");
+            assert_eq!(kind(&page, column), value_kind, "{column}");
+        }
+        let at = cell(&page, 0, "at").expect("timestamp");
+        assert_eq!(kind(&page, "at"), ValueKind::DateTime);
+        assert!(
+            at.starts_with("2026-01-0") && at.contains(':'),
+            "ISO text: {at}"
+        );
+        assert!(
+            at.rfind(['+', '-']).is_some_and(|i| i > 10),
+            "with an offset: {at}"
+        );
+        assert!(
+            page.rows[1][1..].iter().all(Option::is_none),
+            "NULLs stay null"
+        );
+        assert_eq!(
+            page.columns
+                .iter()
+                .find(|c| c.name == "amount")
+                .map(|c| c.data_type.as_str()),
+            Some("numeric")
+        );
+        drop_scratch(&name, session).await;
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PostgreSQL: run scripts/postgres-fixture.sh start"]
+    async fn long_values_are_cut_and_flagged() {
+        let (name, session) = scratch_database("aidb_pages", SCHEMA_SQL).await;
+        let mut read = request("samples");
+        read.filters = vec![filter("id", FilterOperator::Equals, Some("1"))];
+
+        let page = session.read_page(&read, LIMITS).await.expect("page");
+
+        let body_index = page
+            .columns
+            .iter()
+            .position(|c| c.name == "body")
+            .expect("body");
+        let body = cell(&page, 0, "body").expect("body");
+        assert_eq!(body.chars().count(), CELL_CHAR_LIMIT);
+        assert_eq!(page.truncated_cells.len(), 1);
+        assert_eq!(
+            (
+                page.truncated_cells[0].row,
+                page.truncated_cells[0].column as usize
+            ),
+            (0, body_index)
+        );
+        drop_scratch(&name, session).await;
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PostgreSQL: run scripts/postgres-fixture.sh start"]
+    async fn pages_are_bounded_and_ordered_by_the_primary_key() {
+        let (name, session) = scratch_database("aidb_pages", SCHEMA_SQL).await;
+        let mut read = request("items");
+        read.limit = Some(10);
+
+        let first = session.read_page(&read, LIMITS).await.expect("first");
+        read.offset = 20;
+        let last = session.read_page(&read, LIMITS).await.expect("last");
+        read.offset = 0;
+        read.limit = Some(1_000);
+        let capped = session
+            .read_page(
+                &read,
+                PageLimits {
+                    max_rows: 3,
+                    ..LIMITS
+                },
+            )
+            .await
+            .expect("capped");
+        let heap = session
+            .read_page(&request("numbers"), LIMITS)
+            .await
+            .expect("no key");
+
+        assert_eq!(
+            ids(&first),
+            ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10"]
+        );
+        assert!(first.has_more && first.stable_order);
+        assert_eq!(first.order.len(), 1, "ordered by the primary key");
+        assert_eq!(ids(&last), ["21", "22", "23", "24", "25", "26", "27"]);
+        assert!(!last.has_more);
+        assert_eq!(capped.rows.len(), 3, "the setting caps the request");
+        assert!(capped.has_more);
+        assert!(!heap.stable_order && heap.order.is_empty());
+        assert_eq!(heap.rows.len(), 5);
+        drop_scratch(&name, session).await;
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PostgreSQL: run scripts/postgres-fixture.sh start"]
+    async fn filters_and_sorting_bind_values_and_match_types() {
+        let (name, session) = scratch_database("aidb_pages", SCHEMA_SQL).await;
+        let read = |filters: Vec<Filter>, sort: Vec<SortKey>| {
+            let mut read = request("items");
+            read.filters = filters;
+            read.sort = sort;
+            read
+        };
+
+        let numeric = session
+            .read_page(
+                &read(
+                    vec![filter("id", FilterOperator::GreaterOrEqual, Some("20"))],
+                    vec![],
+                ),
+                LIMITS,
+            )
+            .await
+            .expect("numeric");
+        let literal = session
+            .read_page(
+                &read(
+                    vec![filter("label", FilterOperator::Contains, Some("%_"))],
+                    vec![],
+                ),
+                LIMITS,
+            )
+            .await
+            .expect("literal wildcards");
+        let prefix = session
+            .read_page(
+                &read(
+                    vec![filter("label", FilterOperator::StartsWith, Some("ITEM 2"))],
+                    vec![],
+                ),
+                LIMITS,
+            )
+            .await
+            .expect("prefix");
+        let injection = session
+            .read_page(
+                &read(
+                    vec![filter(
+                        "label",
+                        FilterOperator::Equals,
+                        Some("x' OR '1'='1"),
+                    )],
+                    vec![],
+                ),
+                LIMITS,
+            )
+            .await
+            .expect("bound value");
+        let sorted = session
+            .read_page(
+                &read(
+                    vec![filter("id", FilterOperator::Less, Some("4"))],
+                    vec![SortKey {
+                        column: "label".into(),
+                        direction: SortDirection::Desc,
+                    }],
+                ),
+                LIMITS,
+            )
+            .await
+            .expect("sorted");
+        let nulls = session
+            .read_page(
+                &{
+                    let mut read = request("samples");
+                    read.filters = vec![filter("doc", FilterOperator::IsNull, None)];
+                    read
+                },
+                LIMITS,
+            )
+            .await
+            .expect("null check");
+
+        assert_eq!(
+            ids(&numeric),
+            ["20", "21", "22", "23", "24", "25", "26", "27"]
+        );
+        assert_eq!(ids(&literal), ["26"]);
+        assert_eq!(ids(&prefix), ["20", "21", "22", "23", "24", "25"]);
+        assert!(injection.rows.is_empty());
+        assert_eq!(ids(&sorted), ["3", "2", "1"]);
+        assert_eq!(sorted.order.len(), 2, "the primary key breaks ties");
+        assert_eq!(ids(&nulls), ["2"]);
+        drop_scratch(&name, session).await;
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PostgreSQL: run scripts/postgres-fixture.sh start"]
+    async fn requests_that_do_not_fit_the_table_are_refused() {
+        let (name, session) = scratch_database("aidb_pages", SCHEMA_SQL).await;
+        let mut bad_value = request("items");
+        bad_value.filters = vec![filter("id", FilterOperator::Equals, Some("abc"))];
+        let mut no_operator = request("samples");
+        no_operator.filters = vec![filter("raw", FilterOperator::Equals, Some("{}"))];
+        let mut unknown = request("items");
+        unknown.sort = vec![SortKey {
+            column: "label; DROP TABLE items".into(),
+            direction: SortDirection::Asc,
+        }];
+
+        let errors = [
+            session
+                .read_page(&bad_value, LIMITS)
+                .await
+                .expect_err("bad value"),
+            session
+                .read_page(&no_operator, LIMITS)
+                .await
+                .expect_err("json ="),
+            session
+                .read_page(&unknown, LIMITS)
+                .await
+                .expect_err("unknown"),
+            session
+                .read_page(&request("missing"), LIMITS)
+                .await
+                .expect_err("missing"),
+        ];
+
+        let kinds: Vec<DbErrorKind> = errors.iter().map(DbError::kind).collect();
+        assert_eq!(
+            kinds,
+            [
+                DbErrorKind::InvalidRequest,
+                DbErrorKind::InvalidRequest,
+                DbErrorKind::InvalidRequest,
+                DbErrorKind::ObjectNotFound,
+            ]
+        );
+        assert!(errors[0].message().contains("abc"), "{}", errors[0]);
+        session.ping().await.expect("the session still works");
+        drop_scratch(&name, session).await;
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PostgreSQL: run scripts/postgres-fixture.sh start"]
+    async fn the_byte_limit_stops_a_page_early() {
+        let (name, session) = scratch_database("aidb_pages", SCHEMA_SQL).await;
+
+        let page = session
+            .read_page(
+                &request("items"),
+                PageLimits {
+                    max_rows: 500,
+                    max_bytes: 100,
+                },
+            )
+            .await
+            .expect("page");
+
+        assert!(page.byte_limit_reached && page.has_more);
+        assert!((1..10).contains(&page.rows.len()), "{}", page.rows.len());
+        drop_scratch(&name, session).await;
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PostgreSQL: run scripts/postgres-fixture.sh start"]
+    async fn pages_are_read_only_even_on_writable_sessions() {
+        let (name, session) = scratch_database("aidb_pages", SCHEMA_SQL).await;
+
+        let error = session
+            .read_page(&request("sneaky"), LIMITS)
+            .await
+            .expect_err("the view writes");
+
+        assert_eq!(error.kind(), DbErrorKind::ReadOnly);
+        drop_scratch(&name, session).await;
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PostgreSQL: run scripts/postgres-fixture.sh start"]
+    async fn page_reads_can_be_cancelled() {
+        let (name, session) = scratch_database("aidb_pages", SCHEMA_SQL).await;
+        let session = Arc::new(session);
+        let operation = OperationId::new();
+        let mut read = request("slow");
+        read.operation_id = Some(operation);
+        let started = Instant::now();
+        let reader = Arc::clone(&session);
+        let running = tokio::spawn(async move { reader.read_page(&read, LIMITS).await });
+
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        let signalled = session.cancel(operation).await.expect("cancel");
+        let error = running.await.expect("task").expect_err("cancelled");
+
+        assert!(signalled);
+        assert_eq!(error.kind(), DbErrorKind::Cancelled);
+        assert!(started.elapsed() < Duration::from_secs(5));
+        let session = Arc::into_inner(session).expect("only owner");
+        drop_scratch(&name, session).await;
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PostgreSQL: run scripts/postgres-fixture.sh start"]
+    async fn columns_the_role_cannot_read_are_left_out() {
+        let (name, session) = scratch_database("aidb_pages", SCHEMA_SQL).await;
+        let role = format!(
+            "aidb_reader_{}",
+            OperationId::new().to_string().replace('-', "")
+        );
+        run(
+            &session,
+            &format!(
+                "CREATE ROLE {role} LOGIN PASSWORD 'reader-only'; \
+                 GRANT SELECT (id, name) ON staff TO {role};"
+            ),
+        )
+        .await
+        .expect("role");
+        let mut reader_target = target(&fixture(), true);
+        reader_target.settings.database = name.clone();
+        reader_target.settings.username = role.clone();
+        reader_target.password = Some(SecretString::from("reader-only"));
+        let reader = open(reader_target).await;
+
+        let page = reader
+            .read_page(&request("staff"), LIMITS)
+            .await
+            .expect("page");
+        let mut by_salary = request("staff");
+        by_salary.sort = vec![SortKey {
+            column: "salary".into(),
+            direction: SortDirection::Asc,
+        }];
+        let refused = reader
+            .read_page(&by_salary, LIMITS)
+            .await
+            .expect_err("salary");
+        let none = reader
+            .read_page(&request("items"), LIMITS)
+            .await
+            .expect_err("no grant");
+
+        assert_eq!(
+            page.columns
+                .iter()
+                .map(|c| c.name.as_str())
+                .collect::<Vec<_>>(),
+            ["id", "name"]
+        );
+        assert_eq!(page.omitted_columns, ["salary"]);
+        assert_eq!(page.rows, [[Some("1".to_owned()), Some("Ada".to_owned())]]);
+        assert_eq!(refused.kind(), DbErrorKind::PermissionDenied);
+        assert_eq!(none.kind(), DbErrorKind::PermissionDenied);
+        reader.close().await;
+        drop_scratch(&name, session).await;
+        let admin = open(target(&fixture(), false)).await;
+        run(&admin, &format!("DROP ROLE {role}"))
+            .await
+            .expect("drop role");
+        admin.close().await;
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PostgreSQL: run scripts/postgres-fixture.sh start"]
+    async fn sql_ascii_databases_are_readable_whatever_their_bytes() {
+        let (name, session) = scratch_database_with(
+            "aidb_pages",
+            "ENCODING 'SQL_ASCII' LC_COLLATE 'C' LC_CTYPE 'C'",
+            r"
+                CREATE TABLE legacy (id integer PRIMARY KEY, body text);
+                INSERT INTO legacy VALUES
+                    (1, convert_from('\xff41'::bytea, 'SQL_ASCII')),
+                    (2, repeat('é', 3000)),
+                    (3, 'plain');
+            ",
+        )
+        .await;
+
+        let page = session
+            .read_page(&request("legacy"), LIMITS)
+            .await
+            .expect("page");
+
+        assert_eq!(
+            cell(&page, 0, "body"),
+            Some("\u{fffd}A"),
+            "invalid bytes replaced"
+        );
+        let long = cell(&page, 1, "body").expect("long");
+        assert_eq!(long.chars().count(), CELL_CHAR_LIMIT);
+        assert!(long.chars().all(|c| c == 'é'), "cut between characters");
+        assert_eq!(page.truncated_cells.len(), 1);
+        assert_eq!(cell(&page, 2, "body"), Some("plain"));
+        drop_scratch(&name, session).await;
     }
 }

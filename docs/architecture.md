@@ -131,7 +131,8 @@ Current commands: `app_info`, `diagnostics`, `open_external_url`, `get_settings`
 `create_connection`, `update_connection`, `delete_connection`, `save_connection_password`,
 `forget_connection_password`, `parse_connection_uri`, `export_connections`,
 `preview_connection_import`, `import_connections`, `test_connection`, `connect`, `disconnect`,
-`active_sessions`, `catalog_overview`, `refresh_catalog`, `describe_object`.
+`active_sessions`, `catalog_overview`, `refresh_catalog`, `describe_object`, `read_table_page`,
+`cancel_operation`.
 
 ## Connection profiles
 
@@ -219,6 +220,34 @@ Current commands: `app_info`, `diagnostics`, `open_external_url`, `get_settings`
   no longer exists marks the overview for a fingerprint check on its next read, so a dropped
   table leaves the tree at once. `refresh_catalog` forces a reload. Only the fingerprint, object count and time are written to `schema_cache_metadata`;
   Settings › Storage › Clear cache removes those rows and the memory cache.
+
+## Table data
+
+- **Request** (`domain::table_data::PageRequest`): an object name, up to 20 filters (equals, not
+  equals, less/greater (or equal), contains, starts with, is null, is not null; all must match),
+  up to 8 sort keys, an offset, an optional limit and an optional operation id. Its shape is
+  checked in Rust before any database work; column names are checked against the live table.
+- **Statement** (`adapters::postgres::table_data`): built from fixed SQL fragments and names as
+  PostgreSQL quotes them (`quote_ident`) in the live column list; names in the request are only
+  compared with that list. Values are bound and cast to the column's base type on the server
+  (`CAST($n AS type)`); contains/starts with use `ILIKE` on the value's text with `%`, `_` and
+  `\` escaped. It runs in a `READ ONLY` transaction on a cancellable operation connection, under
+  the session's statement and lock timeouts.
+- **Order**: the requested sort keys, then the primary key columns, so offset pages neither
+  repeat nor skip rows. Without a readable primary key the page says `stableOrder: false`.
+- **Bounds**: at most `maxRowsPerPage` rows (one more is fetched to tell whether more follow) and
+  `maxResultMegabytes` of cell text; rows are streamed and the page stops at the byte budget
+  (`byteLimitReached`). Each cell is cut to 2,000 characters on the server and listed in
+  `truncatedCells`.
+- **Values**: every value arrives as text, `null` for SQL NULL, with a `kind` per column (boolean,
+  number, text, date_time, json, array, uuid, binary, other). Numbers keep their exact decimal
+  text; arrays come as JSON; `bytea` as hex; dates and times in ISO 8601 (the session sets
+  `DateStyle=ISO`). In `SQL_ASCII` databases cells are read as bytes and decoded in Rust, with
+  invalid sequences replaced. Columns the role may not read are left out and listed in
+  `omittedColumns`.
+- **Cancellation**: `cancel_operation` sends `pg_cancel_backend` for the operation id the request
+  carried; the connection that ran it is closed, not reused.
+- Rows are never logged, cached or written to disk; the log records counts and timing only.
 
 ## Frontend
 

@@ -15,6 +15,7 @@ import {
   ImportPreviewSchema,
   ParsedConnectionUriSchema,
   StorageSummarySchema,
+  TablePageSchema,
   type ActiveSession,
   type AppInfo,
   type AppSettings,
@@ -32,9 +33,12 @@ import {
   type ImportPreview,
   type ObjectDetails,
   type ObjectName,
+  type OperationId,
+  type PageRequest,
   type ParsedConnectionUri,
   type SettingsPatch,
   type StorageSummary,
+  type TablePage,
 } from '@aidb/contracts'
 import { z } from 'zod'
 import { callCommand, NativeError } from './native'
@@ -190,6 +194,22 @@ export function describeObject(
   object: ObjectName,
 ): Promise<ObjectDetails> {
   return callCommand(COMMANDS.describeObject, ObjectDetailsSchema, { connectionId, object })
+}
+
+/** One bounded page of a table or view. Pass `operationId` to be able to cancel it. */
+export function readTablePage(
+  connectionId: ConnectionId,
+  request: PageRequest,
+): Promise<TablePage> {
+  return callCommand(COMMANDS.readTablePage, TablePageSchema, { connectionId, request })
+}
+
+/** Asks the database to stop a running read. `false` if it already finished. */
+export function cancelOperation(
+  connectionId: ConnectionId,
+  operationId: OperationId,
+): Promise<boolean> {
+  return callCommand(COMMANDS.cancelOperation, z.boolean(), { connectionId, operationId })
 }
 
 const EXTERNAL_URL = z.url({ protocol: /^(https?|mailto)$/ })

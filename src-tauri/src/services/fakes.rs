@@ -15,6 +15,7 @@ use crate::domain::catalog::{
 use crate::domain::connections::{ConnectionDraft, Engine};
 use crate::domain::database::{Capabilities, OperationId, ServerInfo, SessionLimits};
 use crate::domain::settings::SafetySettings;
+use crate::domain::table_data::{PageLimits, PageRequest, TablePage};
 
 /// The fake database's structure, shared by every session the adapter opens.
 #[derive(Debug, Default)]
@@ -24,6 +25,8 @@ pub struct FakeCatalog {
     pub fingerprint_checks: AtomicUsize,
     pub overview_loads: AtomicUsize,
     pub describe_loads: AtomicUsize,
+    /// The last page read and the limits it was read with.
+    pub last_page: Mutex<Option<(PageRequest, PageLimits)>>,
 }
 
 impl FakeCatalog {
@@ -166,6 +169,34 @@ impl DatabaseSession for FakeSession {
             referenced_by: Vec::new(),
             indexes: Vec::new(),
             definition: None,
+        })
+    }
+
+    async fn read_page(
+        &self,
+        request: &PageRequest,
+        limits: PageLimits,
+    ) -> Result<TablePage, DbError> {
+        *self
+            .catalog
+            .last_page
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some((request.clone(), limits));
+        if request.object.name == "ghost" {
+            return Err(DbError::new(DbErrorKind::ObjectNotFound, "No such table."));
+        }
+        Ok(TablePage {
+            object: request.object.clone(),
+            columns: Vec::new(),
+            omitted_columns: Vec::new(),
+            rows: Vec::new(),
+            truncated_cells: Vec::new(),
+            offset: request.offset,
+            has_more: false,
+            byte_limit_reached: false,
+            order: request.sort.clone(),
+            stable_order: true,
+            cell_char_limit: crate::domain::table_data::CELL_CHAR_LIMIT,
         })
     }
 }

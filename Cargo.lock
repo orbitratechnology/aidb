@@ -67,6 +67,7 @@ dependencies = [
 name = "aidb"
 version = "0.1.0"
 dependencies = [
+ "futures-util",
  "keyring",
  "percent-encoding",
  "regex",

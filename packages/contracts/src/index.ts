@@ -7,6 +7,7 @@ export type { AppSettings } from './generated/AppSettings'
 export type { Capabilities } from './generated/Capabilities'
 export type { CatalogOverview } from './generated/CatalogOverview'
 export type { CatalogSnapshot } from './generated/CatalogSnapshot'
+export type { CellRef } from './generated/CellRef'
 export type { ClearResult } from './generated/ClearResult'
 export type { ClearTarget } from './generated/ClearTarget'
 export type { Column } from './generated/Column'
@@ -22,6 +23,8 @@ export type { Environment } from './generated/Environment'
 export type { ErrorCode } from './generated/ErrorCode'
 export type { ErrorPayload } from './generated/ErrorPayload'
 export type { ExportOutcome } from './generated/ExportOutcome'
+export type { Filter } from './generated/Filter'
+export type { FilterOperator } from './generated/FilterOperator'
 export type { ForeignKey } from './generated/ForeignKey'
 export type { Identity } from './generated/Identity'
 export type { ImportCandidate } from './generated/ImportCandidate'
@@ -37,6 +40,8 @@ export type { ObjectKind } from './generated/ObjectKind'
 export type { ObjectName } from './generated/ObjectName'
 export type { ObjectSummary } from './generated/ObjectSummary'
 export type { OperationId } from './generated/OperationId'
+export type { PageColumn } from './generated/PageColumn'
+export type { PageRequest } from './generated/PageRequest'
 export type { ParsedConnectionUri } from './generated/ParsedConnectionUri'
 export type { PasswordStorage } from './generated/PasswordStorage'
 export type { ReferentialAction } from './generated/ReferentialAction'
@@ -45,11 +50,16 @@ export type { SchemaSummary } from './generated/SchemaSummary'
 export type { ServerInfo } from './generated/ServerInfo'
 export type { SettingsPatch } from './generated/SettingsPatch'
 export type { SkippedImport } from './generated/SkippedImport'
+export type { SortDirection } from './generated/SortDirection'
+export type { SortKey } from './generated/SortKey'
 export type { SslMode } from './generated/SslMode'
 export type { StorageSummary } from './generated/StorageSummary'
+export type { TablePage } from './generated/TablePage'
 export type { ThemePreference } from './generated/ThemePreference'
+export type { ValueKind } from './generated/ValueKind'
 export { SAFETY_DEFAULTS, SAFETY_LIMITS } from './generated/SafetyLimits'
 export { CONNECTION_LIMITS } from './generated/ConnectionLimits'
+export { TABLE_DATA_LIMITS } from './generated/TableDataLimits'
 
 export { AppInfoSchema } from './app'
 export {
@@ -105,3 +115,14 @@ export {
   StorageSummarySchema,
   ThemePreferenceSchema,
 } from './settings'
+export {
+  CellRefSchema,
+  FilterOperatorSchema,
+  FilterSchema,
+  PageColumnSchema,
+  PageRequestSchema,
+  SortDirectionSchema,
+  SortKeySchema,
+  TablePageSchema,
+  ValueKindSchema,
+} from './table-data'

@@ -27,6 +27,8 @@ export const COMMANDS = {
   catalogOverview: 'catalog_overview',
   refreshCatalog: 'refresh_catalog',
   describeObject: 'describe_object',
+  readTablePage: 'read_table_page',
+  cancelOperation: 'cancel_operation',
 } as const
 
 export type CommandName = (typeof COMMANDS)[keyof typeof COMMANDS]

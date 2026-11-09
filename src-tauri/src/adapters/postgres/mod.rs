@@ -9,6 +9,7 @@
 mod catalog;
 mod errors;
 mod options;
+mod table_data;
 
 use std::collections::HashMap;
 use std::ops::{Deref, DerefMut};
@@ -25,6 +26,7 @@ use super::database::{ConnectTarget, DatabaseAdapter, DatabaseSession, DbError, 
 use crate::domain::catalog::{CatalogOverview, ObjectDetails, ObjectName};
 use crate::domain::connections::Engine;
 use crate::domain::database::{Capabilities, OperationId, SUPPORTED_POSTGRES_VERSIONS, ServerInfo};
+use crate::domain::table_data::{PageLimits, PageRequest, TablePage};
 
 /// Connections per session: enough for a query, a page load and a cancel at the same time.
 const MAX_CONNECTIONS: u32 = 4;
@@ -218,6 +220,18 @@ impl DatabaseSession for PgSession {
 
     async fn describe_object(&self, object: &ObjectName) -> Result<ObjectDetails, DbError> {
         catalog::describe(&self.pool, object)
+            .await
+            .map_err(|e| self.session_error(e))?
+    }
+
+    async fn read_page(
+        &self,
+        request: &PageRequest,
+        limits: PageLimits,
+    ) -> Result<TablePage, DbError> {
+        let operation = request.operation_id.unwrap_or_default();
+        let mut connection = self.begin_operation(operation).await?;
+        table_data::read_page(&mut connection, request, limits)
             .await
             .map_err(|e| self.session_error(e))?
     }

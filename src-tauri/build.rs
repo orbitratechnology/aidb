@@ -25,6 +25,8 @@ const COMMANDS: &[&str] = &[
     "catalog_overview",
     "refresh_catalog",
     "describe_object",
+    "read_table_page",
+    "cancel_operation",
 ];
 
 fn main() {

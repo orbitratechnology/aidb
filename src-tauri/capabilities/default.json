@@ -28,6 +28,8 @@
     "allow-active-sessions",
     "allow-catalog-overview",
     "allow-refresh-catalog",
-    "allow-describe-object"
+    "allow-describe-object",
+    "allow-read-table-page",
+    "allow-cancel-operation"
   ]
 }

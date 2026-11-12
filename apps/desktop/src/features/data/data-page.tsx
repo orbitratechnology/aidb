@@ -20,8 +20,9 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Spinner } from '@/components/ui/spinner'
 import { useActiveConnection } from '@/features/connections/sessions'
 import { useMediaQuery } from '@/hooks/use-media-query'
-import { ObjectDetailsView } from './object-details'
+import { sameObject } from './catalog-view'
 import { ObjectTree } from './object-tree'
+import { ObjectView } from './object-view'
 import { useCatalog, useRefreshCatalog } from './queries'
 
 const WIDE_QUERY = '(min-width: 1024px)'
@@ -77,17 +78,25 @@ function SchemaBrowser({ connectionId }: { connectionId: ConnectionId }) {
   }
 
   const details = selected ? (
-    <ObjectDetailsView connectionId={connectionId} object={selected} />
-  ) : (
-    <EmptyState
-      icon={MousePointerClickIcon}
-      title="Pick a table or view"
-      description={
-        wide
-          ? 'Choose an object from the list to see its columns, keys and relationships.'
-          : 'Browse the objects to see a table’s columns, keys and relationships.'
-      }
+    // Keyed by the selection, so each object opens with fresh filters, paging and scroll.
+    <ObjectView
+      key={JSON.stringify(selected)}
+      connectionId={connectionId}
+      object={selected}
+      summary={catalog.data.objects.find((object) => sameObject(object, selected))}
     />
+  ) : (
+    <PageContainer>
+      <EmptyState
+        icon={MousePointerClickIcon}
+        title="Pick a table or view"
+        description={
+          wide
+            ? 'Choose an object from the list to see its rows, columns, keys and relationships.'
+            : 'Browse the objects to see a table’s rows, columns, keys and relationships.'
+        }
+      />
+    </PageContainer>
   )
 
   if (wide) {
@@ -100,23 +109,20 @@ function SchemaBrowser({ connectionId }: { connectionId: ConnectionId }) {
           <CatalogToolbar connectionId={connectionId} catalog={catalog.data} />
           <ObjectTree catalog={catalog.data} selected={selected} />
         </aside>
-        {/* Keyed by the selection, so each object opens scrolled to its top. */}
-        <div key={JSON.stringify(selected)} className="min-w-0 flex-1 overflow-y-auto">
-          <PageContainer>{details}</PageContainer>
-        </div>
+        <div className="flex min-w-0 flex-1 flex-col">{details}</div>
       </div>
     )
   }
 
   return (
-    <PageContainer>
-      <div className="rounded-md border">
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="border-b">
         <CatalogToolbar connectionId={connectionId} catalog={catalog.data}>
           <ObjectPickerSheet catalog={catalog.data} selected={selected} />
         </CatalogToolbar>
       </div>
       {details}
-    </PageContainer>
+    </div>
   )
 }
 

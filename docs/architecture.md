@@ -273,6 +273,22 @@ Current commands: `app_info`, `diagnostics`, `open_external_url`, `get_settings`
   definition shows columns with PK/FK/UQ text markers, keys, references in both directions with
   their actions, indexes and a view's query. Object kinds and missing read access are shown
   with icons and text, never color alone.
+- **Data grid** (Data › Data tab, the default; `?view=definition` selects Definition): TanStack
+  Table v9 with only sizing, resizing, visibility and sorting features registered; sorting,
+  filtering and paging are done by the core (`manualSorting`). TanStack Virtual renders only the
+  rows in view plus overscan under a sticky header; columns are not virtualized. Header clicks
+  sort (Shift adds a key, up to 8); columns resize by dragging (double-click resets) and can be
+  hidden. One row at a time is focusable: arrow keys, Home/End and Page Up/Down move, Enter opens
+  the row. A row detail sheet lists every field with its type, indents JSON and arrays, spells out
+  NULL and empty text, and marks values cut at 2,000 characters. Filters and sort are edited in a
+  sheet (React Hook Form and Zod, the same limits as the core). Paging is explicit (first,
+  previous, next) and remembers the offsets visited, since a page can stop early at the size
+  limit. Notices explain early stops, unstable order (no primary key) and columns the role
+  cannot read. Below 640px rows are cards that open the same detail sheet.
+- **Reads in flight**: each page read carries an operation id. Cancel, or leaving the page
+  (another table, filter or page) while it loads, sends `cancel_operation`, which stops the
+  statement in the database. Pages are dropped from the query cache as soon as nothing shows them
+  (`gcTime: 0`).
 - **Native data**: reads are queries that retry only errors the core marks retryable; writes are
   mutations that never retry. Settings saves run one at a time, so the last change wins.
 - **External links**: clicks on `http(s)` and `mailto` links go to `open_external_url`, which

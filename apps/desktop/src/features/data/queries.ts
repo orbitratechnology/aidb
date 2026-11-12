@@ -1,6 +1,12 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import type { ConnectionId, ObjectName } from '@aidb/contracts'
-import { catalogOverview, describeObject, refreshCatalog } from '@/lib/commands'
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import type { ConnectionId, Filter, ObjectName, SortKey } from '@aidb/contracts'
+import {
+  cancelOperation,
+  catalogOverview,
+  describeObject,
+  readTablePage,
+  refreshCatalog,
+} from '@/lib/commands'
 import { NativeError } from '@/lib/native'
 
 export const catalogKey = (connectionId: ConnectionId) => ['catalog', connectionId] as const
@@ -49,5 +55,39 @@ export function useRefreshCatalog(connectionId: ConnectionId) {
       queryClient.setQueryData(catalogKey(connectionId), snapshot)
       await queryClient.invalidateQueries({ queryKey: objectsKey(connectionId) })
     },
+  })
+}
+
+export type PageQuery = {
+  filters: Filter[]
+  sort: SortKey[]
+  offset: number
+}
+
+export const tablePageKey = (connectionId: ConnectionId, object: ObjectName, query: PageQuery) =>
+  ['tablePage', connectionId, object.schema, object.name, query] as const
+
+/**
+ * One page of rows. Leaving the page (another table, filter or page) cancels its read in the
+ * database, not just in the UI. Rows are dropped from memory as soon as nothing shows them.
+ */
+export function useTablePage(connectionId: ConnectionId, object: ObjectName, query: PageQuery) {
+  return useQuery({
+    queryKey: tablePageKey(connectionId, object, query),
+    queryFn: async ({ signal }) => {
+      const operationId = crypto.randomUUID()
+      const cancel = () => {
+        // Best effort: the read may already have finished.
+        cancelOperation(connectionId, operationId).catch(() => undefined)
+      }
+      signal.addEventListener('abort', cancel, { once: true })
+      try {
+        return await readTablePage(connectionId, { object, ...query, operationId })
+      } finally {
+        signal.removeEventListener('abort', cancel)
+      }
+    },
+    placeholderData: keepPreviousData,
+    gcTime: 0,
   })
 }

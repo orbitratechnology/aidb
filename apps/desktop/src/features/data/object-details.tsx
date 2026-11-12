@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react'
 import type { ConnectionId, ForeignKey, ObjectDetails, ObjectName } from '@aidb/contracts'
-import { ArrowRightIcon, KeyRoundIcon, LinkIcon, LockIcon, SearchXIcon } from 'lucide-react'
+import { ArrowRightIcon, KeyRoundIcon, LinkIcon, SearchXIcon } from 'lucide-react'
 import { Link } from 'react-router'
 import { LoadError } from '@/components/shared/load-error'
 import { EmptyState } from '@/components/shared/status-states'
@@ -15,15 +15,7 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { NativeError } from '@/lib/native'
-import {
-  ACTION_LABELS,
-  columnKeys,
-  formatRowEstimate,
-  KIND_LABELS,
-  objectPath,
-  sameObject,
-} from './catalog-view'
-import { KIND_ICONS } from './kind-display'
+import { ACTION_LABELS, columnKeys, objectPath, sameObject } from './catalog-view'
 import { useObjectDetails } from './queries'
 
 /** Definition of one table or view: columns, keys, relationships and indexes. */
@@ -63,38 +55,11 @@ export function ObjectDetailsView({
 
 function Definition({ details }: { details: ObjectDetails }) {
   const { summary } = details
-  const Icon = KIND_ICONS[summary.kind]
-  const rows = formatRowEstimate(summary.rowEstimate, { precise: true })
   const isView = summary.kind === 'view'
   const hasKeys = !isView && summary.kind !== 'materialized_view'
 
   return (
-    <article className="flex flex-col gap-8" aria-labelledby="object-title">
-      <header className="flex flex-col gap-2">
-        <p className="text-sm text-muted-foreground">{summary.schema}</p>
-        <h2 id="object-title" className="text-2xl font-semibold break-all">
-          {summary.name}
-        </h2>
-        <div className="flex flex-wrap items-center gap-2">
-          <Badge variant="secondary">
-            <Icon data-icon="inline-start" />
-            {KIND_LABELS[summary.kind]}
-          </Badge>
-          {rows && (
-            <Badge variant="outline" title="Estimate from the database statistics">
-              {rows}
-            </Badge>
-          )}
-          {!summary.readable && (
-            <Badge variant="outline">
-              <LockIcon data-icon="inline-start" />
-              No read access
-            </Badge>
-          )}
-        </div>
-        {summary.comment && <p className="text-sm text-muted-foreground">{summary.comment}</p>}
-      </header>
-
+    <div className="flex flex-col gap-8">
       <Section title="Columns" count={details.columns.length}>
         <ColumnsTable details={details} />
       </Section>
@@ -126,7 +91,7 @@ function Definition({ details }: { details: ObjectDetails }) {
           </pre>
         </Section>
       )}
-    </article>
+    </div>
   )
 }
 
@@ -357,12 +322,8 @@ function IndexesTable({ details }: { details: ObjectDetails }) {
 
 function DetailsSkeleton() {
   return (
-    <div className="flex flex-col gap-6" aria-busy="true" aria-label="Loading definition">
-      <div className="flex flex-col gap-2">
-        <Skeleton className="h-4 w-24" />
-        <Skeleton className="h-8 w-64" />
-        <Skeleton className="h-5 w-40" />
-      </div>
+    <div className="flex flex-col gap-3" aria-busy="true" aria-label="Loading definition">
+      <Skeleton className="h-6 w-32" />
       <Skeleton className="h-64 w-full" />
     </div>
   )

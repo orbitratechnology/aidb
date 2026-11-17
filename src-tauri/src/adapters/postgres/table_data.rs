@@ -17,7 +17,7 @@
 use futures_util::TryStreamExt;
 use sqlx::postgres::PgConnection;
 use sqlx::postgres::types::Oid;
-use sqlx::{AssertSqlSafe, Connection, Row};
+use sqlx::{AssertSqlSafe, Connection, Row, ValueRef};
 
 use crate::adapters::database::{DbError, DbErrorKind, ExportError};
 use crate::domain::catalog::ObjectName;
@@ -183,43 +183,8 @@ pub(super) async fn read_page(
     }
     let fetch_rows = i64::from(statement.limit) + 1;
     let offset = i64::try_from(request.offset).unwrap_or(i64::MAX);
-    let mut stream = query.bind(fetch_rows).bind(offset).fetch(&mut *transaction);
-
-    let mut page = Collected::default();
-    while let Some(row) = stream.try_next().await? {
-        if page.rows.len() == statement.limit as usize {
-            page.has_more = true;
-            break;
-        }
-        let row_index = u32::try_from(page.rows.len()).unwrap_or(u32::MAX);
-        let mut cells = Vec::with_capacity(readable.len());
-        let mut truncated = Vec::new();
-        let mut row_bytes = 0;
-        for index in 0..readable.len() {
-            let mut cell = decode_cell(&row, index, statement.raw_bytes)?;
-            if let Some(text) = &mut cell {
-                if truncate_cell(text) {
-                    truncated.push(CellRef {
-                        row: row_index,
-                        column: u32::try_from(index).unwrap_or(u32::MAX),
-                    });
-                }
-                row_bytes += text.len();
-            }
-            row_bytes += CELL_OVERHEAD_BYTES;
-            cells.push(cell);
-        }
-        // The first row is always kept, so a page never comes back empty when rows exist.
-        if !page.rows.is_empty() && page.bytes + row_bytes > limits.max_bytes {
-            page.has_more = true;
-            page.byte_limit_reached = true;
-            break;
-        }
-        page.bytes += row_bytes;
-        page.rows.push(cells);
-        page.truncated.extend(truncated);
-    }
-    drop(stream);
+    let stream = query.bind(fetch_rows).bind(offset).fetch(&mut *transaction);
+    let page = collect(stream, readable.len(), statement.limit, limits.max_bytes).await?;
     transaction.rollback().await?;
 
     Ok(Ok(TablePage {
@@ -294,7 +259,7 @@ pub(super) async fn export_rows(
         }
         cells.clear();
         for index in 0..readable.len() {
-            cells.push(decode_cell(&row, index, statement.raw_bytes).map_err(driver)?);
+            cells.push(decode_cell(&row, index).map_err(driver)?);
         }
         sink.row(&cells).map_err(ExportError::Write)?;
         summary.rows += 1;
@@ -304,18 +269,18 @@ pub(super) async fn export_rows(
     Ok(summary)
 }
 
-/// One cell as text; `SQL_ASCII` databases send bytes, decoded with invalid sequences replaced.
-fn decode_cell(
+/// One cell as text. Every value aidb selects arrives as text, JSON or bytes (`SQL_ASCII`
+/// databases), so the wire bytes are decoded as UTF-8, with invalid sequences replaced.
+pub(super) fn decode_cell(
     row: &sqlx::postgres::PgRow,
     index: usize,
-    raw_bytes: bool,
 ) -> Result<Option<String>, sqlx::Error> {
-    if raw_bytes {
-        let bytes: Option<Vec<u8>> = row.try_get(index)?;
-        Ok(bytes.map(|bytes| String::from_utf8_lossy(&bytes).into_owned()))
-    } else {
-        row.try_get(index)
+    let value = row.try_get_raw(index)?;
+    if value.is_null() {
+        return Ok(None);
     }
+    let bytes = value.as_bytes().map_err(sqlx::Error::Decode)?;
+    Ok(Some(String::from_utf8_lossy(bytes).into_owned()))
 }
 
 /// Whether values are cut for display or sent whole.
@@ -326,13 +291,85 @@ enum CellLength {
     Full,
 }
 
+/// Rows collected for one page or query result.
 #[derive(Default)]
-struct Collected {
-    rows: Vec<Vec<Option<String>>>,
-    truncated: Vec<CellRef>,
+pub(super) struct Collected {
+    pub rows: Vec<Vec<Option<String>>>,
+    pub truncated: Vec<CellRef>,
     bytes: usize,
-    has_more: bool,
-    byte_limit_reached: bool,
+    pub has_more: bool,
+    pub byte_limit_reached: bool,
+}
+
+/// Reads up to `limit` rows of `width` text cells, stopping early at `max_bytes` (the first row
+/// is always kept). Cells longer than [`CELL_CHAR_LIMIT`] are cut and flagged. Expects the
+/// statement to fetch one row more than `limit`, so `has_more` can be told apart.
+pub(super) async fn collect<'s>(
+    mut stream: futures_util::stream::BoxStream<'s, Result<sqlx::postgres::PgRow, sqlx::Error>>,
+    width: usize,
+    limit: u32,
+    max_bytes: usize,
+) -> Result<Collected, sqlx::Error> {
+    let mut page = Collected::default();
+    while let Some(row) = stream.try_next().await? {
+        if page.rows.len() == limit as usize {
+            page.has_more = true;
+            break;
+        }
+        let row_index = u32::try_from(page.rows.len()).unwrap_or(u32::MAX);
+        let mut cells = Vec::with_capacity(width);
+        let mut truncated = Vec::new();
+        let mut row_bytes = 0;
+        for index in 0..width {
+            let mut cell = decode_cell(&row, index)?;
+            if let Some(text) = &mut cell {
+                if truncate_cell(text) {
+                    truncated.push(CellRef {
+                        row: row_index,
+                        column: u32::try_from(index).unwrap_or(u32::MAX),
+                    });
+                }
+                row_bytes += text.len();
+            }
+            row_bytes += CELL_OVERHEAD_BYTES;
+            cells.push(cell);
+        }
+        if !page.rows.is_empty() && page.bytes + row_bytes > max_bytes {
+            page.has_more = true;
+            page.byte_limit_reached = true;
+            break;
+        }
+        page.bytes += row_bytes;
+        page.rows.push(cells);
+        page.truncated.extend(truncated);
+    }
+    Ok(page)
+}
+
+/// The select-list expression that sends `value` (any SQL expression) as text: arrays as JSON,
+/// cut for display when `cut`, and as bytes for `SQL_ASCII` databases (see the module notes).
+pub(super) fn text_expression(value: &str, kind: ValueKind, cut: bool, raw_bytes: bool) -> String {
+    let text = match kind {
+        ValueKind::Array => format!("to_json({value})::text"),
+        _ => format!("({value})::text"),
+    };
+    let text = if cut {
+        // One character past the limit shows that a value was cut. Without a known encoding,
+        // `left()` counts bytes, so take enough for the limit in any UTF-8 text.
+        let length = if raw_bytes {
+            (CELL_CHAR_LIMIT + 1) * MAX_CHAR_BYTES
+        } else {
+            CELL_CHAR_LIMIT + 1
+        };
+        format!("left({text}, {length})")
+    } else {
+        text
+    };
+    if raw_bytes {
+        format!("convert_to({text}, 'SQL_ASCII')")
+    } else {
+        text
+    }
 }
 
 /// The SELECT for one page, with its bound values in `$n` order. The limit and offset are bound
@@ -344,8 +381,6 @@ struct Statement {
     limit: u32,
     order: Vec<SortKey>,
     stable_order: bool,
-    /// Cells come back as `bytea` to decode here (`SQL_ASCII` databases).
-    raw_bytes: bool,
 }
 
 impl Statement {
@@ -375,29 +410,15 @@ impl Statement {
         };
 
         let raw_bytes = relation.raw_bytes();
-        // One character past the limit shows that a value was cut. Without a known encoding,
-        // `left()` counts bytes, so take enough for the limit in any UTF-8 text.
-        let cut = if raw_bytes {
-            (CELL_CHAR_LIMIT + 1) * MAX_CHAR_BYTES
-        } else {
-            CELL_CHAR_LIMIT + 1
-        };
         let select = readable
             .iter()
             .map(|column| {
-                let text = match column.kind() {
-                    ValueKind::Array => format!("to_json({})::text", column.quoted),
-                    _ => format!("({})::text", column.quoted),
-                };
-                let text = match cell_length {
-                    CellLength::Cut => format!("left({text}, {cut})"),
-                    CellLength::Full => text,
-                };
-                if raw_bytes {
-                    format!("convert_to({text}, 'SQL_ASCII')")
-                } else {
-                    text
-                }
+                text_expression(
+                    &column.quoted,
+                    column.kind(),
+                    cell_length == CellLength::Cut,
+                    raw_bytes,
+                )
             })
             .collect::<Vec<_>>()
             .join(", ");
@@ -493,7 +514,6 @@ impl Statement {
             limit,
             order,
             stable_order,
-            raw_bytes,
         })
     }
 }
@@ -622,7 +642,6 @@ mod tests {
         )
         .expect("builds");
 
-        assert!(statement.raw_bytes);
         assert!(
             statement
                 .sql

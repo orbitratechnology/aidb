@@ -96,7 +96,7 @@ Status legend: `[x]` done · `[~]` in progress · `[ ]` not started
 
 ## Phase 6: SQL editor and read execution
 
-- [ ] **6.1 Statement classification and execution.** `sqlparser` classification, read-only mode,
+- [x] **6.1 Statement classification and execution.** `sqlparser` classification, read-only mode,
       multi-statement guard, row/byte caps, statement timeout, cancellation, error positions.
 - [ ] **6.2 SQL editor.** Lazy-loaded CodeMirror 6 with PostgreSQL highlighting, tabs with
       preserved drafts, run selection or current statement, keyboard shortcuts.

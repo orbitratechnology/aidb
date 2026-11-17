@@ -30,6 +30,8 @@ export const COMMANDS = {
   readTablePage: 'read_table_page',
   cancelOperation: 'cancel_operation',
   exportTable: 'export_table',
+  analyzeSql: 'analyze_sql',
+  runQuery: 'run_query',
 } as const
 
 export type CommandName = (typeof COMMANDS)[keyof typeof COMMANDS]

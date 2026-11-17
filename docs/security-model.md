@@ -57,12 +57,17 @@ mitigations are listed in [threat-model.md](./threat-model.md).
 | Table data              | Pages are read in a `READ ONLY` transaction with the session's timeouts. Column names in a request are matched against the live column list and only PostgreSQL's quoting of that list (`quote_ident`) reaches the SQL; filter values, limit and offset are bound. Requests are shape-checked in Rust (filter and sort counts, value length, no NUL, offset range). Rows, bytes per page and characters per cell are capped; columns the role cannot read are left out. Row values are never logged or stored; error messages may quote a filter value the user typed. | `src-tauri/src/adapters/postgres/table_data.rs`, `src-tauri/src/domain/table_data.rs`                                     |
 | Data grid               | Values render as React text (never HTML) in the grid, record list and detail sheet; JSON is parsed only to re-indent it. Filter values are typed into plain inputs and sent as data. Pages are not cached once off screen, and abandoned reads are cancelled in the database. New dependencies: `@tanstack/react-table`, `@tanstack/react-virtual` (TanStack, MIT, no network or native access).                                                                                                                                                                       | `apps/desktop/src/features/data/`                                                                                         |
 | Export and copy         | `export_table` validates the request and the connection before showing the native save dialog; the core writes the file and returns only its name, so the webview never gets a path or file access. Exports run read-only and cancellable, are capped at 1,000,000 rows (reported), and a failed or cancelled export removes its partial file. Exported values are written exactly as stored. The clipboard is written only from an explicit copy action.                                                                                                              | `src-tauri/src/commands/export.rs`, `src-tauri/src/domain/export.rs`, `apps/desktop/src/features/data/copy-actions.ts`    |
+| SQL editor execution    | SQL text (up to 1 MB) is split and classified with `sqlparser`; only one read runs per call. It runs with the extended protocol (one command), in a rolled-back `READ ONLY` transaction, as a cancellable operation within the statement timeout and the Safety row and size limits. Writes, DDL, session and transaction control, privileges, procedures and functions with outside effects are refused before reaching the database. Database messages shown in the editor pass through redaction; the SQL text is never logged.                                     | `src-tauri/src/domain/sql.rs`, `src-tauri/src/services/query.rs`, `src-tauri/src/adapters/postgres/query.rs`              |
 
 Accepted risk: while a session is open, the PostgreSQL driver keeps the password in memory to
 open pool connections; its options are never printed or logged (their `Debug` output would
-include it). Read-only sessions rely on `default_transaction_read_only`, which SQL run on the
-session could turn off: the statement classifier (task 6.1) must reject `SET` of these settings,
-and database role grants remain the final boundary.
+include it). Read-only sessions rely on `default_transaction_read_only`; SQL from the editor
+cannot turn it off: `SET` and `set_config()` are refused, and every run uses its own `READ ONLY`
+transaction that is rolled back. Database role grants remain the final boundary.
+
+Accepted risk: user-defined functions called from a read are not inspected. The read-only
+transaction stops them from writing, but a `SECURITY DEFINER` function could still act outside
+the transaction (for example, `dblink` inside it). Connect with least-privilege roles.
 
 Accepted risk: a CSV export opened in a spreadsheet can evaluate cells that start with `=`, `+`,
 `-` or `@` as formulas. aidb writes values exactly as the database stores them, as other database

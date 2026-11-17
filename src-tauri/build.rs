@@ -28,6 +28,8 @@ const COMMANDS: &[&str] = &[
     "read_table_page",
     "cancel_operation",
     "export_table",
+    "analyze_sql",
+    "run_query",
 ];
 
 fn main() {

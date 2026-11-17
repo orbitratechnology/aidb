@@ -132,7 +132,7 @@ Current commands: `app_info`, `diagnostics`, `open_external_url`, `get_settings`
 `forget_connection_password`, `parse_connection_uri`, `export_connections`,
 `preview_connection_import`, `import_connections`, `test_connection`, `connect`, `disconnect`,
 `active_sessions`, `catalog_overview`, `refresh_catalog`, `describe_object`, `read_table_page`,
-`cancel_operation`, `export_table`.
+`cancel_operation`, `export_table`, `analyze_sql`, `run_query`.
 
 ## Connection profiles
 
@@ -258,6 +258,32 @@ Current commands: `app_info`, `diagnostics`, `open_external_url`, `get_settings`
   arrays, strings otherwise. A failed or cancelled export deletes its partial file.
 - Rows are never logged or cached, and reach disk only in an export the user asked for; the log
   records counts and timing only.
+
+## SQL execution
+
+- **Analysis** (`domain::sql`, `analyze_sql`): the text is tokenized with `sqlparser`'s
+  PostgreSQL dialect and split at top-level semicolons, so semicolons in strings, comments and
+  dollar quotes do not split. Each statement is parsed on its own and gets a span (line, column
+  in characters, and a UTF-16 offset for the editor), a kind (`read`, `write`, `schema`,
+  `session`, `privileged`, `unknown`) and, when it cannot run, the reason.
+- **What runs**: SELECT, VALUES and WITH queries, EXPLAIN (EXPLAIN ANALYZE only of a read) and
+  SHOW. A query is not a read if it nests a data-changing statement (`WITH x AS (DELETE ...)`),
+  uses SELECT INTO or FOR UPDATE/SHARE, or calls a function that acts outside the transaction
+  (backend termination, `set_config`, advisory locks, server files, `dblink`, `query_to_xml`,
+  ...). Everything else is refused with its reason; statements the parser cannot read are
+  refused with its message and position.
+- **Execution** (`run_query`): exactly one statement per run (a batch is refused, pointing at
+  its second statement). It runs as a cancellable operation, in a `READ ONLY` transaction that
+  is always rolled back (which also undoes any session setting it changed), with the extended
+  protocol, so the server accepts a single command. A query is prepared as written (syntax and
+  name errors point into it, column types come back), then run as
+  `SELECT <columns as text> FROM (<statement>) AS aidb_q(c1, ...) LIMIT $1 OFFSET $2`: values
+  arrive as text with a kind per column, cut at 2,000 characters, within the Safety row and size
+  limits. EXPLAIN and SHOW run as written.
+- **Outcomes**: `completed` (rows), `refused` (not sent; reason, kind, position) or `failed` (the
+  database's message and hint, SQLSTATE, error code and position mapped back to the submitted
+  text). Only problems outside the statement, such as a closed connection, are app errors. The
+  SQL text is never logged; the log records counts, timings and SQLSTATEs.
 
 ## Frontend
 

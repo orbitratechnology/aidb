@@ -16,6 +16,7 @@ mod connections;
 mod diagnostics;
 mod export;
 mod external;
+mod query;
 mod sessions;
 mod settings;
 mod table_data;
@@ -52,7 +53,9 @@ pub(crate) fn handler<R: Runtime>() -> impl Fn(Invoke<R>) -> bool + Send + Sync 
         catalog::describe_object,
         table_data::read_table_page,
         table_data::cancel_operation,
-        export::export_table
+        export::export_table,
+        query::analyze_sql,
+        query::run_query
     ]
 }
 
@@ -293,6 +296,24 @@ mod tests {
             }),
         )
         .expect("cancel_operation");
+        let query = invoke(
+            &main,
+            "run_query",
+            json!({
+                "connectionId": saved.id.to_string(),
+                "request": { "sql": "SELECT 1 AS one;" },
+            }),
+        )
+        .expect("run_query");
+        let refused = invoke(
+            &main,
+            "run_query",
+            json!({
+                "connectionId": saved.id.to_string(),
+                "request": { "sql": "DROP TABLE pg_am" },
+            }),
+        )
+        .expect("refusals are outcomes");
         let closed =
             invoke(&main, "disconnect", json!({ "id": saved.id.to_string() })).expect("disconnect");
         let after = invoke(&main, "active_sessions", json!({})).expect("active_sessions");
@@ -324,9 +345,35 @@ mod tests {
         assert_eq!(page["hasMore"], false);
         assert_eq!(bad_column["code"], "invalid_input");
         assert_eq!(cancelled, false);
+        assert_eq!(query["status"], "completed");
+        assert_eq!(query["rows"], json!([["1"]]));
+        assert_eq!(refused["status"], "refused");
+        assert_eq!(refused["kind"], "schema");
         assert_eq!(closed, true);
         assert_eq!(after.as_array().map(Vec::len), Some(0));
         assert_eq!(export_closed["code"], "unavailable");
+    }
+
+    #[test]
+    fn sql_is_analyzed_without_a_connection() {
+        let app = app();
+        let main = window(&app, "main");
+
+        let analysis = invoke(
+            &main,
+            "analyze_sql",
+            json!({ "sql": "SELECT 1;\nDROP TABLE t" }),
+        )
+        .expect("analyze_sql");
+
+        assert_eq!(analysis["statements"][0]["kind"], "read");
+        assert_eq!(analysis["statements"][0]["reason"], Value::Null);
+        assert_eq!(analysis["statements"][1]["kind"], "schema");
+        assert_eq!(analysis["statements"][1]["span"]["start"]["line"], 2);
+        assert!(
+            analysis["statements"][1].get("text").is_none(),
+            "internal fields stay internal"
+        );
     }
 
     #[test]

@@ -15,7 +15,9 @@ use crate::domain::catalog::{
 use crate::domain::connections::{ConnectionDraft, Engine};
 use crate::domain::database::{Capabilities, OperationId, ServerInfo, SessionLimits};
 use crate::domain::export::{ExportSummary, RowSink};
+use crate::domain::query::QueryRows;
 use crate::domain::settings::SafetySettings;
+use crate::domain::sql::ReadShape;
 use crate::domain::table_data::{PageColumn, PageLimits, PageRequest, TablePage, ValueKind};
 
 /// The fake database's structure, shared by every session the adapter opens.
@@ -233,6 +235,36 @@ impl DatabaseSession for FakeSession {
         Ok(ExportSummary {
             rows: u64::from(rows),
             truncated: available > max_rows,
+        })
+    }
+
+    /// One row with the SQL's length; SQL containing `boom` fails at character 8.
+    async fn run_read(
+        &self,
+        sql: &str,
+        _shape: ReadShape,
+        _limits: PageLimits,
+        _offset: u64,
+        _operation: Option<OperationId>,
+    ) -> Result<QueryRows, DbError> {
+        if sql.contains("boom") {
+            return Err(DbError::new(
+                DbErrorKind::InvalidRequest,
+                "column \"boom\" does not exist.",
+            )
+            .with_sqlstate("42703")
+            .with_position(Some(8)));
+        }
+        Ok(QueryRows {
+            columns: vec![PageColumn {
+                name: "length".into(),
+                data_type: "integer".into(),
+                kind: ValueKind::Number,
+            }],
+            rows: vec![vec![Some(sql.len().to_string())]],
+            truncated_cells: Vec::new(),
+            has_more: false,
+            byte_limit_reached: false,
         })
     }
 }

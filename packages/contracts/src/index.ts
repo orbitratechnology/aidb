@@ -1,6 +1,7 @@
 // Types under `generated/` come from the Rust core via ts-rs (`cargo test` regenerates them).
 // The schemas here validate data at runtime and are type-checked against those types.
 export type { ActiveSession } from './generated/ActiveSession'
+export type { AnalyzedStatement } from './generated/AnalyzedStatement'
 export type { AppearanceSettings } from './generated/AppearanceSettings'
 export type { AppInfo } from './generated/AppInfo'
 export type { AppSettings } from './generated/AppSettings'
@@ -46,6 +47,11 @@ export type { PageColumn } from './generated/PageColumn'
 export type { PageRequest } from './generated/PageRequest'
 export type { ParsedConnectionUri } from './generated/ParsedConnectionUri'
 export type { PasswordStorage } from './generated/PasswordStorage'
+export type { QueryFailure } from './generated/QueryFailure'
+export type { QueryRefusal } from './generated/QueryRefusal'
+export type { QueryRequest } from './generated/QueryRequest'
+export type { QueryResult } from './generated/QueryResult'
+export type { QueryRun } from './generated/QueryRun'
 export type { ReferentialAction } from './generated/ReferentialAction'
 export type { SafetySettings } from './generated/SafetySettings'
 export type { SchemaSummary } from './generated/SchemaSummary'
@@ -54,7 +60,12 @@ export type { SettingsPatch } from './generated/SettingsPatch'
 export type { SkippedImport } from './generated/SkippedImport'
 export type { SortDirection } from './generated/SortDirection'
 export type { SortKey } from './generated/SortKey'
+export type { SourcePosition } from './generated/SourcePosition'
+export type { SourceSpan } from './generated/SourceSpan'
+export type { SqlAnalysis } from './generated/SqlAnalysis'
+export type { SqlProblem } from './generated/SqlProblem'
 export type { SslMode } from './generated/SslMode'
+export type { StatementKind } from './generated/StatementKind'
 export type { StorageSummary } from './generated/StorageSummary'
 export type { TableExportOutcome } from './generated/TableExportOutcome'
 export type { TablePage } from './generated/TablePage'
@@ -105,6 +116,18 @@ export {
 } from './diagnostics'
 export { ERROR_CODES, ErrorCodeSchema, ErrorPayloadSchema } from './errors'
 export { ExportFormatSchema, TableExportOutcomeSchema } from './export'
+export {
+  AnalyzedStatementSchema,
+  QueryFailureSchema,
+  QueryRefusalSchema,
+  QueryResultSchema,
+  QueryRunSchema,
+  SourcePositionSchema,
+  SourceSpanSchema,
+  SqlAnalysisSchema,
+  SqlProblemSchema,
+  StatementKindSchema,
+} from './query'
 export {
   ActiveSessionSchema,
   CapabilitiesSchema,

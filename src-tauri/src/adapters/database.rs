@@ -13,6 +13,8 @@ use crate::domain::catalog::{CatalogOverview, ObjectDetails, ObjectName};
 use crate::domain::connections::ConnectionDraft;
 use crate::domain::database::{Capabilities, OperationId, ServerInfo, SessionLimits};
 use crate::domain::export::{ExportSummary, RowSink};
+use crate::domain::query::QueryRows;
+use crate::domain::sql::ReadShape;
 use crate::domain::table_data::{PageLimits, PageRequest, TablePage};
 use crate::errors::{AppError, ErrorCode};
 
@@ -80,6 +82,18 @@ pub trait DatabaseSession: std::fmt::Debug + Send + Sync + 'static {
         max_rows: u32,
         sink: &mut (dyn RowSink + Send),
     ) -> impl Future<Output = Result<ExportSummary, ExportError>> + Send;
+
+    /// Runs one statement already classified as a read, in a read-only transaction that is
+    /// rolled back, returning at most `limits.max_rows` rows from `offset`. Errors carry the
+    /// server's message and, when it gave one, the position within `sql`.
+    fn run_read(
+        &self,
+        sql: &str,
+        shape: ReadShape,
+        limits: PageLimits,
+        offset: u64,
+        operation: Option<OperationId>,
+    ) -> impl Future<Output = Result<QueryRows, DbError>> + Send;
 }
 
 impl From<ExportError> for AppError {
@@ -141,6 +155,8 @@ pub struct DbError {
     kind: DbErrorKind,
     message: Cow<'static, str>,
     sqlstate: Option<String>,
+    /// Where in the statement the server found the problem: a character position, from 1.
+    position: Option<u32>,
     #[source]
     cause: Option<Box<dyn std::error::Error + Send + Sync>>,
 }
@@ -151,8 +167,28 @@ impl DbError {
             kind,
             message: message.into(),
             sqlstate: None,
+            position: None,
             cause: None,
         }
+    }
+
+    /// Replaces the message, for callers that show the server's own wording (the SQL editor).
+    #[must_use]
+    pub fn with_message(mut self, message: impl Into<Cow<'static, str>>) -> Self {
+        self.message = message.into();
+        self
+    }
+
+    #[must_use]
+    pub const fn with_position(mut self, position: Option<u32>) -> Self {
+        self.position = position;
+        self
+    }
+
+    /// Character position in the statement, from 1, when the server reported one.
+    #[must_use]
+    pub const fn position(&self) -> Option<u32> {
+        self.position
     }
 
     #[must_use]

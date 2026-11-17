@@ -9,6 +9,7 @@
 mod catalog;
 mod errors;
 mod options;
+mod query;
 mod table_data;
 
 use std::collections::HashMap;
@@ -29,6 +30,8 @@ use crate::domain::catalog::{CatalogOverview, ObjectDetails, ObjectName};
 use crate::domain::connections::Engine;
 use crate::domain::database::{Capabilities, OperationId, SUPPORTED_POSTGRES_VERSIONS, ServerInfo};
 use crate::domain::export::{ExportSummary, RowSink};
+use crate::domain::query::QueryRows;
+use crate::domain::sql::ReadShape;
 use crate::domain::table_data::{PageLimits, PageRequest, TablePage};
 
 /// Connections per session: enough for a query, a page load and a cancel at the same time.
@@ -251,6 +254,21 @@ impl DatabaseSession for PgSession {
             .await
             .map_err(ExportError::Database)?;
         table_data::export_rows(&mut connection, request, max_rows, sink, |e| {
+            self.session_error(e)
+        })
+        .await
+    }
+
+    async fn run_read(
+        &self,
+        sql: &str,
+        shape: ReadShape,
+        limits: PageLimits,
+        offset: u64,
+        operation: Option<OperationId>,
+    ) -> Result<QueryRows, DbError> {
+        let mut connection = self.begin_operation(operation.unwrap_or_default()).await?;
+        query::run_read(&mut connection, sql, shape, limits, offset, |e| {
             self.session_error(e)
         })
         .await

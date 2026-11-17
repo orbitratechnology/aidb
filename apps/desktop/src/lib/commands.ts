@@ -14,6 +14,8 @@ import {
   ImportOutcomeSchema,
   ImportPreviewSchema,
   ParsedConnectionUriSchema,
+  QueryRunSchema,
+  SqlAnalysisSchema,
   StorageSummarySchema,
   TableExportOutcomeSchema,
   TablePageSchema,
@@ -38,7 +40,10 @@ import {
   type OperationId,
   type PageRequest,
   type ParsedConnectionUri,
+  type QueryRequest,
+  type QueryRun,
   type SettingsPatch,
+  type SqlAnalysis,
   type StorageSummary,
   type TableExportOutcome,
   type TablePage,
@@ -219,6 +224,19 @@ export function exportTable(
     connectionId,
     request,
   })
+}
+
+/** Splits SQL into statements and says which can run. Needs no connection. */
+export function analyzeSql(sql: string): Promise<SqlAnalysis> {
+  return callCommand(COMMANDS.analyzeSql, SqlAnalysisSchema, { sql })
+}
+
+/**
+ * Runs one read statement. Refusals and database errors are outcomes (`status`), not thrown
+ * errors. Pass `operationId` to be able to cancel it.
+ */
+export function runQuery(connectionId: ConnectionId, request: QueryRequest): Promise<QueryRun> {
+  return callCommand(COMMANDS.runQuery, QueryRunSchema, { connectionId, request })
 }
 
 /** Asks the database to stop a running read. `false` if it already finished. */

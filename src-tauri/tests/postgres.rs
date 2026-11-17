@@ -1420,3 +1420,232 @@ mod table_data {
         drop_scratch(&name, session).await;
     }
 }
+
+/// Read statements from the SQL editor. These call the adapter directly, past the classifier, to
+/// show that the database-side safeguards hold on their own.
+mod query {
+    use std::sync::Arc;
+
+    use aidb_lib::domain::sql::ReadShape;
+    use aidb_lib::domain::table_data::{PageLimits, ValueKind};
+
+    use super::*;
+
+    const SCHEMA_SQL: &str = r"
+        CREATE TABLE counter (n integer);
+        CREATE FUNCTION bump() RETURNS integer LANGUAGE sql VOLATILE
+            AS 'INSERT INTO counter VALUES (1) RETURNING 1';
+    ";
+
+    const LIMITS: PageLimits = PageLimits {
+        max_rows: 500,
+        max_bytes: 16 * 1024 * 1024,
+    };
+
+    async fn read(
+        session: &PgSession,
+        sql: &str,
+    ) -> Result<aidb_lib::domain::query::QueryRows, DbError> {
+        let shape = if sql.trim_start().to_uppercase().starts_with("SELECT") {
+            ReadShape::Query
+        } else {
+            ReadShape::Utility
+        };
+        session.run_read(sql, shape, LIMITS, 0, None).await
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PostgreSQL: run scripts/postgres-fixture.sh start"]
+    async fn queries_return_text_with_kinds_and_keep_duplicate_names() {
+        let (name, session) = scratch_database("aidb_query", SCHEMA_SQL).await;
+
+        let rows = read(
+            &session,
+            "SELECT 1 AS a, 2 AS a, NULL::int AS n, '{\"x\": 1}'::jsonb AS doc, \
+             ARRAY[1, 2] AS arr, 12345678901234567890.5::numeric AS big -- trailing comment",
+        )
+        .await
+        .expect("rows");
+
+        let names: Vec<&str> = rows.columns.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(names, ["a", "a", "n", "doc", "arr", "big"]);
+        let kinds: Vec<ValueKind> = rows.columns.iter().map(|c| c.kind).collect();
+        assert_eq!(
+            kinds,
+            [
+                ValueKind::Number,
+                ValueKind::Number,
+                ValueKind::Number,
+                ValueKind::Json,
+                ValueKind::Array,
+                ValueKind::Number
+            ]
+        );
+        assert_eq!(
+            rows.rows,
+            [[
+                Some("1".to_owned()),
+                Some("2".to_owned()),
+                None,
+                Some(r#"{"x": 1}"#.to_owned()),
+                Some("[1,2]".to_owned()),
+                Some("12345678901234567890.5".to_owned()),
+            ]]
+        );
+        drop_scratch(&name, session).await;
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PostgreSQL: run scripts/postgres-fixture.sh start"]
+    async fn results_are_capped_and_paged() {
+        let (name, session) = scratch_database("aidb_query", SCHEMA_SQL).await;
+        let sql = "SELECT g FROM generate_series(1, 25) g ORDER BY g";
+        let small = PageLimits {
+            max_rows: 10,
+            ..LIMITS
+        };
+
+        let first = session
+            .run_read(sql, ReadShape::Query, small, 0, None)
+            .await
+            .expect("first");
+        let last = session
+            .run_read(sql, ReadShape::Query, small, 20, None)
+            .await
+            .expect("last");
+
+        assert_eq!(first.rows.len(), 10);
+        assert!(first.has_more);
+        assert_eq!(last.rows.first(), Some(&vec![Some("21".to_owned())]));
+        assert_eq!(last.rows.len(), 5);
+        assert!(!last.has_more);
+        drop_scratch(&name, session).await;
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PostgreSQL: run scripts/postgres-fixture.sh start"]
+    async fn errors_carry_the_server_message_and_position_in_the_statement() {
+        let (name, session) = scratch_database("aidb_query", SCHEMA_SQL).await;
+
+        let unknown = read(&session, "SELECT nope FROM generate_series(1, 3) g")
+            .await
+            .expect_err("unknown column");
+        let cast = read(&session, "SELECT 1,\n  'abc'::int")
+            .await
+            .expect_err("bad literal");
+
+        assert_eq!(unknown.kind(), DbErrorKind::InvalidRequest);
+        assert!(
+            unknown
+                .message()
+                .contains(r#"column "nope" does not exist"#),
+            "{unknown}"
+        );
+        assert_eq!(unknown.position(), Some(8));
+        assert_eq!(cast.position(), Some(13), "{cast}");
+        drop_scratch(&name, session).await;
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PostgreSQL: run scripts/postgres-fixture.sh start"]
+    async fn explain_and_show_run_as_written() {
+        let (name, session) = scratch_database("aidb_query", SCHEMA_SQL).await;
+
+        let plan = read(&session, "EXPLAIN SELECT 1").await.expect("plan");
+        let json = read(&session, "EXPLAIN (FORMAT JSON) SELECT 1")
+            .await
+            .expect("json plan");
+        let style = read(&session, "SHOW DateStyle").await.expect("show");
+
+        assert_eq!(plan.columns[0].name, "QUERY PLAN");
+        assert!(!plan.rows.is_empty());
+        assert_eq!(json.columns[0].kind, ValueKind::Json);
+        let text = json.rows[0][0].clone().expect("plan text");
+        serde_json::from_str::<serde_json::Value>(&text).expect("valid JSON");
+        assert_eq!(style.rows, [[Some("ISO, MDY".to_owned())]]);
+        drop_scratch(&name, session).await;
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PostgreSQL: run scripts/postgres-fixture.sh start"]
+    async fn writes_hidden_in_functions_are_stopped_by_the_read_only_transaction() {
+        let (name, session) = scratch_database("aidb_query", SCHEMA_SQL).await;
+
+        let error = read(&session, "SELECT bump()").await.expect_err("writes");
+        let count = read(&session, "SELECT count(*) FROM counter")
+            .await
+            .expect("count");
+
+        assert_eq!(error.kind(), DbErrorKind::ReadOnly);
+        assert_eq!(count.rows, [[Some("0".to_owned())]]);
+        drop_scratch(&name, session).await;
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PostgreSQL: run scripts/postgres-fixture.sh start"]
+    async fn a_second_statement_is_never_run() {
+        let (name, session) = scratch_database("aidb_query", SCHEMA_SQL).await;
+
+        let error = read(&session, "SELECT 1; DROP TABLE counter")
+            .await
+            .expect_err("two statements");
+        let still_there = read(&session, "SELECT count(*) FROM counter").await;
+
+        assert!(
+            error.message().contains("multiple commands")
+                || error.kind() == DbErrorKind::InvalidRequest,
+            "{error}"
+        );
+        assert!(still_there.is_ok(), "the table was not dropped");
+        drop_scratch(&name, session).await;
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PostgreSQL: run scripts/postgres-fixture.sh start"]
+    async fn setting_changes_are_rolled_back() {
+        let (name, session) = scratch_database("aidb_query", SCHEMA_SQL).await;
+
+        read(
+            &session,
+            "SELECT set_config('statement_timeout', '1', false)",
+        )
+        .await
+        .expect("set_config itself runs");
+        let after = read(&session, "SHOW statement_timeout")
+            .await
+            .expect("show");
+
+        assert_eq!(after.rows, [[Some("30s".to_owned())]]);
+        drop_scratch(&name, session).await;
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PostgreSQL: run scripts/postgres-fixture.sh start"]
+    async fn running_queries_can_be_cancelled() {
+        let (name, session) = scratch_database("aidb_query", SCHEMA_SQL).await;
+        let session = Arc::new(session);
+        let operation = OperationId::new();
+        let started = Instant::now();
+        let runner = Arc::clone(&session);
+        let running = tokio::spawn(async move {
+            runner
+                .run_read(
+                    "SELECT pg_sleep(20)",
+                    ReadShape::Query,
+                    LIMITS,
+                    0,
+                    Some(operation),
+                )
+                .await
+        });
+
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        assert!(session.cancel(operation).await.expect("cancel"));
+        let error = running.await.expect("task").expect_err("cancelled");
+
+        assert_eq!(error.kind(), DbErrorKind::Cancelled);
+        assert!(started.elapsed() < Duration::from_secs(5));
+        let session = Arc::into_inner(session).expect("only owner");
+        drop_scratch(&name, session).await;
+    }
+}

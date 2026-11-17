@@ -6,6 +6,7 @@ pub mod connection_secrets;
 pub mod connections;
 #[cfg(test)]
 pub(crate) mod fakes;
+pub mod query;
 pub mod sessions;
 pub mod settings;
 pub mod table_data;

@@ -31,6 +31,8 @@
     "allow-describe-object",
     "allow-read-table-page",
     "allow-cancel-operation",
-    "allow-export-table"
+    "allow-export-table",
+    "allow-analyze-sql",
+    "allow-run-query"
   ]
 }

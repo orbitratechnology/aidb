@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-list-saved-queries"
+description = "Enables the list_saved_queries command without any pre-configured scope."
+commands.allow = ["list_saved_queries"]
+
+[[permission]]
+identifier = "deny-list-saved-queries"
+description = "Denies the list_saved_queries command without any pre-configured scope."
+commands.deny = ["list_saved_queries"]

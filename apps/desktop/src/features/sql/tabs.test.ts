@@ -1,5 +1,14 @@
 import { describe, expect, it } from 'vitest'
-import { addTab, closeTab, cycleTab, initialTabs, MAX_TABS, restoreTabs, updateSql } from './tabs'
+import {
+  addTab,
+  closeTab,
+  cycleTab,
+  initialTabs,
+  linkSaved,
+  MAX_TABS,
+  restoreTabs,
+  updateSql,
+} from './tabs'
 
 describe('editor tabs', () => {
   it('names new tabs with the lowest free number', () => {
@@ -45,5 +54,18 @@ describe('editor tabs', () => {
       activeId: 'a',
     })
     expect(restoreTabs('garbage').tabs).toHaveLength(1)
+  })
+
+  it('opens and links saved queries under their name', () => {
+    let state = addTab(initialTabs(), 'SELECT 1', { id: 's1', name: 'Top customers' })
+    expect(state.tabs[1]).toMatchObject({ title: 'Top customers', savedQueryId: 's1' })
+
+    state = linkSaved(state, state.tabs[0]!.id, { id: 's2', name: 'Orders today' })
+    expect(state.tabs[0]).toMatchObject({ title: 'Orders today', savedQueryId: 's2' })
+    expect(restoreTabs(state).tabs.map((t) => t.savedQueryId)).toEqual(['s2', 's1'])
+    expect(
+      restoreTabs({ tabs: [{ id: 'a', title: 'x', sql: '', savedQueryId: 7 }], activeId: 'a' })
+        .tabs[0],
+    ).toEqual({ id: 'a', title: 'x', sql: '' })
   })
 })

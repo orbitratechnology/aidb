@@ -32,6 +32,11 @@ export const COMMANDS = {
   exportTable: 'export_table',
   analyzeSql: 'analyze_sql',
   runQuery: 'run_query',
+  listQueryHistory: 'list_query_history',
+  deleteQueryHistoryEntry: 'delete_query_history_entry',
+  listSavedQueries: 'list_saved_queries',
+  saveQuery: 'save_query',
+  deleteSavedQuery: 'delete_saved_query',
 } as const
 
 export type CommandName = (typeof COMMANDS)[keyof typeof COMMANDS]

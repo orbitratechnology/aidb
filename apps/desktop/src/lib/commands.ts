@@ -10,11 +10,13 @@ import {
   CredentialBackendSchema,
   DiagnosticsInfoSchema,
   ExportOutcomeSchema,
+  HistoryEntrySchema,
   ObjectDetailsSchema,
   ImportOutcomeSchema,
   ImportPreviewSchema,
   ParsedConnectionUriSchema,
   QueryRunSchema,
+  SavedQuerySchema,
   SqlAnalysisSchema,
   StorageSummarySchema,
   TableExportOutcomeSchema,
@@ -33,6 +35,7 @@ import {
   type DiagnosticsInfo,
   type ExportOutcome,
   type ExportRequest,
+  type HistoryEntry,
   type ImportOutcome,
   type ImportPreview,
   type ObjectDetails,
@@ -42,6 +45,8 @@ import {
   type ParsedConnectionUri,
   type QueryRequest,
   type QueryRun,
+  type SavedQuery,
+  type SavedQueryDraft,
   type SettingsPatch,
   type SqlAnalysis,
   type StorageSummary,
@@ -237,6 +242,37 @@ export function analyzeSql(sql: string): Promise<SqlAnalysis> {
  */
 export function runQuery(connectionId: ConnectionId, request: QueryRequest): Promise<QueryRun> {
   return callCommand(COMMANDS.runQuery, QueryRunSchema, { connectionId, request })
+}
+
+/** SQL run on a connection, newest first, optionally filtered by text. */
+export function listQueryHistory(
+  connectionId: ConnectionId,
+  search?: string,
+): Promise<HistoryEntry[]> {
+  return callCommand(COMMANDS.listQueryHistory, z.array(HistoryEntrySchema), {
+    connectionId,
+    search: search || null,
+  })
+}
+
+export function deleteQueryHistoryEntry(id: number): Promise<void> {
+  return callCommand(COMMANDS.deleteQueryHistoryEntry, z.null(), { id }).then(() => undefined)
+}
+
+/** Saved queries, most recently changed first, optionally filtered by name or text. */
+export function listSavedQueries(search?: string): Promise<SavedQuery[]> {
+  return callCommand(COMMANDS.listSavedQueries, z.array(SavedQuerySchema), {
+    search: search || null,
+  })
+}
+
+/** Creates a saved query, or updates the one named by `draft.id`. */
+export function saveQuery(draft: SavedQueryDraft): Promise<SavedQuery> {
+  return callCommand(COMMANDS.saveQuery, SavedQuerySchema, { draft })
+}
+
+export function deleteSavedQuery(id: string): Promise<void> {
+  return callCommand(COMMANDS.deleteSavedQuery, z.null(), { id }).then(() => undefined)
 }
 
 /** Asks the database to stop a running read. `false` if it already finished. */

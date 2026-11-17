@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-delete-query-history-entry"
+description = "Enables the delete_query_history_entry command without any pre-configured scope."
+commands.allow = ["delete_query_history_entry"]
+
+[[permission]]
+identifier = "deny-delete-query-history-entry"
+description = "Denies the delete_query_history_entry command without any pre-configured scope."
+commands.deny = ["delete_query_history_entry"]

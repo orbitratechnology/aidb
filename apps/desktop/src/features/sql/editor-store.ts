@@ -5,6 +5,7 @@ import {
   closeTab,
   cycleTab,
   initialTabs,
+  linkSaved,
   restoreTabs,
   selectTab,
   updateSql,
@@ -12,7 +13,8 @@ import {
 } from './tabs'
 
 type Actions = {
-  add: (sql?: string) => void
+  add: (sql?: string, saved?: { id: string; name: string }) => void
+  linkSaved: (id: string, saved: { id: string; name: string }) => void
   close: (id: string) => void
   select: (id: string) => void
   cycle: (step: 1 | -1) => void
@@ -69,7 +71,8 @@ export const useEditorTabs = create<TabsState & Actions>()(
   persist(
     (set) => ({
       ...initialTabs(),
-      add: (sql) => set((state) => addTab(state, sql)),
+      add: (sql, saved) => set((state) => addTab(state, sql, saved)),
+      linkSaved: (id, saved) => set((state) => linkSaved(state, id, saved)),
       close: (id) => set((state) => closeTab(state, id)),
       select: (id) => set((state) => selectTab(state, id)),
       cycle: (step) => set((state) => cycleTab(state, step)),

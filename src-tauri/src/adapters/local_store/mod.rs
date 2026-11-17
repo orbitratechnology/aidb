@@ -5,6 +5,7 @@
 //! data. Secrets and query results are never stored here.
 
 mod connections;
+mod library;
 mod maintenance;
 mod schema_cache;
 mod settings;
@@ -21,6 +22,7 @@ use thiserror::Error;
 use crate::errors::{AppError, ErrorCode};
 
 pub use connections::ConnectionProfiles;
+pub use library::{LIST_LIMIT, QueryHistory, SavedQueries};
 pub use maintenance::{ClearTarget, Maintenance, StorageSummary};
 pub use schema_cache::{SchemaCache, SchemaCacheRecord};
 pub use settings::Settings;
@@ -148,6 +150,16 @@ impl LocalStore {
     }
 
     #[must_use]
+    pub fn query_history(&self) -> QueryHistory<'_> {
+        QueryHistory::new(&self.pool)
+    }
+
+    #[must_use]
+    pub fn saved_queries(&self) -> SavedQueries<'_> {
+        SavedQueries::new(&self.pool)
+    }
+
+    #[must_use]
     pub fn maintenance(&self) -> Maintenance<'_> {
         Maintenance::new(&self.pool)
     }
@@ -236,11 +248,18 @@ mod tests {
     use super::test_support::temp_store;
     use super::*;
 
+    fn latest_version() -> i64 {
+        MIGRATOR.iter().map(|m| m.version).max().unwrap_or_default()
+    }
+
     #[tokio::test]
     async fn a_new_database_is_migrated_to_the_latest_schema() {
         let (_dir, store) = temp_store().await;
 
-        assert_eq!(store.schema_version().await.expect("version"), 1);
+        assert_eq!(
+            store.schema_version().await.expect("version"),
+            latest_version()
+        );
         assert!(store.path().ends_with(DATABASE_FILE));
     }
 
@@ -274,7 +293,10 @@ mod tests {
 
         let reopened = LocalStore::open(dir.path()).await.expect("second open");
 
-        assert_eq!(reopened.schema_version().await.expect("version"), 1);
+        assert_eq!(
+            reopened.schema_version().await.expect("version"),
+            latest_version()
+        );
         let theme: Option<String> = reopened.settings().get("ui.theme").await.expect("read");
         assert_eq!(theme.as_deref(), Some("dark"));
         assert!(!backup_path(reopened.path(), 1).exists());

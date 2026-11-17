@@ -27,6 +27,7 @@ import {
 import { Skeleton } from '@/components/ui/skeleton'
 import { Spinner } from '@/components/ui/spinner'
 import { useEditorTabs } from '@/features/sql/editor-store'
+import { HISTORY_KEY } from '@/features/sql/library-view'
 import { clearLocalData, getStorageSummary } from '@/lib/commands'
 import { LoadError } from '@/components/shared/load-error'
 import { SettingsSection } from '../settings-section'
@@ -62,6 +63,18 @@ const ROWS: readonly Row[] = [
     title: 'Saved queries',
     description: 'Kept until you delete them.',
     noun: { one: 'query', other: 'queries' },
+  },
+  {
+    key: 'queryHistory',
+    title: 'Query history',
+    description: 'Statements run from the SQL editor, with passwords and keys removed.',
+    noun: { one: 'entry', other: 'entries' },
+    clear: {
+      target: 'query_history',
+      action: 'Clear history',
+      confirmTitle: 'Clear query history?',
+      consequence: 'They are removed from this device. Saved queries are kept.',
+    },
   },
   {
     key: 'agentTasks',
@@ -164,7 +177,12 @@ function ClearButton({ spec, count, noun }: { spec: ClearSpec; count: number; no
     onSuccess: ({ removed }) => toast.success(`Removed ${describeCount(removed, noun)}`),
     onError: (error) =>
       toast.error(`Couldn't ${spec.action.toLowerCase()}`, { description: error.message }),
-    onSettled: () => queryClient.invalidateQueries({ queryKey: STORAGE_QUERY_KEY }),
+    onSettled: async () => {
+      await queryClient.invalidateQueries({ queryKey: STORAGE_QUERY_KEY })
+      if (spec.target === 'query_history') {
+        await queryClient.invalidateQueries({ queryKey: [HISTORY_KEY] })
+      }
+    },
   })
 
   return (

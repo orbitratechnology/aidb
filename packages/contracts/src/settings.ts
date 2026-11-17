@@ -54,12 +54,14 @@ const count = z.number().int().nonnegative()
 export const StorageSummarySchema = z.object({
   connections: count,
   savedQueries: count,
+  queryHistory: count,
   agentTasks: count,
   auditRecords: count,
   schemaCacheEntries: count,
 }) satisfies z.ZodType<StorageSummary>
 
 export const ClearTargetSchema = z.enum([
+  'query_history',
   'task_history',
   'audit_log',
   'schema_cache',

@@ -33,6 +33,11 @@
     "allow-cancel-operation",
     "allow-export-table",
     "allow-analyze-sql",
-    "allow-run-query"
+    "allow-run-query",
+    "allow-list-query-history",
+    "allow-delete-query-history-entry",
+    "allow-list-saved-queries",
+    "allow-save-query",
+    "allow-delete-saved-query"
   ]
 }

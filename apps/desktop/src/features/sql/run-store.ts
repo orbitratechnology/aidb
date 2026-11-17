@@ -4,18 +4,24 @@ import { create } from 'zustand'
 /** A line and column in the draft, from 1. */
 export type DraftPosition = { line: number; column: number }
 
-/** A run of one tab. Positions in `outcome` are within the text that ran; these are in the draft. */
+/** A finished run. Positions in `outcome` are within the text that ran; these are in the draft. */
+export type DoneRun = {
+  status: 'done'
+  connectionId: ConnectionId
+  outcome: QueryRun
+  /** The statement as it ran, so further pages run exactly the same text. */
+  text: string
+  /** Where that text starts in the draft. */
+  start: DraftPosition
+  /** Where the reported problem is in the draft, if any. */
+  problemAt: DraftPosition | null
+  /** Offsets of the pages before this one. */
+  previous: number[]
+}
+
+/** A run of one tab. While another page loads, the page being left stays on screen. */
 export type TabRun =
-  | { status: 'running'; connectionId: ConnectionId; operationId: string }
-  | {
-      status: 'done'
-      connectionId: ConnectionId
-      outcome: QueryRun
-      /** Where the text that ran starts in the draft. */
-      start: DraftPosition
-      /** Where the reported problem is in the draft, if any. */
-      problemAt: DraftPosition | null
-    }
+  { status: 'running'; connectionId: ConnectionId; operationId: string; shown?: DoneRun } | DoneRun
 
 type RunStore = {
   runs: Record<string, TabRun>

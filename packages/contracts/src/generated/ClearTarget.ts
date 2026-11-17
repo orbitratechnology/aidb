@@ -3,4 +3,4 @@
 /**
  * Local data the user can clear without touching connections or saved queries.
  */
-export type ClearTarget = "task_history" | "audit_log" | "schema_cache";
+export type ClearTarget = "query_history" | "task_history" | "audit_log" | "schema_cache";

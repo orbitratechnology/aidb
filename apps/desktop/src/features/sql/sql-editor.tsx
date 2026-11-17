@@ -3,7 +3,9 @@ import {
   autocompletion,
   closeBrackets,
   closeBracketsKeymap,
+  closeCompletion,
   completionKeymap,
+  completionStatus,
 } from '@codemirror/autocomplete'
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands'
 import { PostgreSQL, sql, type SQLNamespace } from '@codemirror/lang-sql'
@@ -190,6 +192,11 @@ export function SqlEditor({
       EditorView.updateListener.of((update) => {
         if (update.docChanged) {
           latest.current.onChange(shownTab.current, update.state.doc.toString())
+        }
+        // Completion opens after a short delay, so it can open after focus has moved on (to a
+        // button or dialog), which `closeOnBlur` does not catch.
+        if (!update.view.hasFocus && completionStatus(update.state) !== null) {
+          queueMicrotask(() => closeCompletion(update.view))
         }
       }),
     ]

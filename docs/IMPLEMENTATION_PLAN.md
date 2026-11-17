@@ -100,7 +100,7 @@ Status legend: `[x]` done · `[~]` in progress · `[ ]` not started
       multi-statement guard, row/byte caps, statement timeout, cancellation, error positions.
 - [x] **6.2 SQL editor.** Lazy-loaded CodeMirror 6 with PostgreSQL highlighting, tabs with
       preserved drafts, run selection or current statement, keyboard shortcuts.
-- [ ] **6.3 Results and history.** Results panel, pagination, errors, safe query history and saved
+- [x] **6.3 Results and history.** Results panel, pagination, errors, safe query history and saved
       queries.
 
 ## Phase 7: AI providers

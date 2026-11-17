@@ -16,6 +16,7 @@ mod connections;
 mod diagnostics;
 mod export;
 mod external;
+mod library;
 mod query;
 mod sessions;
 mod settings;
@@ -55,7 +56,12 @@ pub(crate) fn handler<R: Runtime>() -> impl Fn(Invoke<R>) -> bool + Send + Sync 
         table_data::cancel_operation,
         export::export_table,
         query::analyze_sql,
-        query::run_query
+        query::run_query,
+        library::list_query_history,
+        library::delete_query_history_entry,
+        library::list_saved_queries,
+        library::save_query,
+        library::delete_saved_query
     ]
 }
 
@@ -374,6 +380,63 @@ mod tests {
             analysis["statements"][1].get("text").is_none(),
             "internal fields stay internal"
         );
+    }
+
+    #[test]
+    fn saved_queries_and_history_work_over_ipc() {
+        use crate::adapters::credentials::Credentials;
+        use crate::adapters::local_store::test_support::temp_store;
+        use crate::state::{AppPaths, AppState, LocalStoreState};
+
+        let (dir, store) = tauri::async_runtime::block_on(temp_store());
+        let state = AppState::new(
+            AppPaths::under(dir.path()),
+            LocalStoreState::Ready(store),
+            Credentials::session_only("tests"),
+        );
+        let app = mock_builder()
+            .manage(state)
+            .invoke_handler(handler())
+            .build(tauri::generate_context!())
+            .expect("mock app builds");
+        let main = window(&app, "main");
+
+        let saved = invoke(
+            &main,
+            "save_query",
+            json!({ "draft": { "name": " Top customers ", "sql": "SELECT 1" } }),
+        )
+        .expect("save_query");
+        let id = saved["id"].as_str().expect("id").to_owned();
+        let renamed = invoke(
+            &main,
+            "save_query",
+            json!({ "draft": { "id": id, "name": "Best customers", "sql": "SELECT 2" } }),
+        )
+        .expect("update");
+        let listed = invoke(&main, "list_saved_queries", json!({ "search": "best" }))
+            .expect("list_saved_queries");
+        invoke(&main, "delete_saved_query", json!({ "id": id })).expect("delete_saved_query");
+        let gone = invoke(&main, "delete_saved_query", json!({ "id": id })).expect_err("gone");
+        let invalid = invoke(
+            &main,
+            "save_query",
+            json!({ "draft": { "name": "", "sql": "SELECT 1" } }),
+        )
+        .expect_err("no name");
+        let history = invoke(
+            &main,
+            "list_query_history",
+            json!({ "connectionId": "6f1c2a40-0000-4000-8000-000000000000" }),
+        )
+        .expect("list_query_history");
+
+        assert_eq!(saved["name"], "Top customers");
+        assert_eq!(renamed["sql"], "SELECT 2");
+        assert_eq!(listed.as_array().map(Vec::len), Some(1));
+        assert_eq!(gone["code"], "not_found");
+        assert_eq!(invalid["code"], "invalid_input");
+        assert_eq!(history, json!([]));
     }
 
     #[test]

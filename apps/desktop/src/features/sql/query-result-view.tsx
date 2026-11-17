@@ -1,16 +1,25 @@
 import { useMemo, useState } from 'react'
 import type { QueryRun, StatementKind } from '@aidb/contracts'
 import { useTable } from '@tanstack/react-table'
-import { BanIcon, CircleAlertIcon, InfoIcon, Rows3Icon } from 'lucide-react'
+import {
+  BanIcon,
+  ChevronLeftIcon,
+  ChevronRightIcon,
+  CircleAlertIcon,
+  InfoIcon,
+  Rows3Icon,
+  TextCursorInputIcon,
+} from 'lucide-react'
 import { EmptyState } from '@/components/shared/status-states'
-import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
+import { Alert, AlertAction, AlertDescription, AlertTitle } from '@/components/ui/alert'
+import { Button } from '@/components/ui/button'
 import { useMediaQuery } from '@/hooks/use-media-query'
-import { pluralize } from '@/features/connections/format'
 import { DataGrid } from '@/features/data/data-grid'
 import { EMPTY_ROWS, gridColumns, gridFeatures } from '@/features/data/grid-table'
 import { RecordList } from '@/features/data/record-list'
 import { RowDetailSheet } from '@/features/data/row-detail-sheet'
 import { truncatedKeys } from '@/features/data/table-view'
+import { rowSummary } from './paging'
 import type { DraftPosition } from './run-store'
 
 const GRID_QUERY = '(min-width: 640px)'
@@ -28,19 +37,39 @@ function where(position: DraftPosition | null): string {
   return position ? ` (line ${position.line}, column ${position.column})` : ''
 }
 
+/** Moving between pages of a result. Each page runs the statement again. */
+export type Pager = {
+  page: number
+  onPrevious: (() => void) | null
+  onNext: (() => void) | null
+}
+
+type Props = {
+  outcome: QueryRun
+  start: DraftPosition
+  problemAt: DraftPosition | null
+  /** Another page is loading: the rows shown are the page being left. */
+  busy: boolean
+  pager: Pager
+  onShowProblem: () => void
+}
+
+function ShowInEditor({ onClick }: { onClick: () => void }) {
+  return (
+    <AlertAction>
+      <Button variant="outline" size="sm" className="max-sm:min-h-11" onClick={onClick}>
+        <TextCursorInputIcon data-icon="inline-start" />
+        Show in editor
+      </Button>
+    </AlertAction>
+  )
+}
+
 /**
  * The outcome of the last run: rows, a refusal, or the database's error. Positions shown are in
  * the draft, not in the text that ran.
  */
-export function QueryResultView({
-  outcome,
-  start,
-  problemAt,
-}: {
-  outcome: QueryRun
-  start: DraftPosition
-  problemAt: DraftPosition | null
-}) {
+export function QueryResultView({ outcome, start, problemAt, busy, pager, onShowProblem }: Props) {
   if (outcome.status === 'refused') {
     return (
       <div className="p-4">
@@ -53,6 +82,7 @@ export function QueryResultView({
             {outcome.message}
             {where(problemAt)}
           </AlertDescription>
+          {problemAt && <ShowInEditor onClick={onShowProblem} />}
         </Alert>
       </div>
     )
@@ -81,19 +111,26 @@ export function QueryResultView({
             {outcome.message}
             {where(problemAt)}
           </AlertDescription>
+          {problemAt && <ShowInEditor onClick={onShowProblem} />}
         </Alert>
       </div>
     )
   }
-  return <Rows result={outcome} startLine={start.line} />
+  return (
+    <Rows key={outcome.offset} result={outcome} startLine={start.line} busy={busy} pager={pager} />
+  )
 }
 
 function Rows({
   result,
   startLine,
+  busy,
+  pager,
 }: {
   result: Extract<QueryRun, { status: 'completed' }>
   startLine: number
+  busy: boolean
+  pager: Pager
 }) {
   const grid = useMediaQuery(GRID_QUERY)
   const [detail, setDetail] = useState<{ row: number; column?: string } | null>(null)
@@ -107,12 +144,8 @@ function Rows({
     columnResizeMode: 'onChange',
   })
 
-  const summary = [
-    result.hasMore
-      ? `First ${pluralize(result.rows.length, 'row', 'rows')}`
-      : pluralize(result.rows.length, 'row', 'rows'),
-    `${result.elapsedMs.toLocaleString()} ms`,
-  ].join(' · ')
+  const summary = `${rowSummary(result)} · ${result.elapsedMs.toLocaleString()} ms`
+  const paged = pager.onPrevious !== null || pager.onNext !== null
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -121,13 +154,38 @@ function Rows({
           {summary}
         </span>
         <span className="text-muted-foreground">Statement at line {startLine}</span>
-        {(result.hasMore || result.byteLimitReached) && (
+        {result.hasMore && (
           <span className="flex items-center gap-1.5 text-muted-foreground">
             <InfoIcon aria-hidden className="size-4" />
             {result.byteLimitReached
               ? 'More rows matched; this page stopped at the result size limit.'
               : 'More rows matched than one page holds.'}
           </span>
+        )}
+        {paged && (
+          <nav aria-label="Result pages" className="ml-auto flex items-center gap-1">
+            <Button
+              variant="outline"
+              size="sm"
+              className="max-sm:min-h-11"
+              disabled={busy || !pager.onPrevious}
+              onClick={pager.onPrevious ?? undefined}
+            >
+              <ChevronLeftIcon data-icon="inline-start" />
+              Previous
+            </Button>
+            <span className="px-2 text-muted-foreground tabular-nums">Page {pager.page}</span>
+            <Button
+              variant="outline"
+              size="sm"
+              className="max-sm:min-h-11"
+              disabled={busy || !pager.onNext}
+              onClick={pager.onNext ?? undefined}
+            >
+              Next
+              <ChevronRightIcon data-icon="inline-end" />
+            </Button>
+          </nav>
         )}
       </div>
       {result.columns.length === 0 || result.rows.length === 0 ? (
@@ -147,14 +205,14 @@ function Rows({
           table={table}
           page={result}
           truncated={truncated}
-          busy={false}
+          busy={busy}
           onOpenRow={(row, column) => setDetail({ row, column })}
         />
       ) : (
         <RecordList
           page={result}
           truncated={truncated}
-          busy={false}
+          busy={busy}
           onOpenRow={(row) => setDetail({ row })}
         />
       )}

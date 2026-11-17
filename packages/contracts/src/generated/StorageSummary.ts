@@ -3,4 +3,4 @@
 /**
  * Row counts per kind of local data. Never row contents.
  */
-export type StorageSummary = { connections: number, savedQueries: number, agentTasks: number, auditRecords: number, schemaCacheEntries: number, };
+export type StorageSummary = { connections: number, savedQueries: number, queryHistory: number, agentTasks: number, auditRecords: number, schemaCacheEntries: number, };

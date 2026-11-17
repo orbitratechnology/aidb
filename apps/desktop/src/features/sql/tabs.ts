@@ -1,5 +1,5 @@
-/** One editor tab: a named SQL draft. */
-export type EditorTab = { id: string; title: string; sql: string }
+/** One editor tab: a named SQL draft, possibly linked to a saved query. */
+export type EditorTab = { id: string; title: string; sql: string; savedQueryId?: string }
 
 export type TabsState = { tabs: EditorTab[]; activeId: string }
 
@@ -25,10 +25,29 @@ export function initialTabs(): TabsState {
   return { tabs: [tab], activeId: tab.id }
 }
 
-export function addTab(state: TabsState, sql = ''): TabsState {
+export function addTab(
+  state: TabsState,
+  sql = '',
+  saved?: { id: string; name: string },
+): TabsState {
   if (state.tabs.length >= MAX_TABS) return state
-  const tab = { id: newId(), title: nextTitle(state.tabs), sql: sql.slice(0, MAX_DRAFT_CHARS) }
+  const tab: EditorTab = {
+    id: newId(),
+    title: saved?.name ?? nextTitle(state.tabs),
+    sql: sql.slice(0, MAX_DRAFT_CHARS),
+    ...(saved ? { savedQueryId: saved.id } : {}),
+  }
   return { tabs: [...state.tabs, tab], activeId: tab.id }
+}
+
+/** Links a tab to the saved query it was saved as, taking the query's name. */
+export function linkSaved(state: TabsState, id: string, saved: { id: string; name: string }) {
+  return {
+    ...state,
+    tabs: state.tabs.map((tab) =>
+      tab.id === id ? { ...tab, title: saved.name, savedQueryId: saved.id } : tab,
+    ),
+  }
 }
 
 /** Closes a tab; its right neighbour (or else its left) becomes active. Never leaves none. */
@@ -79,7 +98,12 @@ export function restoreTabs(stored: unknown): TabsState {
         typeof tab.sql === 'string',
     )
     .slice(0, MAX_TABS)
-    .map((tab) => ({ ...tab, sql: tab.sql.slice(0, MAX_DRAFT_CHARS) }))
+    .map(({ id, title, sql, savedQueryId }) => ({
+      id,
+      title,
+      sql: sql.slice(0, MAX_DRAFT_CHARS),
+      ...(typeof savedQueryId === 'string' ? { savedQueryId } : {}),
+    }))
   if (valid.length === 0) return initialTabs()
   const active = valid.some((tab) => tab.id === activeId) ? (activeId as string) : valid[0]!.id
   return { tabs: valid, activeId: active }

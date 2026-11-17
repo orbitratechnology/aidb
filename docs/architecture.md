@@ -90,22 +90,23 @@ SQLite through SQLx (`src-tauri/src/adapters/local_store/`), schema in
 | `app_settings`          | JSON preferences, one key per section (`appearance`, `safety`)          | `Settings`           |
 | `connection_profiles`   | Connection settings, environment, read-only flag, credential-store ref  | `ConnectionProfiles` |
 | `provider_profiles`     | AI provider settings and credential-store ref                           | with task 7.2        |
-| `saved_queries`         | User-authored SQL                                                       | with task 6.3        |
+| `saved_queries`         | User-authored SQL, named; kept until deleted                            | `SavedQueries`       |
+| `query_history`         | Statements run from the editor, redacted, newest 1,000 kept             | `QueryHistory`       |
 | `agent_tasks`           | Task summaries and plans                                                | with task 8.2        |
 | `operation_audit`       | Redacted operation records; append-only (updates rejected by a trigger) | with task 9.3        |
 | `schema_cache_metadata` | Cache freshness per connection; never row data                          | with task 5.1        |
 | `migration_records`     | Applied migration files, hashes and outcomes                            | with task 11.2       |
 
 Rules: `STRICT` tables with CHECK constraints mirroring domain limits; WAL journal; foreign keys
-on; deleting a connection removes its cache but keeps saved queries, tasks, audit and migration
-history (detached). Secrets and query results are never stored.
+on; deleting a connection removes its cache and query history but keeps saved queries, tasks,
+audit and migration history (detached). Secrets and query results are never stored.
 
 Settings are stored per section and validated in Rust on save. Loading is lenient: a section that
 is unreadable or out of range falls back to its defaults (logged), so a damaged preference cannot
 lock the user out.
 
-`Maintenance` reports row counts for Settings › Storage and clears agent task history, the audit
-log or the schema cache when the user confirms. Connections and saved queries are not cleared
+`Maintenance` reports row counts for Settings › Storage and clears query history, agent task
+history, the audit log or the schema cache when the user confirms. Connections and saved queries are not cleared
 from there.
 
 ## IPC contract
@@ -284,6 +285,17 @@ Current commands: `app_info`, `diagnostics`, `open_external_url`, `get_settings`
   database's message and hint, SQLSTATE, error code and position mapped back to the submitted
   text). Only problems outside the statement, such as a closed connection, are app errors. The
   SQL text is never logged; the log records counts, timings and SQLSTATEs.
+- **Paging**: a later page runs the same statement text again with a new offset. Only first pages
+  (offset 0) are recorded in history.
+- **History** (`services::library`): after each first-page run, refusals included, the core
+  records the statement text, outcome, row count, elapsed time and error code for the connection.
+  The text is redacted first (the shared secret patterns plus `PASSWORD '...'` in role
+  statements) and cut at 100,000 characters; the newest 1,000 entries are kept. A failure to
+  record is logged (without the text) and never fails the run. The webview cannot write history,
+  only list (newest first, searchable, 200 at a time), delete entries or clear it.
+- **Saved queries**: named SQL (name up to 200 characters, text up to 1 MB) created, updated,
+  listed, searched and deleted through `save_query`, `list_saved_queries` and
+  `delete_saved_query`. They are never run on their own.
 
 ## Frontend
 
@@ -329,8 +341,13 @@ Current commands: `app_info`, `diagnostics`, `open_external_url`, `get_settings`
   tabs. Refusals and errors are marked in the editor at the reported position (only while the
   text is unchanged) and shown above the result with the line and column in the draft. Tabs and
   drafts persist in webview local storage (writes debounced); results stay in memory for the
-  session. Results use the data grid without header sorting; paging, history and saved queries
-  follow in 6.3.
+  session. Results use the data grid without header sorting, with Previous and Next when more rows
+  matched (each page runs the statement again; the page being left stays dimmed until the next
+  arrives). Errors and refusals with a position offer "Show in editor", which puts the cursor
+  there. Save (Ctrl/Cmd+Alt+S) names the tab's SQL in a dialog, or updates the saved query the tab
+  was opened from. The Library sheet has History (this connection's runs, with the outcome in
+  words and an icon) and Saved tabs, each searchable; Open puts the SQL in a new tab (a saved
+  query's tab, if one is open, is selected instead) and never runs it.
 - **Copy and export**: the row detail sheet copies a single value or the whole row (as JSON,
   with the same typing rules as the JSON export); Ctrl/Cmd+C copies the focused grid row. Values
   cut at 2,000 characters are copied as loaded, and the confirmation says so. The Export menu
@@ -347,12 +364,12 @@ Current commands: `app_info`, `diagnostics`, `open_external_url`, `get_settings`
 
 ## Data on disk
 
-| What                    | Where                                                                                                                                                                                                            |
-| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Local metadata database | `aidb.sqlite3` in the Tauri app data directory, e.g. `~/.local/share/com.orbitratech.aidb/` on Linux; `aidb.sqlite3.v<N>.bak` is written before each schema upgrade                                              |
-| Logs                    | Tauri app log directory, e.g. `~/.local/share/com.orbitratech.aidb/logs/` on Linux                                                                                                                               |
-| Secrets                 | OS credential store (service `com.orbitratech.aidb`, entries such as `connection:<id>`), or memory for the session when no store is available                                                                    |
-| Webview storage         | Webview local storage inside the app data directory; holds a copy of the saved theme (so the first frame paints in the right colors) and the SQL editor tabs with their drafts (cleared from Settings › Storage) |
+| What                    | Where                                                                                                                                                                                                                                  |
+| ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Local metadata database | `aidb.sqlite3` in the Tauri app data directory, e.g. `~/.local/share/com.orbitratech.aidb/` on Linux; `aidb.sqlite3.v<N>.bak` is written before each schema upgrade                                                                    |
+| Logs                    | Tauri app log directory, e.g. `~/.local/share/com.orbitratech.aidb/logs/` on Linux                                                                                                                                                     |
+| Secrets                 | OS credential store (service `com.orbitratech.aidb`, entries such as `connection:<id>`), or memory for the session when no store is available                                                                                          |
+| Webview storage         | Webview local storage inside the app data directory; holds a copy of the saved theme (so the first frame paints in the right colors) and the SQL editor tabs with their drafts and saved-query links (cleared from Settings › Storage) |
 
 Directories follow each OS's conventions through Tauri's path resolver; exact locations per
 platform are documented with release hardening (task 12.3).

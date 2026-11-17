@@ -7,6 +7,7 @@ pub mod connection_uri;
 pub mod connections;
 pub mod database;
 pub mod export;
+pub mod library;
 pub mod query;
 pub mod settings;
 pub mod sql;

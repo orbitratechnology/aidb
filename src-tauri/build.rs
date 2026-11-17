@@ -30,6 +30,11 @@ const COMMANDS: &[&str] = &[
     "export_table",
     "analyze_sql",
     "run_query",
+    "list_query_history",
+    "delete_query_history_entry",
+    "list_saved_queries",
+    "save_query",
+    "delete_saved_query",
 ];
 
 fn main() {

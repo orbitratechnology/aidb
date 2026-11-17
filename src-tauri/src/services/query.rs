@@ -5,8 +5,8 @@
 use std::time::Instant;
 
 use super::sessions::{Sessions, not_connected};
-use super::settings;
 use super::table_data::page_limits;
+use super::{library, settings};
 use crate::adapters::database::{DatabaseAdapter, DatabaseSession};
 use crate::adapters::local_store::LocalStore;
 use crate::domain::connections::ConnectionId;
@@ -42,27 +42,46 @@ pub async fn run<A: DatabaseAdapter>(
     id: ConnectionId,
     request: QueryRequest,
 ) -> AppResult<QueryRun> {
+    let first_page = request.offset == 0;
+    let (run, ran) = execute(store, sessions, id, &request).await?;
+    // Later pages re-run the same statement; history records it once.
+    if first_page && !ran.trim().is_empty() {
+        library::record(store, id, &ran, &run).await;
+    }
+    Ok(run)
+}
+
+/// Runs the request; returns the outcome and the text it is about (the one statement, or the
+/// whole submission when it was refused before one could be picked).
+async fn execute<A: DatabaseAdapter>(
+    store: &LocalStore,
+    sessions: &Sessions<A>,
+    id: ConnectionId,
+    request: &QueryRequest,
+) -> AppResult<(QueryRun, String)> {
     request.validate()?;
     let session = sessions.get(id).ok_or_else(not_connected)?;
     let analysis = sql::analyze(&request.sql);
     if let Some(problem) = analysis.problem {
-        return Ok(QueryRun::Refused(QueryRefusal {
+        let refusal = QueryRun::Refused(QueryRefusal {
             message: problem.message,
             kind: None,
             position: problem.position,
-        }));
+        });
+        return Ok((refusal, request.sql.clone()));
     }
     let statement = match analysis.statements.as_slice() {
         [] => {
-            return Ok(QueryRun::Refused(QueryRefusal {
+            let refusal = QueryRun::Refused(QueryRefusal {
                 message: "There is no statement to run.".into(),
                 kind: None,
                 position: None,
-            }));
+            });
+            return Ok((refusal, String::new()));
         }
         [one] => one,
         [_, second, ..] => {
-            return Ok(QueryRun::Refused(QueryRefusal {
+            let refusal = QueryRun::Refused(QueryRefusal {
                 message: format!(
                     "This holds {} statements. Run one at a time: select it, or place the cursor \
                      in it.",
@@ -70,15 +89,17 @@ pub async fn run<A: DatabaseAdapter>(
                 ),
                 kind: None,
                 position: Some(second.span.start),
-            }));
+            });
+            return Ok((refusal, request.sql.clone()));
         }
     };
     let (Some(shape), None) = (statement.shape, &statement.reason) else {
-        return Ok(QueryRun::Refused(QueryRefusal {
+        let refusal = QueryRun::Refused(QueryRefusal {
             message: statement.reason.clone().unwrap_or_default(),
             kind: Some(statement.kind),
             position: statement.problem_at.or(Some(statement.span.start)),
-        }));
+        });
+        return Ok((refusal, request.sql.clone()));
     };
 
     let limits = page_limits(&settings::load(store).await?.safety);
@@ -96,7 +117,7 @@ pub async fn run<A: DatabaseAdapter>(
     match outcome {
         Ok(rows) => {
             tracing::info!(connection = %id, rows = rows.rows.len(), elapsed_ms, "query ran");
-            Ok(QueryRun::Completed(QueryResult {
+            let run = QueryRun::Completed(QueryResult {
                 statement: statement.span,
                 columns: rows.columns,
                 rows: rows.rows,
@@ -106,7 +127,8 @@ pub async fn run<A: DatabaseAdapter>(
                 byte_limit_reached: rows.byte_limit_reached,
                 cell_char_limit: CELL_CHAR_LIMIT,
                 elapsed_ms,
-            }))
+            });
+            Ok((run, statement.text.clone()))
         }
         Err(error) => {
             let index = TextIndex::new(&request.sql);
@@ -117,13 +139,14 @@ pub async fn run<A: DatabaseAdapter>(
             let message = redact(error.message()).into_owned();
             let sqlstate = error.sqlstate().map(str::to_owned);
             tracing::info!(connection = %id, sqlstate = ?sqlstate, elapsed_ms, "query failed");
-            Ok(QueryRun::Failed(QueryFailure {
+            let run = QueryRun::Failed(QueryFailure {
                 code: AppError::from(error).code(),
                 message,
                 sqlstate,
                 position,
                 statement: statement.span,
-            }))
+            });
+            Ok((run, statement.text.clone()))
         }
     }
 }
@@ -229,6 +252,56 @@ mod tests {
         assert_eq!(failure.sqlstate.as_deref(), Some("42703"));
         let at = failure.position.expect("position");
         assert_eq!((at.line, at.column), (2, 8), "character 8 of the statement");
+    }
+
+    #[tokio::test]
+    async fn first_runs_are_recorded_in_history_with_secrets_redacted() {
+        let (_dir, store) = temp_store().await;
+        let profile = store
+            .connections()
+            .insert(
+                &crate::domain::connections::ConnectionDraft::new("Orders", "db", "orders", "me")
+                    .validated()
+                    .expect("valid"),
+            )
+            .await
+            .expect("insert");
+        let (_, sessions) = sessions();
+        sessions.open(profile.id, target("db")).await.expect("open");
+
+        run(&store, &sessions, profile.id, request("SELECT 1"))
+            .await
+            .expect("read");
+        run(
+            &store,
+            &sessions,
+            profile.id,
+            request("ALTER ROLE app PASSWORD 'hunter2'"),
+        )
+        .await
+        .expect("refused");
+        let mut second_page = request("SELECT 1");
+        second_page.offset = 500;
+        run(&store, &sessions, profile.id, second_page)
+            .await
+            .expect("page");
+
+        let history = store
+            .query_history()
+            .list(profile.id, None, 50)
+            .await
+            .expect("history");
+        let statuses: Vec<_> = history.iter().map(|e| e.status).collect();
+        assert_eq!(
+            statuses,
+            [
+                crate::domain::library::HistoryStatus::Refused,
+                crate::domain::library::HistoryStatus::Completed
+            ],
+            "later pages are not recorded again"
+        );
+        assert_eq!(history[0].sql, "ALTER ROLE app PASSWORD '[redacted]'");
+        assert_eq!(history[1].row_count, Some(1));
     }
 
     #[tokio::test]

@@ -62,13 +62,13 @@ docs/                     plan, architecture, security, decisions
 
 Layering, from the IPC edge inward:
 
-| Layer      | Responsibility                                                                                                                                              | Status                                                                  |
-| ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
-| `commands` | Deserialize and validate input, call a service, map errors to `AppError`. No business logic.                                                                | Implemented                                                             |
-| `services` | Use cases that coordinate domain rules and adapters (connect, run query, apply approved change).                                                            | `connection_secrets`, `connections`, `sessions`, `settings` implemented |
-| `domain`   | Types and rules with no I/O: connection profiles, database capabilities and limits, policy classification, approvals, plans, migrations.                    | Connections, database types, settings implemented; rest _Planned_       |
-| `adapters` | I/O: `local_store` (SQLite), `credentials` (OS keychain), `files` (dialogs), `database` (engine traits) with `postgres` (SQLx); `ai_providers` (HTTP) next. | Implemented except `ai_providers` (7.1)                                 |
-| `events`   | Typed core-to-UI events and channels (connection status, streaming results, agent progress).                                                                | _Planned_ (with the first emitter)                                      |
+| Layer      | Responsibility                                                                                                                                         | Status                                                                  |
+| ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------- |
+| `commands` | Deserialize and validate input, call a service, map errors to `AppError`. No business logic.                                                           | Implemented                                                             |
+| `services` | Use cases that coordinate domain rules and adapters (connect, run query, apply approved change).                                                       | `connection_secrets`, `connections`, `sessions`, `settings` implemented |
+| `domain`   | Types and rules with no I/O: connection profiles, database capabilities and limits, policy classification, approvals, plans, migrations.               | Connections, database types, settings implemented; rest _Planned_       |
+| `adapters` | I/O: `local_store` (SQLite), `credentials` (OS keychain), `files` (dialogs), `database` (engine traits) with `postgres` (SQLx); `ai_providers` (HTTP). | Implemented                                                             |
+| `events`   | Typed core-to-UI events and channels (connection status, streaming results, agent progress).                                                           | _Planned_ (with the first emitter)                                      |
 
 Cross-cutting modules that exist today:
 
@@ -296,6 +296,50 @@ Current commands: `app_info`, `diagnostics`, `open_external_url`, `get_settings`
 - **Saved queries**: named SQL (name up to 200 characters, text up to 1 MB) created, updated,
   listed, searched and deleted through `save_query`, `list_saved_queries` and
   `delete_saved_query`. They are never run on their own.
+
+## AI providers
+
+Provider-independent conversations live in `domain::ai`; `adapters::ai_providers` speaks each
+API; `services::ai::chat` runs one request. No command uses them yet: provider profiles and
+"Test provider" arrive in 7.2, the settings UI in 7.3 and the agent in 8.x.
+
+- **Conversation model**: a `ChatRequest` holds the model, system instructions, messages (text,
+  tool calls, tool results and opaque provider data), tools with JSON Schemas, an output format
+  (text, or JSON following a schema) and an output-token limit. `validate` rejects requests no
+  provider could take (no model, not starting with the user, bad or duplicate tool names,
+  non-object schemas). A `ChatResponse` is the assistant message to append as is, the stop
+  reason, usage and the model that answered.
+- **Untrusted output**: tool arguments that are not valid JSON are kept as `Malformed` and never
+  run; `runnable_tool_calls` is empty when a turn was refused or cut off at the token limit,
+  since arguments may be incomplete. The agent still checks every call against its registry.
+- **`AiProvider` trait**: `capabilities`, `list_models` and `chat`, which streams text and
+  finished tool calls to a callback and returns the full response. Dropping the future closes
+  the connection, which is how a request is cancelled; `services::ai::chat` adds a cancel signal
+  and a time limit around it. `ProviderClient` picks an adapter at run time.
+- **OpenAI-compatible adapter**: `POST {base}/chat/completions` with `stream: true` and usage in
+  the stream; covers OpenAI, Ollama, LM Studio, llama.cpp and vLLM. Tool calls and the
+  structured-output mode (`json_schema`, `json_object`, or the schema in the instructions) are
+  settings, since servers differ. Tool-call fragments are joined by index; missing ids are
+  filled in; `stop` after tool calls counts as a tool turn.
+- **Anthropic adapter**: `POST /v1/messages` with `anthropic-version: 2026-10-21`, `x-api-key`,
+  automatic prompt caching and `output_config.format` for JSON schemas. Reasoning blocks (with
+  their signatures) are returned as provider data and sent back unchanged on the next turn;
+  tool results are placed first in the message that answers the calls. No sampling settings
+  are sent (that API version rejects them). The output limit defaults to 32,000 tokens.
+- **Transport**: reqwest with rustls on the `ring` provider and the operating system's trust
+  store (platform verifier); no redirects followed; 15 s connect timeout and an idle timeout per
+  profile; requests to this machine bypass any proxy. Connection failures and 408/409/429/5xx
+  answers are retried up to twice with backoff before any response starts, honoring
+  `retry-after` (up to 10 s) and `x-should-retry`; a stream is never replayed.
+- **Bounds**: 1 MB per streamed event, 4 MB per response, 64 tool calls per response, 2 MB for
+  model lists and error bodies, 1,000 models listed.
+- **Errors**: `ProviderError` kinds (invalid request, unauthorized, forbidden, not found, rate
+  limited, overloaded, server, network, timeout, cancelled, invalid response) map to `AppError`
+  codes with a retry hint. Provider messages are redacted, cut to 300 characters, and scrubbed
+  of the adapter's own API key.
+- **Contract tests**: `tests/ai_providers.rs` runs the same checks against any configured
+  endpoint (models, streaming, a tool round trip, JSON output, cancellation); ignored by
+  default and driven by `AIDB_TEST_OPENAI_*` and `AIDB_TEST_ANTHROPIC_*` variables.
 
 ## Frontend
 

@@ -6,15 +6,15 @@
 //! Layout:
 //! - `commands`: thin IPC adapters (validation, delegation, error mapping).
 //! - [`domain`]: types and rules without I/O (connection profiles, ...).
-//! - [`adapters`]: I/O: the local SQLite metadata store and the OS credential store.
+//! - [`adapters`]: I/O: the local SQLite metadata store, the OS credential store, files,
+//!   PostgreSQL and AI providers.
 //! - [`services`]: use cases that coordinate domain rules and adapters.
 //! - [`errors`]: the error contract sent to the webview, and secret redaction.
 //! - [`logging`]: local, redacted diagnostic logs.
 //! - `navigation`: keeps the webview on the app's own content.
 //! - [`state`]: state shared with commands.
 //!
-//! More adapters (PostgreSQL, AI providers) land as each feature is built. Commands never hold
-//! business logic.
+//! Commands never hold business logic.
 
 pub mod adapters;
 mod app;

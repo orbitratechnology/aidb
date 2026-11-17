@@ -1,6 +1,7 @@
 //! Use cases that coordinate domain rules with adapters. Commands call these; they never reach
 //! adapters directly.
 
+pub mod ai;
 pub mod catalog;
 pub mod connection_secrets;
 pub mod connections;

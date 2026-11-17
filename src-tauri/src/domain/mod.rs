@@ -1,6 +1,7 @@
 //! Domain types and rules. No I/O happens here: adapters persist these types and services
 //! coordinate them.
 
+pub mod ai;
 pub mod catalog;
 pub mod connection_transfer;
 pub mod connection_uri;

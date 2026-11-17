@@ -7,6 +7,7 @@
 use std::time::Duration;
 
 use secrecy::ExposeSecret;
+use sqlx::ConnectOptions;
 use sqlx::postgres::{PgConnectOptions, PgSslMode};
 
 use crate::adapters::database::ConnectTarget;
@@ -27,7 +28,10 @@ pub(super) fn build(target: &ConnectTarget) -> PgConnectOptions {
         .password
         .as_ref()
         .map_or("", |password| password.expose_secret());
+    // SQLx logs slow statements with their full text by default. Editor SQL and table names must
+    // stay out of the log, so statement logging is off.
     let mut options = PgConnectOptions::new_without_pgpass()
+        .disable_statement_logging()
         .host(&settings.host)
         .port(settings.port)
         .username(&settings.username)
@@ -116,6 +120,15 @@ mod tests {
                     -c idle_in_transaction_session_timeout=300000ms \
                     -c default_transaction_read_only=on";
         assert!(sent.ends_with(ours), "{sent}");
+    }
+
+    #[test]
+    fn statements_are_never_logged_by_the_driver() {
+        // No password is set, so the options' Debug output is safe to inspect here.
+        let options = format!("{:?}", build(&target(None)));
+
+        assert!(options.contains("statements_level: Off"), "{options}");
+        assert!(options.contains("slow_statements_level: Off"), "{options}");
     }
 
     #[test]

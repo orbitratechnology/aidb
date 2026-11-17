@@ -242,7 +242,7 @@ export function TableDataView({
 
       {page && (
         <RowDetailSheet
-          object={object}
+          source={`${object.schema}.${object.name}`}
           page={page}
           truncated={truncated}
           row={detail?.row ?? null}

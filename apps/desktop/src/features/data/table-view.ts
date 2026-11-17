@@ -1,5 +1,11 @@
 import type { Filter, FilterOperator, PageColumn, TablePage, ValueKind } from '@aidb/contracts'
 
+/** Rows to show in the grid, from a table page or a query result. */
+export type ResultSet = Pick<
+  TablePage,
+  'columns' | 'rows' | 'offset' | 'truncatedCells' | 'cellCharLimit'
+>
+
 export const OPERATOR_LABELS: Record<FilterOperator, string> = {
   equals: 'equals',
   not_equals: 'does not equal',
@@ -91,7 +97,7 @@ export function rowRange(offset: number, rows: number): string {
 }
 
 /** Keys of cut cells, `row:column`, for quick lookup. */
-export function truncatedKeys(page: TablePage): Set<string> {
+export function truncatedKeys(page: ResultSet): Set<string> {
   return new Set(page.truncatedCells.map(({ row, column }) => `${row}:${column}`))
 }
 

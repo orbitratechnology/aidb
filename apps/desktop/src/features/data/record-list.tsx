@@ -1,8 +1,8 @@
 import { useRef } from 'react'
-import type { TablePage } from '@aidb/contracts'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { cn } from '@/lib/utils'
 import { CellValue } from './cell-value'
+import type { ResultSet } from './table-view'
 
 /** Fields shown on each card; the row details show all of them. */
 const PREVIEW_FIELDS = 4
@@ -17,7 +17,7 @@ export function RecordList({
   busy,
   onOpenRow,
 }: {
-  page: TablePage
+  page: ResultSet
   truncated: Set<string>
   busy: boolean
   onOpenRow: (row: number) => void

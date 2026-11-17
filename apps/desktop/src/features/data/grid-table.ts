@@ -24,16 +24,33 @@ export type GridRow = Array<string | null>
 
 export const EMPTY_ROWS: GridRow[] = []
 
-/** Column ids are the column names, which are unique within a table. */
-export function gridColumns(columns: PageColumn[]): Array<ColumnDef<GridFeatures, GridRow>> {
+/**
+ * Column ids: the column names, unique within a table. Query results can repeat a name, so later
+ * duplicates get their position appended (`a (2)`).
+ */
+export function columnIds(columns: PageColumn[]): string[] {
+  const seen = new Set<string>()
+  return columns.map((column, index) => {
+    const id = seen.has(column.name) ? `${column.name} (${index + 1})` : column.name
+    seen.add(id)
+    return id
+  })
+}
+
+/** Column definitions for the grid. `sortable: false` turns header sorting off. */
+export function gridColumns(
+  columns: PageColumn[],
+  { sortable = true }: { sortable?: boolean } = {},
+): Array<ColumnDef<GridFeatures, GridRow>> {
+  const ids = columnIds(columns)
   return columns.map((column, index) => ({
-    id: column.name,
+    id: ids[index] ?? column.name,
     header: column.name,
     accessorFn: (row: GridRow) => row[index],
     size: defaultColumnWidth(column.kind),
     minSize: 60,
     maxSize: 1200,
-    enableSorting: canSort(column),
+    enableSorting: sortable && canSort(column),
     sortDescFirst: false,
   }))
 }

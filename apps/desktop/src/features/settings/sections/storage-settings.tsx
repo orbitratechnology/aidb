@@ -26,6 +26,7 @@ import {
 } from '@/components/ui/item'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Spinner } from '@/components/ui/spinner'
+import { useEditorTabs } from '@/features/sql/editor-store'
 import { clearLocalData, getStorageSummary } from '@/lib/commands'
 import { LoadError } from '@/components/shared/load-error'
 import { SettingsSection } from '../settings-section'
@@ -131,6 +132,8 @@ export function StorageSettings() {
               <StorageRow row={row} count={summary.data[row.key]} />
             </Fragment>
           ))}
+          <ItemSeparator className="my-0" />
+          <DraftsRow />
         </ItemGroup>
       )}
     </SettingsSection>
@@ -196,5 +199,61 @@ function ClearButton({ spec, count, noun }: { spec: ClearSpec; count: number; no
         </AlertDialogFooter>
       </AlertDialogContent>
     </AlertDialog>
+  )
+}
+
+/** SQL editor drafts live in the webview's local storage, not the database file. */
+function DraftsRow() {
+  const tabs = useEditorTabs((state) => state.tabs)
+  const clearDrafts = useEditorTabs((state) => state.clearDrafts)
+  const noun = { one: 'draft', other: 'drafts' }
+  const count = tabs.filter((tab) => tab.sql.trim() !== '').length
+
+  return (
+    <Item role="listitem">
+      <ItemContent>
+        <ItemTitle>SQL editor drafts</ItemTitle>
+        <ItemDescription>The text of open editor tabs, kept between sessions.</ItemDescription>
+      </ItemContent>
+      <ItemActions className="w-full justify-between sm:w-auto">
+        <span className="text-sm text-muted-foreground tabular-nums">
+          {describeCount(count, noun)}
+        </span>
+        <AlertDialog>
+          <AlertDialogTrigger asChild>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={count === 0}
+              className="min-h-11 sm:min-h-0"
+            >
+              <Trash2Icon data-icon="inline-start" />
+              Clear drafts
+            </Button>
+          </AlertDialogTrigger>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Clear SQL editor drafts?</AlertDialogTitle>
+              <AlertDialogDescription>
+                {describeCount(count, noun)}. Every editor tab is closed and its text removed from
+                this device. This cannot be undone.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <AlertDialogAction
+                variant="destructive"
+                onClick={() => {
+                  clearDrafts()
+                  toast.success(`Removed ${describeCount(count, noun)}`)
+                }}
+              >
+                Clear drafts
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+      </ItemActions>
+    </Item>
   )
 }

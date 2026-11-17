@@ -321,6 +321,16 @@ Current commands: `app_info`, `diagnostics`, `open_external_url`, `get_settings`
   previous, next) and remembers the offsets visited, since a page can stop early at the size
   limit. Notices explain early stops, unstable order (no primary key) and columns the role
   cannot read. Below 640px rows are cards that open the same detail sheet.
+- **SQL editor** (SQL): CodeMirror 6 in a small React wrapper, loaded only with the SQL screen.
+  PostgreSQL highlighting with theme-token colors, table-name completion from the schema
+  catalog, search, bracket matching and undo per tab (one editor; each tab keeps its own state).
+  Ctrl/Cmd+Enter runs the selection or, without one, the statement at the cursor (found with
+  `analyze_sql`); Escape or Cancel stops it; Ctrl/Cmd+Alt+N, W and arrows open, close and switch
+  tabs. Refusals and errors are marked in the editor at the reported position (only while the
+  text is unchanged) and shown above the result with the line and column in the draft. Tabs and
+  drafts persist in webview local storage (writes debounced); results stay in memory for the
+  session. Results use the data grid without header sorting; paging, history and saved queries
+  follow in 6.3.
 - **Copy and export**: the row detail sheet copies a single value or the whole row (as JSON,
   with the same typing rules as the JSON export); Ctrl/Cmd+C copies the focused grid row. Values
   cut at 2,000 characters are copied as loaded, and the confirmation says so. The Export menu
@@ -337,12 +347,12 @@ Current commands: `app_info`, `diagnostics`, `open_external_url`, `get_settings`
 
 ## Data on disk
 
-| What                          | Where                                                                                                                                                               |
-| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Local metadata database       | `aidb.sqlite3` in the Tauri app data directory, e.g. `~/.local/share/com.orbitratech.aidb/` on Linux; `aidb.sqlite3.v<N>.bak` is written before each schema upgrade |
-| Logs                          | Tauri app log directory, e.g. `~/.local/share/com.orbitratech.aidb/logs/` on Linux                                                                                  |
-| Secrets                       | OS credential store (service `com.orbitratech.aidb`, entries such as `connection:<id>`), or memory for the session when no store is available                       |
-| Webview storage (theme cache) | Webview local storage inside the app data directory; holds a copy of the saved theme so the first frame paints in the right colors                                  |
+| What                    | Where                                                                                                                                                                                                            |
+| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Local metadata database | `aidb.sqlite3` in the Tauri app data directory, e.g. `~/.local/share/com.orbitratech.aidb/` on Linux; `aidb.sqlite3.v<N>.bak` is written before each schema upgrade                                              |
+| Logs                    | Tauri app log directory, e.g. `~/.local/share/com.orbitratech.aidb/logs/` on Linux                                                                                                                               |
+| Secrets                 | OS credential store (service `com.orbitratech.aidb`, entries such as `connection:<id>`), or memory for the session when no store is available                                                                    |
+| Webview storage         | Webview local storage inside the app data directory; holds a copy of the saved theme (so the first frame paints in the right colors) and the SQL editor tabs with their drafts (cleared from Settings › Storage) |
 
 Directories follow each OS's conventions through Tauri's path resolver; exact locations per
 platform are documented with release hardening (task 12.3).

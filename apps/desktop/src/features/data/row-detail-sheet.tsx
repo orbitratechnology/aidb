@@ -1,5 +1,4 @@
 import { useEffect, useRef } from 'react'
-import type { ObjectName, TablePage } from '@aidb/contracts'
 import { ChevronDownIcon, ChevronUpIcon, CopyIcon } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
@@ -11,13 +10,13 @@ import {
 } from '@/components/ui/sheet'
 import { cn } from '@/lib/utils'
 import { copyCell, copyRow } from './copy-actions'
-import { formatForDetail } from './table-view'
+import { formatForDetail, type ResultSet } from './table-view'
 
 const PREFORMATTED = new Set(['json', 'array', 'binary', 'other'])
 
 /** Every field of one row, with complex values laid out in full. */
 export function RowDetailSheet({
-  object,
+  source,
   page,
   truncated,
   row,
@@ -25,8 +24,9 @@ export function RowDetailSheet({
   onRowChange,
   onClose,
 }: {
-  object: ObjectName
-  page: TablePage
+  /** What the row comes from, such as `public.orders`. */
+  source: string
+  page: ResultSet
   truncated: Set<string>
   row: number | null
   focusColumn: string | undefined
@@ -55,9 +55,7 @@ export function RowDetailSheet({
             <SheetHeader className="flex-row items-center gap-2 border-b pr-12">
               <div className="flex min-w-0 flex-1 flex-col gap-1">
                 <SheetTitle>Row {page.offset + row + 1}</SheetTitle>
-                <SheetDescription className="truncate">
-                  {object.schema}.{object.name}
-                </SheetDescription>
+                <SheetDescription className="truncate">{source}</SheetDescription>
               </div>
               <Button
                 variant="outline"

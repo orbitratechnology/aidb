@@ -98,7 +98,7 @@ Status legend: `[x]` done · `[~]` in progress · `[ ]` not started
 
 - [x] **6.1 Statement classification and execution.** `sqlparser` classification, read-only mode,
       multi-statement guard, row/byte caps, statement timeout, cancellation, error positions.
-- [ ] **6.2 SQL editor.** Lazy-loaded CodeMirror 6 with PostgreSQL highlighting, tabs with
+- [x] **6.2 SQL editor.** Lazy-loaded CodeMirror 6 with PostgreSQL highlighting, tabs with
       preserved drafts, run selection or current statement, keyboard shortcuts.
 - [ ] **6.3 Results and history.** Results panel, pagination, errors, safe query history and saved
       queries.

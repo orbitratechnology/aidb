@@ -1,12 +1,13 @@
 import { useRef, useState, type KeyboardEvent } from 'react'
-import type { PageColumn, TablePage } from '@aidb/contracts'
+import type { PageColumn } from '@aidb/contracts'
 import type { ReactTable } from '@tanstack/react-table'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { ArrowDownIcon, ArrowUpIcon, ChevronsUpDownIcon } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { CellValue } from './cell-value'
 import { copyRow } from './copy-actions'
-import type { GridFeatures, GridRow } from './grid-table'
+import { columnIds, type GridFeatures, type GridRow } from './grid-table'
+import type { ResultSet } from './table-view'
 
 const ROW_HEIGHT = 36
 /** Height of the sticky header row, border included. Rows start below it. */
@@ -16,7 +17,7 @@ const PAGE_STEP = 10
 
 type GridProps = {
   table: ReactTable<GridFeatures, GridRow>
-  page: TablePage
+  page: ResultSet
   /** Keys of cut cells, `row:column`. */
   truncated: Set<string>
   busy: boolean
@@ -33,7 +34,7 @@ export function DataGrid({ table, page, truncated, busy, onOpenRow }: GridProps)
   const scrollRef = useRef<HTMLDivElement>(null)
   const rows = table.getRowModel().rows
   const [active, setActive] = useState(0)
-  const columnIndex = new Map(page.columns.map((column, index) => [column.name, index]))
+  const columnIndex = new Map(columnIds(page.columns).map((id, index) => [id, index]))
   const virtualizer = useVirtualizer({
     count: rows.length,
     getScrollElement: () => scrollRef.current,
@@ -128,10 +129,15 @@ export function DataGrid({ table, page, truncated, busy, onOpenRow }: GridProps)
                   >
                     <HeaderLabel
                       column={column}
-                      name={header.column.id}
+                      name={column?.name ?? header.column.id}
                       sorted={header.column.getIsSorted()}
                       sortIndex={table.state.sorting.length > 1 ? header.column.getSortIndex() : -1}
-                      onSort={header.column.getToggleSortingHandler()}
+                      // v9 returns a handler even for columns that cannot sort.
+                      onSort={
+                        header.column.getCanSort()
+                          ? header.column.getToggleSortingHandler()
+                          : undefined
+                      }
                     />
                     <div
                       aria-hidden
@@ -181,7 +187,7 @@ export function DataGrid({ table, page, truncated, busy, onOpenRow }: GridProps)
                       style={{ width: cell.column.getSize() }}
                       onClick={() => {
                         setActive(item.index)
-                        onOpenRow(item.index, cell.column.id)
+                        onOpenRow(item.index, column?.name)
                       }}
                     >
                       <CellValue

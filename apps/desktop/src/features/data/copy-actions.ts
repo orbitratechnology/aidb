@@ -1,7 +1,7 @@
-import type { TablePage } from '@aidb/contracts'
 import { toast } from 'sonner'
 import { copyText } from '@/lib/clipboard'
 import { rowAsJson } from './copy'
+import type { ResultSet } from './table-view'
 
 const CUT_HINT = 'Export the table to get complete values.'
 
@@ -12,7 +12,7 @@ function failed(error: unknown) {
 }
 
 /** Copies one row of the page as a JSON object. */
-export async function copyRow(page: TablePage, row: number, truncated: Set<string>) {
+export async function copyRow(page: ResultSet, row: number, truncated: Set<string>) {
   const values = page.rows[row]
   if (!values) return
   const cut = (column: number) => truncated.has(`${row}:${column}`)
@@ -30,7 +30,7 @@ export async function copyRow(page: TablePage, row: number, truncated: Set<strin
 }
 
 /** Copies one value as text. */
-export async function copyCell(page: TablePage, row: number, column: number, cut: boolean) {
+export async function copyCell(page: ResultSet, row: number, column: number, cut: boolean) {
   const value = page.rows[row]?.[column]
   const name = page.columns[column]?.name ?? ''
   if (value === null || value === undefined) return

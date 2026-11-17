@@ -17,6 +17,7 @@ mod diagnostics;
 mod export;
 mod external;
 mod library;
+mod providers;
 mod query;
 mod sessions;
 mod settings;
@@ -61,7 +62,14 @@ pub(crate) fn handler<R: Runtime>() -> impl Fn(Invoke<R>) -> bool + Send + Sync 
         library::delete_query_history_entry,
         library::list_saved_queries,
         library::save_query,
-        library::delete_saved_query
+        library::delete_saved_query,
+        providers::list_providers,
+        providers::create_provider,
+        providers::update_provider,
+        providers::delete_provider,
+        providers::save_provider_key,
+        providers::forget_provider_key,
+        providers::test_provider
     ]
 }
 
@@ -437,6 +445,68 @@ mod tests {
         assert_eq!(gone["code"], "not_found");
         assert_eq!(invalid["code"], "invalid_input");
         assert_eq!(history, json!([]));
+    }
+
+    #[test]
+    fn provider_profiles_work_over_ipc_without_echoing_keys() {
+        use crate::adapters::credentials::Credentials;
+        use crate::adapters::local_store::test_support::temp_store;
+        use crate::state::{AppPaths, AppState, LocalStoreState};
+
+        const KEY: &str = "sk-ant-ipc-test-key-0123456789";
+        let (dir, store) = tauri::async_runtime::block_on(temp_store());
+        let state = AppState::new(
+            AppPaths::under(dir.path()),
+            LocalStoreState::Ready(store),
+            Credentials::session_only("tests"),
+        );
+        let app = mock_builder()
+            .manage(state)
+            .invoke_handler(handler())
+            .build(tauri::generate_context!())
+            .expect("mock app builds");
+        let main = window(&app, "main");
+        let draft = json!({
+            "name": "Claude",
+            "kind": "anthropic",
+            "endpoint": null,
+            "model": "claude-opus-5-5",
+            "requestTimeoutSecs": 120,
+            "contextBudgetTokens": null,
+            "allowInsecureHttp": false,
+        });
+
+        let created = invoke(&main, "create_provider", json!({ "provider": draft }))
+            .expect("create_provider");
+        let id = created["id"].as_str().expect("id").to_owned();
+        let untested = invoke(&main, "test_provider", json!({ "id": id })).expect_err("no key");
+        let backend = invoke(&main, "save_provider_key", json!({ "id": id, "key": KEY }))
+            .expect("save_provider_key");
+        let listed = invoke(&main, "list_providers", json!({})).expect("list_providers");
+        let insecure = invoke(
+            &main,
+            "update_provider",
+            json!({ "id": id, "provider": {
+                "name": "Claude", "kind": "openai_compatible",
+                "endpoint": "http://198.51.100.7/v1", "model": "m",
+                "requestTimeoutSecs": 120, "contextBudgetTokens": null, "allowInsecureHttp": false,
+            }}),
+        )
+        .expect_err("needs consent");
+        let forgotten =
+            invoke(&main, "forget_provider_key", json!({ "id": id })).expect("forget_provider_key");
+        invoke(&main, "delete_provider", json!({ "id": id })).expect("delete_provider");
+        let gone = invoke(&main, "delete_provider", json!({ "id": id })).expect_err("gone");
+
+        assert_eq!(created["endpointUrl"], "https://api.anthropic.com/");
+        assert_eq!(created["key"], "not_saved");
+        assert_eq!(untested["code"], "invalid_input");
+        assert_eq!(backend, "session_only");
+        assert_eq!(listed[0]["key"], "session_only");
+        assert!(!listed.to_string().contains(KEY));
+        assert_eq!(insecure["code"], "invalid_input", "{insecure}");
+        assert_eq!(forgotten, true);
+        assert_eq!(gone["code"], "not_found");
     }
 
     #[test]

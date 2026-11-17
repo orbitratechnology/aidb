@@ -37,6 +37,13 @@ export const COMMANDS = {
   listSavedQueries: 'list_saved_queries',
   saveQuery: 'save_query',
   deleteSavedQuery: 'delete_saved_query',
+  listProviders: 'list_providers',
+  createProvider: 'create_provider',
+  updateProvider: 'update_provider',
+  deleteProvider: 'delete_provider',
+  saveProviderKey: 'save_provider_key',
+  forgetProviderKey: 'forget_provider_key',
+  testProvider: 'test_provider',
 } as const
 
 export type CommandName = (typeof COMMANDS)[keyof typeof COMMANDS]

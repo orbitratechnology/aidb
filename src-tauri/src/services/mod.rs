@@ -8,6 +8,7 @@ pub mod connections;
 #[cfg(test)]
 pub(crate) mod fakes;
 pub mod library;
+pub mod providers;
 pub mod query;
 pub mod sessions;
 pub mod settings;

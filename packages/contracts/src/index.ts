@@ -9,6 +9,8 @@ export type { Capabilities } from './generated/Capabilities'
 export type { CatalogOverview } from './generated/CatalogOverview'
 export type { CatalogSnapshot } from './generated/CatalogSnapshot'
 export type { CellRef } from './generated/CellRef'
+export type { CheckKind } from './generated/CheckKind'
+export type { CheckOutcome } from './generated/CheckOutcome'
 export type { ClearResult } from './generated/ClearResult'
 export type { ClearTarget } from './generated/ClearTarget'
 export type { Column } from './generated/Column'
@@ -38,8 +40,10 @@ export type { ImportPreview } from './generated/ImportPreview'
 export type { ImportStatus } from './generated/ImportStatus'
 export type { Index } from './generated/Index'
 export type { KeyConstraint } from './generated/KeyConstraint'
+export type { KeyStorage } from './generated/KeyStorage'
 export type { LocalStoreHealth } from './generated/LocalStoreHealth'
 export type { LocalStoreStatus } from './generated/LocalStoreStatus'
+export type { ModelInfo } from './generated/ModelInfo'
 export type { ObjectDetails } from './generated/ObjectDetails'
 export type { ObjectKind } from './generated/ObjectKind'
 export type { ObjectName } from './generated/ObjectName'
@@ -49,6 +53,13 @@ export type { PageColumn } from './generated/PageColumn'
 export type { PageRequest } from './generated/PageRequest'
 export type { ParsedConnectionUri } from './generated/ParsedConnectionUri'
 export type { PasswordStorage } from './generated/PasswordStorage'
+export type { ProviderCheck } from './generated/ProviderCheck'
+export type { ProviderDetails } from './generated/ProviderDetails'
+export type { ProviderDraft } from './generated/ProviderDraft'
+export type { ProviderFeatures } from './generated/ProviderFeatures'
+export type { ProviderId } from './generated/ProviderId'
+export type { ProviderPreset } from './generated/ProviderPreset'
+export type { ProviderTestReport } from './generated/ProviderTestReport'
 export type { QueryFailure } from './generated/QueryFailure'
 export type { QueryRefusal } from './generated/QueryRefusal'
 export type { QueryRequest } from './generated/QueryRequest'
@@ -71,6 +82,7 @@ export type { SqlProblem } from './generated/SqlProblem'
 export type { SslMode } from './generated/SslMode'
 export type { StatementKind } from './generated/StatementKind'
 export type { StorageSummary } from './generated/StorageSummary'
+export type { StructuredOutput } from './generated/StructuredOutput'
 export type { TableExportOutcome } from './generated/TableExportOutcome'
 export type { TablePage } from './generated/TablePage'
 export type { ThemePreference } from './generated/ThemePreference'
@@ -121,6 +133,20 @@ export {
 export { ERROR_CODES, ErrorCodeSchema, ErrorPayloadSchema } from './errors'
 export { ExportFormatSchema, TableExportOutcomeSchema } from './export'
 export { HistoryEntrySchema, HistoryStatusSchema, SavedQuerySchema } from './library'
+export {
+  CheckKindSchema,
+  CheckOutcomeSchema,
+  KeyStorageSchema,
+  ModelInfoSchema,
+  PROVIDER_LIMITS,
+  ProviderCheckSchema,
+  ProviderDetailsSchema,
+  ProviderDraftSchema,
+  ProviderFeaturesSchema,
+  ProviderPresetSchema,
+  ProviderTestReportSchema,
+  StructuredOutputSchema,
+} from './providers'
 export {
   AnalyzedStatementSchema,
   QueryFailureSchema,

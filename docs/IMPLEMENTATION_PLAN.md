@@ -108,7 +108,7 @@ Status legend: `[x]` done · `[~]` in progress · `[ ]` not started
 - [x] **7.1 Provider abstraction.** `AiProvider` trait (streaming, structured output, tool calls,
       cancellation, capabilities). OpenAI-compatible adapter (covers Ollama and local endpoints) and
       an Anthropic adapter.
-- [ ] **7.2 Provider profiles.** Storage with keyring-held API keys, endpoint trust policy (plain
+- [x] **7.2 Provider profiles.** Storage with keyring-held API keys, endpoint trust policy (plain
       HTTP only for loopback unless acknowledged), "Test provider" command.
 - [ ] **7.3 Provider settings UI.** Configure, test and disable AI; disclosure of what is sent.
 

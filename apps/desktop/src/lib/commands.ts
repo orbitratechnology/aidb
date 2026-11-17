@@ -8,6 +8,8 @@ import {
   ConnectionDetailsSchema,
   ConnectionTestReportSchema,
   CredentialBackendSchema,
+  ProviderDetailsSchema,
+  ProviderTestReportSchema,
   DiagnosticsInfoSchema,
   ExportOutcomeSchema,
   HistoryEntrySchema,
@@ -32,6 +34,10 @@ import {
   type ConnectionId,
   type ConnectionTestReport,
   type CredentialBackend,
+  type ProviderDetails,
+  type ProviderDraft,
+  type ProviderId,
+  type ProviderTestReport,
   type DiagnosticsInfo,
   type ExportOutcome,
   type ExportRequest,
@@ -291,4 +297,36 @@ export async function openExternalUrl(url: string): Promise<void> {
     throw new NativeError('invalid_input', 'Only web and email links can be opened.')
   }
   await callCommand(COMMANDS.openExternalUrl, z.null(), { url })
+}
+
+/** AI provider profiles, ordered by name. Never includes API keys. */
+export function listProviders(): Promise<ProviderDetails[]> {
+  return callCommand(COMMANDS.listProviders, z.array(ProviderDetailsSchema))
+}
+
+export function createProvider(provider: ProviderDraft): Promise<ProviderDetails> {
+  return callCommand(COMMANDS.createProvider, ProviderDetailsSchema, { provider })
+}
+
+export function updateProvider(id: ProviderId, provider: ProviderDraft): Promise<ProviderDetails> {
+  return callCommand(COMMANDS.updateProvider, ProviderDetailsSchema, { id, provider })
+}
+
+/** Deletes the profile and its API key. */
+export function deleteProvider(id: ProviderId): Promise<void> {
+  return callCommand(COMMANDS.deleteProvider, z.null(), { id }).then(() => undefined)
+}
+
+/** Sends the key once to the core, which keeps it in the OS credential store. */
+export function saveProviderKey(id: ProviderId, key: string): Promise<CredentialBackend> {
+  return callCommand(COMMANDS.saveProviderKey, CredentialBackendSchema, { id, key })
+}
+
+export function forgetProviderKey(id: ProviderId): Promise<boolean> {
+  return callCommand(COMMANDS.forgetProviderKey, z.boolean(), { id })
+}
+
+/** Sends a few short, fixed prompts to the provider and saves what it supports. */
+export function testProvider(id: ProviderId): Promise<ProviderTestReport> {
+  return callCommand(COMMANDS.testProvider, ProviderTestReportSchema, { id })
 }

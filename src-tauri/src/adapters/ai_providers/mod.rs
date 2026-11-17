@@ -26,6 +26,7 @@ use crate::domain::ai::{
     ChatEvent, ChatRequest, ChatResponse, MAX_RESPONSE_BYTES, MAX_TOOL_CALLS, ModelInfo,
     ProviderCapabilities,
 };
+use crate::domain::providers::is_loopback_url;
 use crate::errors::{AppError, ErrorCode, redact};
 use sse::{SseDecoder, SseError, SseEvent};
 
@@ -212,7 +213,7 @@ fn http_client(settings: &ProviderSettings) -> Result<reqwest::Client, ProviderE
         .connect_timeout(CONNECT_TIMEOUT)
         .read_timeout(settings.idle_timeout);
     // A local model stays local: requests to this machine never go through a proxy.
-    if is_loopback(&settings.base_url) {
+    if is_loopback_url(&settings.base_url) {
         builder = builder.no_proxy();
     }
     builder.build().map_err(|error| {
@@ -222,20 +223,6 @@ fn http_client(settings: &ProviderSettings) -> Result<reqwest::Client, ProviderE
             "The secure connection could not be set up.",
         )
     })
-}
-
-/// Whether `url` names this machine.
-#[must_use]
-pub fn is_loopback(url: &Url) -> bool {
-    match url.host() {
-        Some(url::Host::Domain(name)) => {
-            name.eq_ignore_ascii_case("localhost")
-                || name.to_ascii_lowercase().ends_with(".localhost")
-        }
-        Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
-        Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
-        None => false,
-    }
 }
 
 /// `path` under the API root, keeping the root's own path (`/v1`).
@@ -597,22 +584,6 @@ mod tests {
             endpoint(&base, "v1/messages").as_str(),
             "https://api.anthropic.com/v1/messages"
         );
-    }
-
-    #[test]
-    fn loopback_hosts_are_recognized() {
-        for (url, local) in [
-            ("http://localhost:11434/v1", true),
-            ("http://LOCALHOST", true),
-            ("http://ollama.localhost", true),
-            ("http://127.0.0.2:8080", true),
-            ("http://[::1]:8080", true),
-            ("http://10.0.0.5", false),
-            ("https://api.anthropic.com", false),
-            ("http://localhost.example.com", false),
-        ] {
-            assert_eq!(is_loopback(&Url::parse(url).expect("url")), local, "{url}");
-        }
     }
 
     #[test]

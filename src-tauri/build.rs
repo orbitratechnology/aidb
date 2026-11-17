@@ -35,6 +35,13 @@ const COMMANDS: &[&str] = &[
     "list_saved_queries",
     "save_query",
     "delete_saved_query",
+    "list_providers",
+    "create_provider",
+    "update_provider",
+    "delete_provider",
+    "save_provider_key",
+    "forget_provider_key",
+    "test_provider",
 ];
 
 fn main() {

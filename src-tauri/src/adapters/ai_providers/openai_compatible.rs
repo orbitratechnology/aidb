@@ -26,6 +26,17 @@ const MAX_MODELS: usize = 1000;
 pub struct OpenAiCompatibleOptions {
     pub tool_calls: bool,
     pub structured_output: StructuredOutput,
+    pub output_limit: OutputLimitField,
+}
+
+/// The request field that limits output tokens.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum OutputLimitField {
+    /// `max_tokens`, which Ollama, llama.cpp, vLLM and most servers read.
+    #[default]
+    MaxTokens,
+    /// `max_completion_tokens`, which OpenAI requires for its current models.
+    MaxCompletionTokens,
 }
 
 impl Default for OpenAiCompatibleOptions {
@@ -33,6 +44,7 @@ impl Default for OpenAiCompatibleOptions {
         Self {
             tool_calls: true,
             structured_output: StructuredOutput::JsonSchema,
+            output_limit: OutputLimitField::MaxTokens,
         }
     }
 }
@@ -136,7 +148,11 @@ impl OpenAiCompatibleProvider {
             }
         }
         if let Some(max) = request.max_output_tokens {
-            body.insert("max_tokens".into(), json!(max));
+            let field = match self.options.output_limit {
+                OutputLimitField::MaxTokens => "max_tokens",
+                OutputLimitField::MaxCompletionTokens => "max_completion_tokens",
+            };
+            body.insert(field.into(), json!(max));
         }
         Ok(Value::Object(body))
     }

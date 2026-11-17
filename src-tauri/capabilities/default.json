@@ -38,6 +38,13 @@
     "allow-delete-query-history-entry",
     "allow-list-saved-queries",
     "allow-save-query",
-    "allow-delete-saved-query"
+    "allow-delete-saved-query",
+    "allow-list-providers",
+    "allow-create-provider",
+    "allow-update-provider",
+    "allow-delete-provider",
+    "allow-save-provider-key",
+    "allow-forget-provider-key",
+    "allow-test-provider"
   ]
 }

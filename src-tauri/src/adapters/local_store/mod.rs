@@ -7,6 +7,7 @@
 mod connections;
 mod library;
 mod maintenance;
+mod providers;
 mod schema_cache;
 mod settings;
 
@@ -24,6 +25,7 @@ use crate::errors::{AppError, ErrorCode};
 pub use connections::ConnectionProfiles;
 pub use library::{LIST_LIMIT, QueryHistory, SavedQueries};
 pub use maintenance::{ClearTarget, Maintenance, StorageSummary};
+pub use providers::ProviderProfiles;
 pub use schema_cache::{SchemaCache, SchemaCacheRecord};
 pub use settings::Settings;
 
@@ -142,6 +144,11 @@ impl LocalStore {
     #[must_use]
     pub fn connections(&self) -> ConnectionProfiles<'_> {
         ConnectionProfiles::new(&self.pool)
+    }
+
+    #[must_use]
+    pub fn providers(&self) -> ProviderProfiles<'_> {
+        ProviderProfiles::new(&self.pool)
     }
 
     #[must_use]

@@ -23,6 +23,7 @@ pub const MAX_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
 #[serde(rename_all = "snake_case")]
 pub enum ProviderKind {
     /// `POST /chat/completions` as OpenAI defines it; also Ollama, LM Studio, llama.cpp, vLLM.
+    #[serde(rename = "openai_compatible")]
     OpenAiCompatible,
     /// Anthropic's Messages API.
     Anthropic,
@@ -30,6 +31,7 @@ pub enum ProviderKind {
 
 /// How a provider can be made to answer in JSON that follows a schema.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 #[serde(rename_all = "snake_case")]
 pub enum StructuredOutput {
     /// The provider constrains output to the schema.
@@ -55,6 +57,7 @@ pub struct ProviderCapabilities {
 
 /// A model the provider offers.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 #[serde(rename_all = "camelCase")]
 pub struct ModelInfo {
     pub id: String,

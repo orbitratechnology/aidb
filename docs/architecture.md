@@ -89,7 +89,7 @@ SQLite through SQLx (`src-tauri/src/adapters/local_store/`), schema in
 | ----------------------- | ----------------------------------------------------------------------- | -------------------- |
 | `app_settings`          | JSON preferences, one key per section (`appearance`, `safety`)          | `Settings`           |
 | `connection_profiles`   | Connection settings, environment, read-only flag, credential-store ref  | `ConnectionProfiles` |
-| `provider_profiles`     | AI provider settings and credential-store ref                           | with task 7.2        |
+| `provider_profiles`     | AI provider settings, credential-store ref, last checked features       | `ProviderProfiles`   |
 | `saved_queries`         | User-authored SQL, named; kept until deleted                            | `SavedQueries`       |
 | `query_history`         | Statements run from the editor, redacted, newest 1,000 kept             | `QueryHistory`       |
 | `agent_tasks`           | Task summaries and plans                                                | with task 8.2        |
@@ -300,8 +300,31 @@ Current commands: `app_info`, `diagnostics`, `open_external_url`, `get_settings`
 ## AI providers
 
 Provider-independent conversations live in `domain::ai`; `adapters::ai_providers` speaks each
-API; `services::ai::chat` runs one request. No command uses them yet: provider profiles and
-"Test provider" arrive in 7.2, the settings UI in 7.3 and the agent in 8.x.
+API; `services::ai::chat` runs one request. Profiles (`domain::providers`, `services::providers`)
+say which service to use; the settings UI arrives in 7.3 and the agent in 8.x.
+
+- **Profiles**: a name, a kind (`anthropic`, `openai`, `ollama` or `openai_compatible`), an
+  optional endpoint (each kind but the generic one has a default: `https://api.anthropic.com`,
+  `https://api.openai.com/v1`, `http://localhost:11434/v1`), a model, a timeout (5–600 s, the
+  longest wait for the provider to start or continue an answer) and an optional context budget.
+  Endpoints must be `http(s)` URLs with a host and no credentials, query or fragment.
+- **Endpoint trust**: HTTPS, or plain HTTP to this machine; plain HTTP to another machine needs
+  `allowInsecureHttp`, which is cleared whenever it is not needed. The rule is checked on save
+  and again each time a client is built from a stored profile.
+- **API keys**: sent once to `save_provider_key` and kept in the OS credential store as
+  `provider:<id>` (session memory when no store answers), trimmed and checked to be printable
+  ASCII without spaces, at most 4 KB. Anthropic and OpenAI profiles need one before use;
+  deleting a profile deletes its key.
+- **Test provider** (`test_provider`): lists models (is the configured one offered?), asks for a
+  one-word answer, asks for a tool call, and asks for JSON following a schema, falling back from
+  JSON schemas to JSON mode to instructions on OpenAI-compatible servers. Fixed prompts only,
+  about 1,000 output tokens at most each. A rejected key or unreachable endpoint stops the test;
+  the rest are reported as passed, warning, failed or skipped. When the model answers, the
+  features found (tool calls, structured-output mode) are saved with the profile and used for
+  later requests; changing the kind, endpoint or model drops them.
+- **Commands**: `list_providers`, `create_provider`, `update_provider`, `delete_provider`,
+  `save_provider_key`, `forget_provider_key`, `test_provider`. Details never include the key
+  or its store reference.
 
 - **Conversation model**: a `ChatRequest` holds the model, system instructions, messages (text,
   tool calls, tool results and opaque provider data), tools with JSON Schemas, an output format
@@ -412,7 +435,7 @@ API; `services::ai::chat` runs one request. No command uses them yet: provider p
 | ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Local metadata database | `aidb.sqlite3` in the Tauri app data directory, e.g. `~/.local/share/com.orbitratech.aidb/` on Linux; `aidb.sqlite3.v<N>.bak` is written before each schema upgrade                                                                    |
 | Logs                    | Tauri app log directory, e.g. `~/.local/share/com.orbitratech.aidb/logs/` on Linux                                                                                                                                                     |
-| Secrets                 | OS credential store (service `com.orbitratech.aidb`, entries such as `connection:<id>`), or memory for the session when no store is available                                                                                          |
+| Secrets                 | OS credential store (service `com.orbitratech.aidb`, entries such as `connection:<id>` and `provider:<id>`), or memory for the session when no store is available                                                                      |
 | Webview storage         | Webview local storage inside the app data directory; holds a copy of the saved theme (so the first frame paints in the right colors) and the SQL editor tabs with their drafts and saved-query links (cleared from Settings › Storage) |
 
 Directories follow each OS's conventions through Tauri's path resolver; exact locations per

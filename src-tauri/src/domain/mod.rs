@@ -9,6 +9,7 @@ pub mod connections;
 pub mod database;
 pub mod export;
 pub mod library;
+pub mod providers;
 pub mod query;
 pub mod settings;
 pub mod sql;

@@ -207,8 +207,8 @@ async fn structured_output_follows_the_configured_mode() {
         let provider = provider(
             &server,
             OpenAiCompatibleOptions {
-                tool_calls: true,
                 structured_output: mode,
+                ..OpenAiCompatibleOptions::default()
             },
         );
         let (result, _) = chat(&provider, &request).await;
@@ -365,6 +365,7 @@ async fn tools_are_refused_when_the_server_has_none() {
         OpenAiCompatibleOptions {
             tool_calls: false,
             structured_output: StructuredOutput::Instructions,
+            output_limit: OutputLimitField::MaxCompletionTokens,
         },
     );
     let (result, _) = chat(&provider, &request()).await;
@@ -390,6 +391,29 @@ async fn oversized_answers_are_cut_off() {
         ProviderErrorKind::InvalidResponse
     );
     assert!(events.len() < 6);
+}
+
+#[tokio::test]
+async fn the_output_limit_uses_the_configured_field() {
+    let reply = || {
+        Reply::sse(&[
+            r#"data: {"choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":"stop"}]}"#,
+            "data: [DONE]",
+        ])
+    };
+    let mut server = TestServer::start(vec![reply()]).await;
+    let provider = provider(
+        &server,
+        OpenAiCompatibleOptions {
+            output_limit: OutputLimitField::MaxCompletionTokens,
+            ..OpenAiCompatibleOptions::default()
+        },
+    );
+    let (result, _) = chat(&provider, &request()).await;
+    assert!(result.is_ok());
+    let body = server.request().await.json();
+    assert_eq!(body["max_completion_tokens"], json!(512));
+    assert!(body.get("max_tokens").is_none());
 }
 
 #[tokio::test]

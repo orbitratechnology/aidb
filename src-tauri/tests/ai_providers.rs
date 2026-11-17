@@ -15,7 +15,8 @@
 //! # Optional: AIDB_TEST_ANTHROPIC_MODEL (default claude-opus-5-5), AIDB_TEST_ANTHROPIC_URL.
 //! ```
 //!
-//! These tests spend tokens on hosted providers: a few small requests per run.
+//! These tests spend tokens on hosted providers: a few small requests per run. The
+//! `*_profile_check` tests run "Test provider" on a saved profile against the same endpoints.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -26,11 +27,15 @@ use aidb_lib::adapters::ai_providers::{
     AiProvider, AnthropicProvider, OpenAiCompatibleProvider, ProviderClient, ProviderErrorKind,
     ProviderSettings,
 };
+use aidb_lib::adapters::credentials::Credentials;
+use aidb_lib::adapters::local_store::LocalStore;
 use aidb_lib::domain::ai::{
     ChatEvent, ChatRequest, Message, OutputFormat, Part, Role, StopReason, ToolInput, ToolResult,
     ToolSpec,
 };
+use aidb_lib::domain::providers::{ProviderDraft, ProviderPreset};
 use aidb_lib::services::ai::chat;
+use aidb_lib::services::providers::{self, CheckKind, CheckOutcome};
 use secrecy::SecretString;
 use serde_json::{Value, json};
 use tokio::sync::Notify;
@@ -250,4 +255,68 @@ async fn openai_compatible_contract() {
 #[ignore = "needs an Anthropic API key: set AIDB_TEST_ANTHROPIC_KEY"]
 async fn anthropic_contract() {
     contract(anthropic()).await;
+}
+
+/// Saves a profile for the endpoint in a temporary store and runs "Test provider" on it.
+async fn profile_check(draft: ProviderDraft, key: Option<String>) {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let store = LocalStore::open(dir.path()).await.expect("store");
+    let credentials = Credentials::session_only("contract tests");
+    let created = providers::create(&store, &credentials, draft)
+        .await
+        .expect("profile");
+    if let Some(key) = key {
+        providers::save_key(&store, &credentials, created.id, SecretString::from(key))
+            .await
+            .expect("key");
+    }
+
+    let report = providers::test(&store, &credentials, created.id)
+        .await
+        .expect("report");
+
+    for check in &report.checks {
+        assert!(
+            matches!(
+                check.outcome,
+                CheckOutcome::Passed | CheckOutcome::Warning | CheckOutcome::Skipped
+            ),
+            "{check:?}"
+        );
+    }
+    let answer = report
+        .checks
+        .iter()
+        .find(|c| c.kind == CheckKind::Answer)
+        .expect("answer check");
+    assert_eq!(answer.outcome, CheckOutcome::Passed, "{answer:?}");
+    let features = report.features.expect("features saved");
+    assert!(features.tool_calls, "{report:?}");
+    let saved = providers::list(&store, &credentials).await.expect("list");
+    assert_eq!(saved[0].features, features);
+    assert!(saved[0].checked_at.is_some());
+}
+
+#[tokio::test]
+#[ignore = "needs an OpenAI-compatible endpoint: set AIDB_TEST_OPENAI_URL and AIDB_TEST_OPENAI_MODEL"]
+async fn openai_compatible_profile_check() {
+    let url = env("AIDB_TEST_OPENAI_URL").expect("set AIDB_TEST_OPENAI_URL");
+    let model = env("AIDB_TEST_OPENAI_MODEL").expect("set AIDB_TEST_OPENAI_MODEL");
+    let draft = ProviderDraft {
+        endpoint: Some(url),
+        ..ProviderDraft::new("Contract", ProviderPreset::OpenAiCompatible, model)
+    };
+    profile_check(draft, env("AIDB_TEST_OPENAI_KEY")).await;
+}
+
+#[tokio::test]
+#[ignore = "needs an Anthropic API key: set AIDB_TEST_ANTHROPIC_KEY"]
+async fn anthropic_profile_check() {
+    let key = env("AIDB_TEST_ANTHROPIC_KEY").expect("set AIDB_TEST_ANTHROPIC_KEY");
+    let model = env("AIDB_TEST_ANTHROPIC_MODEL").unwrap_or_else(|| "claude-opus-5-5".to_owned());
+    let draft = ProviderDraft {
+        endpoint: env("AIDB_TEST_ANTHROPIC_URL"),
+        ..ProviderDraft::new("Contract", ProviderPreset::Anthropic, model)
+    };
+    profile_check(draft, Some(key)).await;
 }

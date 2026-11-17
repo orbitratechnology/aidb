@@ -15,6 +15,7 @@ use thiserror::Error;
 use zeroize::Zeroize;
 
 use crate::domain::connections::ConnectionId;
+use crate::domain::providers::ProviderId;
 use crate::errors::{AppError, ErrorCode};
 
 /// Service name under which every aidb secret is filed in the OS store.
@@ -33,6 +34,12 @@ impl SecretRef {
     #[must_use]
     pub fn connection(id: ConnectionId) -> Self {
         Self(format!("connection:{id}"))
+    }
+
+    /// The API key of a saved AI provider profile.
+    #[must_use]
+    pub fn provider(id: ProviderId) -> Self {
+        Self(format!("provider:{id}"))
     }
 
     #[must_use]

@@ -12,6 +12,7 @@ use thiserror::Error;
 use crate::domain::catalog::{CatalogOverview, ObjectDetails, ObjectName};
 use crate::domain::connections::ConnectionDraft;
 use crate::domain::database::{Capabilities, OperationId, ServerInfo, SessionLimits};
+use crate::domain::export::{ExportSummary, RowSink};
 use crate::domain::table_data::{PageLimits, PageRequest, TablePage};
 use crate::errors::{AppError, ErrorCode};
 
@@ -69,6 +70,34 @@ pub trait DatabaseSession: std::fmt::Debug + Send + Sync + 'static {
         request: &PageRequest,
         limits: PageLimits,
     ) -> impl Future<Output = Result<TablePage, DbError>> + Send;
+
+    /// Streams every row matching `request` (its offset and limit are ignored), up to `max_rows`,
+    /// to `sink`, with complete values, in a read-only transaction. Runs as
+    /// `request.operation_id` when given, so it can be cancelled.
+    fn export_rows(
+        &self,
+        request: &PageRequest,
+        max_rows: u32,
+        sink: &mut (dyn RowSink + Send),
+    ) -> impl Future<Output = Result<ExportSummary, ExportError>> + Send;
+}
+
+impl From<ExportError> for AppError {
+    fn from(error: ExportError) -> Self {
+        match error {
+            ExportError::Database(error) => error.into(),
+            ExportError::Write(error) => crate::adapters::files::FileError::Io(error).into(),
+        }
+    }
+}
+
+/// Why an export stopped: the database (or the request), or writing the output.
+#[derive(Debug, Error)]
+pub enum ExportError {
+    #[error(transparent)]
+    Database(DbError),
+    #[error("writing the export failed")]
+    Write(#[source] std::io::Error),
 }
 
 /// What went wrong, independent of the driver.

@@ -92,7 +92,7 @@ Status legend: `[x]` done · `[~]` in progress · `[ ]` not started
       safe type mapping (NULL, JSON/JSONB, arrays, UUID, numeric, timestamps, long text).
 - [x] **5.4 Data grid UI.** TanStack Table + Virtual grid with sticky headers, column
       visibility/resize, a cell and row detail panel, and a compact record list layout.
-- [ ] **5.5 Export and copy.** CSV and JSON export with visible truncation; copy cell and row.
+- [x] **5.5 Export and copy.** CSV and JSON export with visible truncation; copy cell and row.
 
 ## Phase 6: SQL editor and read execution
 

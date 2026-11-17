@@ -722,7 +722,9 @@ mod catalog {
 mod table_data {
     use std::sync::Arc;
 
+    use aidb_lib::adapters::database::ExportError;
     use aidb_lib::domain::catalog::ObjectName;
+    use aidb_lib::domain::export::{ExportFormat, ExportWriter};
     use aidb_lib::domain::table_data::{
         CELL_CHAR_LIMIT, Filter, FilterOperator, PageLimits, PageRequest, SortDirection, SortKey,
         TablePage, ValueKind,
@@ -762,6 +764,8 @@ mod table_data {
         INSERT INTO items SELECT g, 'item ' || lpad(g::text, 2, '0') FROM generate_series(1, 25) g;
         INSERT INTO items VALUES (26, '50%_off'), (27, '50x_off');
         CREATE TABLE numbers AS SELECT g AS n FROM generate_series(1, 5) g;
+        CREATE TABLE "left" (id integer PRIMARY KEY, "left" integer);
+        INSERT INTO "left" SELECT g, 13 - g FROM generate_series(1, 12) g;
         CREATE TABLE staff (id integer PRIMARY KEY, name text, salary numeric);
         INSERT INTO staff VALUES (1, 'Ada', 100);
         CREATE TABLE counter (n integer);
@@ -1245,6 +1249,174 @@ mod table_data {
         assert!(long.chars().all(|c| c == 'é'), "cut between characters");
         assert_eq!(page.truncated_cells.len(), 1);
         assert_eq!(cell(&page, 2, "body"), Some("plain"));
+        drop_scratch(&name, session).await;
+    }
+
+    fn export_to_text(writer: ExportWriter<Vec<u8>>) -> String {
+        String::from_utf8(writer.finish().expect("finish")).expect("utf-8")
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PostgreSQL: run scripts/postgres-fixture.sh start"]
+    async fn exports_stream_complete_values_in_order_up_to_the_cap() {
+        let (name, session) = scratch_database("aidb_pages", SCHEMA_SQL).await;
+        let mut long = request("samples");
+        long.filters = vec![filter("id", FilterOperator::Equals, Some("1"))];
+        let mut csv = ExportWriter::new(Vec::new(), ExportFormat::Csv);
+        let mut sorted = request("items");
+        sorted.filters = vec![filter("id", FilterOperator::Less, Some("4"))];
+        sorted.sort = vec![SortKey {
+            column: "id".into(),
+            direction: SortDirection::Desc,
+        }];
+        let mut json = ExportWriter::new(Vec::new(), ExportFormat::Json);
+        let mut capped = ExportWriter::new(Vec::new(), ExportFormat::Csv);
+
+        let long_summary = session
+            .export_rows(&long, 100, &mut csv)
+            .await
+            .expect("csv");
+        let sorted_summary = session
+            .export_rows(&sorted, 100, &mut json)
+            .await
+            .expect("json");
+        let capped_summary = session
+            .export_rows(&request("items"), 10, &mut capped)
+            .await
+            .expect("capped");
+
+        let csv = export_to_text(csv);
+        assert_eq!((long_summary.rows, long_summary.truncated), (1, false));
+        assert!(csv.starts_with("id,flag,amount,doc,raw,tags,grid,ref,at,day,body,"));
+        assert!(
+            csv.contains(&"é".repeat(5_000)),
+            "exports are not cut at the cell limit"
+        );
+        assert!(csv.contains(r#","{""a"": [1, 2]}","#), "quoted JSON text");
+        let rows: serde_json::Value = serde_json::from_str(&export_to_text(json)).expect("JSON");
+        assert_eq!(sorted_summary.rows, 3);
+        assert_eq!(
+            rows,
+            serde_json::json!([
+                {"id": 3, "label": "item 03"},
+                {"id": 2, "label": "item 02"},
+                {"id": 1, "label": "item 01"},
+            ])
+        );
+        assert_eq!((capped_summary.rows, capped_summary.truncated), (10, true));
+        assert_eq!(
+            export_to_text(capped).lines().count(),
+            11,
+            "header and ten rows"
+        );
+        drop_scratch(&name, session).await;
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PostgreSQL: run scripts/postgres-fixture.sh start"]
+    async fn exports_keep_exact_numbers_and_typed_json() {
+        let (name, session) = scratch_database("aidb_pages", SCHEMA_SQL).await;
+        let mut read = request("samples");
+        read.sort = vec![SortKey {
+            column: "id".into(),
+            direction: SortDirection::Asc,
+        }];
+        let mut json = ExportWriter::new(Vec::new(), ExportFormat::Json);
+
+        session
+            .export_rows(&read, 100, &mut json)
+            .await
+            .expect("json");
+
+        let text = export_to_text(json);
+        assert!(
+            text.contains(r#""amount": 12345678901234567890.123456789"#),
+            "numbers are written exactly: {text}"
+        );
+        let rows: serde_json::Value = serde_json::from_str(&text).expect("valid JSON");
+        assert_eq!(rows[0]["doc"], serde_json::json!({"a": [1, 2]}));
+        assert_eq!(rows[0]["grid"], serde_json::json!([[1, 2], [3, 4]]));
+        assert_eq!(rows[0]["flag"], serde_json::json!(true));
+        assert_eq!(rows[0]["span"], serde_json::json!("1 day 02:00:00"));
+        assert!(rows[1]["doc"].is_null());
+        drop_scratch(&name, session).await;
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PostgreSQL: run scripts/postgres-fixture.sh start"]
+    async fn exports_of_missing_tables_report_the_database_error() {
+        let (name, session) = scratch_database("aidb_pages", SCHEMA_SQL).await;
+        let mut sink = ExportWriter::new(Vec::new(), ExportFormat::Csv);
+
+        let error = session
+            .export_rows(&request("missing"), 10, &mut sink)
+            .await
+            .expect_err("missing");
+
+        assert!(
+            matches!(&error, ExportError::Database(e) if e.kind() == DbErrorKind::ObjectNotFound),
+            "{error:?}"
+        );
+        drop_scratch(&name, session).await;
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PostgreSQL: run scripts/postgres-fixture.sh start"]
+    async fn sorting_uses_column_values_not_their_text() {
+        let (name, session) = scratch_database("aidb_pages", SCHEMA_SQL).await;
+        let mut by_left = request("left");
+        by_left.sort = vec![SortKey {
+            column: "left".into(),
+            direction: SortDirection::Asc,
+        }];
+        let mut csv = ExportWriter::new(Vec::new(), ExportFormat::Csv);
+
+        let page = session.read_page(&by_left, LIMITS).await.expect("page");
+        session
+            .export_rows(&request("left"), 100, &mut csv)
+            .await
+            .expect("export");
+
+        // Numerically 1 (id 12), 2, 3 come first; as text it would be 1, 10, 11 (ids 12, 3, 2).
+        assert_eq!(ids(&page)[..3], ["12", "11", "10"]);
+        let exported: Vec<String> = export_to_text(csv)
+            .lines()
+            .skip(1)
+            .map(|line| line.split(',').next().unwrap_or_default().to_owned())
+            .collect();
+        assert_eq!(
+            exported[..4],
+            ["1", "2", "3", "4"],
+            "primary key order, not 1, 10, 11"
+        );
+        drop_scratch(&name, session).await;
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PostgreSQL: run scripts/postgres-fixture.sh start"]
+    async fn exports_can_be_cancelled() {
+        let (name, session) = scratch_database("aidb_pages", SCHEMA_SQL).await;
+        let session = Arc::new(session);
+        let operation = OperationId::new();
+        let mut read = request("slow");
+        read.operation_id = Some(operation);
+        let started = Instant::now();
+        let exporter = Arc::clone(&session);
+        let running = tokio::spawn(async move {
+            let mut sink = ExportWriter::new(Vec::new(), ExportFormat::Csv);
+            exporter.export_rows(&read, 100, &mut sink).await.map(drop)
+        });
+
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        assert!(session.cancel(operation).await.expect("cancel"));
+        let error = running.await.expect("task").expect_err("cancelled");
+
+        assert!(
+            matches!(&error, ExportError::Database(e) if e.kind() == DbErrorKind::Cancelled),
+            "{error:?}"
+        );
+        assert!(started.elapsed() < Duration::from_secs(5));
+        let session = Arc::into_inner(session).expect("only owner");
         drop_scratch(&name, session).await;
     }
 }

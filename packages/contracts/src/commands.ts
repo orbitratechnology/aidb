@@ -29,6 +29,7 @@ export const COMMANDS = {
   describeObject: 'describe_object',
   readTablePage: 'read_table_page',
   cancelOperation: 'cancel_operation',
+  exportTable: 'export_table',
 } as const
 
 export type CommandName = (typeof COMMANDS)[keyof typeof COMMANDS]

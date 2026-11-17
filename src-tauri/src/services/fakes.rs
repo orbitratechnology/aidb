@@ -7,15 +7,16 @@ use std::time::Duration;
 
 use super::sessions::Sessions;
 use crate::adapters::database::{
-    ConnectTarget, DatabaseAdapter, DatabaseSession, DbError, DbErrorKind,
+    ConnectTarget, DatabaseAdapter, DatabaseSession, DbError, DbErrorKind, ExportError,
 };
 use crate::domain::catalog::{
     CatalogOverview, ObjectDetails, ObjectKind, ObjectName, ObjectSummary, SchemaSummary,
 };
 use crate::domain::connections::{ConnectionDraft, Engine};
 use crate::domain::database::{Capabilities, OperationId, ServerInfo, SessionLimits};
+use crate::domain::export::{ExportSummary, RowSink};
 use crate::domain::settings::SafetySettings;
-use crate::domain::table_data::{PageLimits, PageRequest, TablePage};
+use crate::domain::table_data::{PageColumn, PageLimits, PageRequest, TablePage, ValueKind};
 
 /// The fake database's structure, shared by every session the adapter opens.
 #[derive(Debug, Default)]
@@ -197,6 +198,41 @@ impl DatabaseSession for FakeSession {
             order: request.sort.clone(),
             stable_order: true,
             cell_char_limit: crate::domain::table_data::CELL_CHAR_LIMIT,
+        })
+    }
+
+    /// Writes up to three rows of `id, name`, stopping at `max_rows`; fails for `ghost`.
+    async fn export_rows(
+        &self,
+        request: &PageRequest,
+        max_rows: u32,
+        sink: &mut (dyn RowSink + Send),
+    ) -> Result<ExportSummary, ExportError> {
+        if request.object.name == "ghost" {
+            return Err(ExportError::Database(DbError::new(
+                DbErrorKind::ObjectNotFound,
+                "No such table.",
+            )));
+        }
+        let column = |name: &str, kind| PageColumn {
+            name: name.into(),
+            data_type: String::new(),
+            kind,
+        };
+        sink.columns(&[
+            column("id", ValueKind::Number),
+            column("name", ValueKind::Text),
+        ])
+        .map_err(ExportError::Write)?;
+        let available = 3_u32;
+        let rows = available.min(max_rows);
+        for id in 1..=rows {
+            sink.row(&[Some(id.to_string()), Some(format!("row {id}"))])
+                .map_err(ExportError::Write)?;
+        }
+        Ok(ExportSummary {
+            rows: u64::from(rows),
+            truncated: available > max_rows,
         })
     }
 }

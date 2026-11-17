@@ -30,6 +30,7 @@
     "allow-refresh-catalog",
     "allow-describe-object",
     "allow-read-table-page",
-    "allow-cancel-operation"
+    "allow-cancel-operation",
+    "allow-export-table"
   ]
 }

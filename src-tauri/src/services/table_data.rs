@@ -1,15 +1,21 @@
-//! Reading pages of rows, within the Safety settings' row and size limits.
+//! Reading pages of rows, within the Safety settings' row and size limits, and exporting all
+//! matching rows to a file the user chose.
 //!
-//! Row values pass through to the UI and are never logged, cached or written to disk.
+//! Row values pass through to the UI, or straight to the export file; they are never logged,
+//! cached or written anywhere else.
 
+use std::io::BufWriter;
+use std::path::Path;
 use std::time::Instant;
 
 use super::sessions::{Sessions, not_connected};
 use super::settings;
-use crate::adapters::database::{DatabaseAdapter, DatabaseSession};
+use crate::adapters::database::{DatabaseAdapter, DatabaseSession, ExportError};
+use crate::adapters::files;
 use crate::adapters::local_store::LocalStore;
 use crate::domain::connections::ConnectionId;
 use crate::domain::database::OperationId;
+use crate::domain::export::{ExportRequest, ExportSummary, ExportWriter};
 use crate::domain::settings::SafetySettings;
 use crate::domain::table_data::{PageLimits, PageRequest, TablePage};
 use crate::errors::AppResult;
@@ -56,6 +62,57 @@ pub async fn read_page<A: DatabaseAdapter>(
         "page read"
     );
     Ok(page)
+}
+
+/// Export file writes are buffered, so the database stream is rarely held up by the disk.
+const EXPORT_BUFFER_BYTES: usize = 256 * 1024;
+
+/// Writes every row matching `request`, up to `max_rows`, to `path` as CSV or JSON. A failed or
+/// cancelled export removes the partial file.
+///
+/// # Errors
+///
+/// As [`read_page`], plus `storage` or `permission_denied` when the file cannot be written.
+pub async fn export<A: DatabaseAdapter>(
+    sessions: &Sessions<A>,
+    id: ConnectionId,
+    request: &ExportRequest,
+    path: &Path,
+    max_rows: u32,
+) -> AppResult<ExportSummary> {
+    request.validate()?;
+    let session = sessions.get(id).ok_or_else(not_connected)?;
+    let file = files::create(path)?;
+    let mut writer = ExportWriter::new(
+        BufWriter::with_capacity(EXPORT_BUFFER_BYTES, file),
+        request.format,
+    );
+    let started = Instant::now();
+    let result = match session
+        .export_rows(&request.query(), max_rows, &mut writer)
+        .await
+    {
+        Ok(summary) => writer.finish().map(|_| summary).map_err(ExportError::Write),
+        Err(error) => Err(error),
+    };
+    match result {
+        Ok(summary) => {
+            // Counts only: names and values stay out of the log.
+            tracing::info!(
+                connection = %id,
+                rows = summary.rows,
+                truncated = summary.truncated,
+                format = ?request.format,
+                elapsed_ms = started.elapsed().as_millis(),
+                "table exported"
+            );
+            Ok(summary)
+        }
+        Err(error) => {
+            files::remove_partial(path);
+            Err(error.into())
+        }
+    }
 }
 
 /// Asks the database to stop a running operation. `false` if it already finished.
@@ -182,6 +239,56 @@ mod tests {
             last.object.name, "ghost",
             "the malformed one never reached it"
         );
+    }
+
+    fn export_request(name: &str, format: &str) -> ExportRequest {
+        serde_json::from_str(&format!(
+            r#"{{"object": {{"schema": "public", "name": "{name}"}}, "format": "{format}"}}"#
+        ))
+        .expect("parses")
+    }
+
+    #[tokio::test]
+    async fn exports_write_the_file_and_report_the_cap() {
+        let dir = tempfile::tempdir().expect("dir");
+        let (_, sessions) = sessions();
+        let id = ConnectionId::new();
+        sessions.open(id, target("db")).await.expect("open");
+        let csv = dir.path().join("orders.csv");
+        let json = dir.path().join("orders.json");
+
+        let all = export(&sessions, id, &export_request("orders", "csv"), &csv, 10)
+            .await
+            .expect("export");
+        let capped = export(&sessions, id, &export_request("orders", "json"), &json, 2)
+            .await
+            .expect("export");
+
+        assert_eq!((all.rows, all.truncated), (3, false));
+        assert_eq!(
+            std::fs::read_to_string(&csv).expect("csv"),
+            "id,name\r\n1,row 1\r\n2,row 2\r\n3,row 3\r\n"
+        );
+        assert_eq!((capped.rows, capped.truncated), (2, true));
+        let rows: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&json).expect("json")).expect("parses");
+        assert_eq!(rows.as_array().map(Vec::len), Some(2));
+    }
+
+    #[tokio::test]
+    async fn failed_exports_leave_no_file() {
+        let dir = tempfile::tempdir().expect("dir");
+        let (_, sessions) = sessions();
+        let id = ConnectionId::new();
+        sessions.open(id, target("db")).await.expect("open");
+        let path = dir.path().join("ghost.csv");
+
+        let error = export(&sessions, id, &export_request("ghost", "csv"), &path, 10)
+            .await
+            .expect_err("gone");
+
+        assert_eq!(error.code(), ErrorCode::NotFound);
+        assert!(!path.exists(), "the partial file is removed");
     }
 
     #[tokio::test]

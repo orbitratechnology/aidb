@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react'
 import type { ObjectName, TablePage } from '@aidb/contracts'
-import { ChevronDownIcon, ChevronUpIcon } from 'lucide-react'
+import { ChevronDownIcon, ChevronUpIcon, CopyIcon } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
   Sheet,
@@ -10,6 +10,7 @@ import {
   SheetTitle,
 } from '@/components/ui/sheet'
 import { cn } from '@/lib/utils'
+import { copyCell, copyRow } from './copy-actions'
 import { formatForDetail } from './table-view'
 
 const PREFORMATTED = new Set(['json', 'array', 'binary', 'other'])
@@ -60,6 +61,15 @@ export function RowDetailSheet({
               </div>
               <Button
                 variant="outline"
+                size="sm"
+                className="max-sm:min-h-11"
+                onClick={() => void copyRow(page, row, truncated)}
+              >
+                <CopyIcon data-icon="inline-start" />
+                Copy row
+              </Button>
+              <Button
+                variant="outline"
                 size="icon-sm"
                 className="max-sm:size-11"
                 aria-label="Previous row"
@@ -90,11 +100,23 @@ export function RowDetailSheet({
                     ref={focused ? focusRef : undefined}
                     className={cn('flex flex-col gap-1 rounded-md p-2', focused && 'bg-muted')}
                   >
-                    <dt className="flex flex-wrap items-baseline gap-x-2">
+                    <dt className="flex flex-wrap items-center gap-x-2">
                       <span className="font-medium break-all">{column.name}</span>
                       <span className="font-mono text-xs text-muted-foreground">
                         {column.dataType}
                       </span>
+                      {value !== null && (
+                        <Button
+                          variant="ghost"
+                          size="icon-xs"
+                          className="ml-auto max-sm:size-9"
+                          aria-label={`Copy ${column.name}`}
+                          title={`Copy ${column.name}`}
+                          onClick={() => void copyCell(page, row, index, cut)}
+                        >
+                          <CopyIcon />
+                        </Button>
+                      )}
                     </dt>
                     <dd className="min-w-0">
                       {value === null ? (

@@ -132,7 +132,7 @@ Current commands: `app_info`, `diagnostics`, `open_external_url`, `get_settings`
 `forget_connection_password`, `parse_connection_uri`, `export_connections`,
 `preview_connection_import`, `import_connections`, `test_connection`, `connect`, `disconnect`,
 `active_sessions`, `catalog_overview`, `refresh_catalog`, `describe_object`, `read_table_page`,
-`cancel_operation`.
+`cancel_operation`, `export_table`.
 
 ## Connection profiles
 
@@ -247,7 +247,17 @@ Current commands: `app_info`, `diagnostics`, `open_external_url`, `get_settings`
   `omittedColumns`.
 - **Cancellation**: `cancel_operation` sends `pg_cancel_backend` for the operation id the request
   carried; the connection that ran it is closed, not reused.
-- Rows are never logged, cached or written to disk; the log records counts and timing only.
+- **Order**: ORDER BY terms are qualified with the relation (`schema.table.column`), because
+  PostgreSQL matches unqualified ORDER BY names against the select list first.
+- **Export** (`export_table`): the core asks where to save in a native dialog (the webview gets
+  only the file name back), then streams every row matching the filters, in the requested order,
+  straight to the file, in a read-only, cancellable operation. Values are complete (no 2,000
+  character cut); at most 1,000,000 rows are written and the outcome says when more matched. CSV
+  follows RFC 4180 (header row, CRLF, quoting as needed; NULL is an empty field and empty text is
+  `""`). JSON is an array of objects: exact numbers, real booleans, embedded `json`/`jsonb` and
+  arrays, strings otherwise. A failed or cancelled export deletes its partial file.
+- Rows are never logged or cached, and reach disk only in an export the user asked for; the log
+  records counts and timing only.
 
 ## Frontend
 
@@ -285,6 +295,11 @@ Current commands: `app_info`, `diagnostics`, `open_external_url`, `get_settings`
   previous, next) and remembers the offsets visited, since a page can stop early at the size
   limit. Notices explain early stops, unstable order (no primary key) and columns the role
   cannot read. Below 640px rows are cards that open the same detail sheet.
+- **Copy and export**: the row detail sheet copies a single value or the whole row (as JSON,
+  with the same typing rules as the JSON export); Ctrl/Cmd+C copies the focused grid row. Values
+  cut at 2,000 characters are copied as loaded, and the confirmation says so. The Export menu
+  runs `export_table` for CSV or JSON, shows progress with Cancel, and reports how many rows
+  were written, or that the 1,000,000-row cap was reached.
 - **Reads in flight**: each page read carries an operation id. Cancel, or leaving the page
   (another table, filter or page) while it loads, sends `cancel_operation`, which stops the
   statement in the database. Pages are dropped from the query cache as soon as nothing shows them

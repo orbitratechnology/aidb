@@ -14,6 +14,7 @@ mod app;
 mod catalog;
 mod connections;
 mod diagnostics;
+mod export;
 mod external;
 mod sessions;
 mod settings;
@@ -50,7 +51,8 @@ pub(crate) fn handler<R: Runtime>() -> impl Fn(Invoke<R>) -> bool + Send + Sync 
         catalog::refresh_catalog,
         catalog::describe_object,
         table_data::read_table_page,
-        table_data::cancel_operation
+        table_data::cancel_operation,
+        export::export_table
     ]
 }
 
@@ -294,6 +296,15 @@ mod tests {
         let closed =
             invoke(&main, "disconnect", json!({ "id": saved.id.to_string() })).expect("disconnect");
         let after = invoke(&main, "active_sessions", json!({})).expect("active_sessions");
+        let export_closed = invoke(
+            &main,
+            "export_table",
+            json!({
+                "connectionId": saved.id.to_string(),
+                "request": { "object": { "schema": "pg_catalog", "name": "pg_am" }, "format": "csv" },
+            }),
+        )
+        .expect_err("the connection is closed, so no dialog opens");
 
         assert_eq!(report["server"]["readOnly"], true);
         assert!(report["roundTripMs"].is_u64());
@@ -315,6 +326,7 @@ mod tests {
         assert_eq!(cancelled, false);
         assert_eq!(closed, true);
         assert_eq!(after.as_array().map(Vec::len), Some(0));
+        assert_eq!(export_closed["code"], "unavailable");
     }
 
     #[test]

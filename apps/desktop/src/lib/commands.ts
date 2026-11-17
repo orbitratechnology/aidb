@@ -15,6 +15,7 @@ import {
   ImportPreviewSchema,
   ParsedConnectionUriSchema,
   StorageSummarySchema,
+  TableExportOutcomeSchema,
   TablePageSchema,
   type ActiveSession,
   type AppInfo,
@@ -29,6 +30,7 @@ import {
   type CredentialBackend,
   type DiagnosticsInfo,
   type ExportOutcome,
+  type ExportRequest,
   type ImportOutcome,
   type ImportPreview,
   type ObjectDetails,
@@ -38,6 +40,7 @@ import {
   type ParsedConnectionUri,
   type SettingsPatch,
   type StorageSummary,
+  type TableExportOutcome,
   type TablePage,
 } from '@aidb/contracts'
 import { z } from 'zod'
@@ -202,6 +205,20 @@ export function readTablePage(
   request: PageRequest,
 ): Promise<TablePage> {
   return callCommand(COMMANDS.readTablePage, TablePageSchema, { connectionId, request })
+}
+
+/**
+ * Asks where to save, then writes every matching row as CSV or JSON. `null` if the user closed
+ * the dialog. Pass `operationId` to be able to cancel it.
+ */
+export function exportTable(
+  connectionId: ConnectionId,
+  request: ExportRequest,
+): Promise<TableExportOutcome | null> {
+  return callCommand(COMMANDS.exportTable, TableExportOutcomeSchema.nullable(), {
+    connectionId,
+    request,
+  })
 }
 
 /** Asks the database to stop a running read. `false` if it already finished. */

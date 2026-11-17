@@ -75,6 +75,42 @@ pub async fn save_via_dialog<R: Runtime>(
     .await
 }
 
+/// Asks where to save, without writing anything. Returns the chosen path, or `None` if the user
+/// cancelled. Used when the core streams the file itself.
+///
+/// # Errors
+///
+/// When the dialog returns something other than a local file.
+pub async fn pick_save_path<R: Runtime>(
+    window: &WebviewWindow<R>,
+    request: DialogRequest<'_>,
+) -> AppResult<Option<PathBuf>> {
+    let dialog = window
+        .dialog()
+        .file()
+        .set_parent(window)
+        .set_title(request.title)
+        .set_file_name(request.file_name)
+        .add_filter(request.filter_name, request.extensions);
+    blocking(move || dialog.blocking_save_file().map(local_path).transpose()).await
+}
+
+/// Creates (or truncates) a file the user chose, for streaming into.
+///
+/// # Errors
+///
+/// When the file cannot be created.
+pub fn create(path: &Path) -> Result<std::fs::File, FileError> {
+    Ok(std::fs::File::create(path)?)
+}
+
+/// Removes a file left half-written by a failed or cancelled export. Best effort.
+pub fn remove_partial(path: &Path) {
+    if let Err(error) = std::fs::remove_file(path) {
+        tracing::warn!(error = %error, "a partial export could not be removed");
+    }
+}
+
 /// Asks for a file, then reads at most `max_bytes` of it. Returns its name and contents, or
 /// `None` if the user cancelled.
 ///
@@ -127,7 +163,9 @@ fn local_path(path: tauri_plugin_dialog::FilePath) -> AppResult<PathBuf> {
         .map_err(|_| AppError::invalid_input("Choose a file on this computer."))
 }
 
-fn file_name(path: &Path) -> String {
+/// The file's name without its folder, for messages.
+#[must_use]
+pub fn file_name(path: &Path) -> String {
     path.file_name()
         .map_or_else(String::new, |name| name.to_string_lossy().into_owned())
 }

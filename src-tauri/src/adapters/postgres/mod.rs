@@ -22,10 +22,13 @@ use sqlx::{Connection, Postgres};
 
 use self::errors::{Endpoint, Phase, classify, connect_timeout};
 pub use self::options::APPLICATION_NAME;
-use super::database::{ConnectTarget, DatabaseAdapter, DatabaseSession, DbError, DbErrorKind};
+use super::database::{
+    ConnectTarget, DatabaseAdapter, DatabaseSession, DbError, DbErrorKind, ExportError,
+};
 use crate::domain::catalog::{CatalogOverview, ObjectDetails, ObjectName};
 use crate::domain::connections::Engine;
 use crate::domain::database::{Capabilities, OperationId, SUPPORTED_POSTGRES_VERSIONS, ServerInfo};
+use crate::domain::export::{ExportSummary, RowSink};
 use crate::domain::table_data::{PageLimits, PageRequest, TablePage};
 
 /// Connections per session: enough for a query, a page load and a cancel at the same time.
@@ -234,6 +237,23 @@ impl DatabaseSession for PgSession {
         table_data::read_page(&mut connection, request, limits)
             .await
             .map_err(|e| self.session_error(e))?
+    }
+
+    async fn export_rows(
+        &self,
+        request: &PageRequest,
+        max_rows: u32,
+        sink: &mut (dyn RowSink + Send),
+    ) -> Result<ExportSummary, ExportError> {
+        let operation = request.operation_id.unwrap_or_default();
+        let mut connection = self
+            .begin_operation(operation)
+            .await
+            .map_err(ExportError::Database)?;
+        table_data::export_rows(&mut connection, request, max_rows, sink, |e| {
+            self.session_error(e)
+        })
+        .await
     }
 }
 

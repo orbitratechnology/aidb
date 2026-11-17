@@ -27,6 +27,7 @@ const COMMANDS: &[&str] = &[
     "describe_object",
     "read_table_page",
     "cancel_operation",
+    "export_table",
 ];
 
 fn main() {

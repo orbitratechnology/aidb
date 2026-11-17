@@ -48,6 +48,7 @@ import { useMediaQuery } from '@/hooks/use-media-query'
 import { NativeError } from '@/lib/native'
 import { approximateCount } from './catalog-view'
 import { DataGrid } from './data-grid'
+import { ExportMenu } from './export-menu'
 import { FilterSheet } from './filter-sheet'
 import {
   EMPTY_ROWS,
@@ -159,6 +160,7 @@ export function TableDataView({
           )}
         </Button>
         {grid && page && <ColumnsMenu table={table} />}
+        <ExportMenu connectionId={connectionId} object={object} filters={filters} sort={sort} />
         <Button
           variant="ghost"
           size="sm"

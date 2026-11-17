@@ -22,7 +22,9 @@ export type { Engine } from './generated/Engine'
 export type { Environment } from './generated/Environment'
 export type { ErrorCode } from './generated/ErrorCode'
 export type { ErrorPayload } from './generated/ErrorPayload'
+export type { ExportFormat } from './generated/ExportFormat'
 export type { ExportOutcome } from './generated/ExportOutcome'
+export type { ExportRequest } from './generated/ExportRequest'
 export type { Filter } from './generated/Filter'
 export type { FilterOperator } from './generated/FilterOperator'
 export type { ForeignKey } from './generated/ForeignKey'
@@ -54,12 +56,14 @@ export type { SortDirection } from './generated/SortDirection'
 export type { SortKey } from './generated/SortKey'
 export type { SslMode } from './generated/SslMode'
 export type { StorageSummary } from './generated/StorageSummary'
+export type { TableExportOutcome } from './generated/TableExportOutcome'
 export type { TablePage } from './generated/TablePage'
 export type { ThemePreference } from './generated/ThemePreference'
 export type { ValueKind } from './generated/ValueKind'
 export { SAFETY_DEFAULTS, SAFETY_LIMITS } from './generated/SafetyLimits'
 export { CONNECTION_LIMITS } from './generated/ConnectionLimits'
 export { TABLE_DATA_LIMITS } from './generated/TableDataLimits'
+export { EXPORT_LIMITS } from './generated/ExportLimits'
 
 export { AppInfoSchema } from './app'
 export {
@@ -100,6 +104,7 @@ export {
   LocalStoreStatusSchema,
 } from './diagnostics'
 export { ERROR_CODES, ErrorCodeSchema, ErrorPayloadSchema } from './errors'
+export { ExportFormatSchema, TableExportOutcomeSchema } from './export'
 export {
   ActiveSessionSchema,
   CapabilitiesSchema,

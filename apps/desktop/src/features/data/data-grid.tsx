@@ -5,6 +5,7 @@ import { useVirtualizer } from '@tanstack/react-virtual'
 import { ArrowDownIcon, ArrowUpIcon, ChevronsUpDownIcon } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { CellValue } from './cell-value'
+import { copyRow } from './copy-actions'
 import type { GridFeatures, GridRow } from './grid-table'
 
 const ROW_HEIGHT = 36
@@ -25,8 +26,8 @@ type GridProps = {
 
 /**
  * The page's rows as a virtualized table: only the rows in view (plus a few) are in the DOM.
- * One row is focusable at a time; arrow keys, Home/End and Page Up/Down move between rows and
- * Enter opens the row's details.
+ * One row is focusable at a time; arrow keys, Home/End and Page Up/Down move between rows,
+ * Enter opens the row's details and Ctrl/Cmd+C copies the row as JSON.
  */
 export function DataGrid({ table, page, truncated, busy, onOpenRow }: GridProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -76,6 +77,9 @@ export function DataGrid({ table, page, truncated, busy, onOpenRow }: GridProps)
     if (event.key in moves) {
       event.preventDefault()
       focusRow(moves[event.key] ?? index)
+    } else if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'c') {
+      event.preventDefault()
+      void copyRow(page, index, truncated)
     } else if (event.key === 'Enter' || event.key === ' ') {
       event.preventDefault()
       onOpenRow(index)

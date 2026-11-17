@@ -1,12 +1,13 @@
-//! Pages of rows from one table or view.
+//! Pages of rows from one table or view, and exports of all matching rows.
 //!
 //! The statement is built from fixed SQL fragments and from names as the database itself quotes
 //! them (`quote_ident`) in the live column list. Names in the request are only compared with that
 //! list; they never reach the SQL text. Filter values, the limit and the offset are bound
 //! parameters. The read runs in a read-only transaction, whatever the session allows.
 //!
-//! Every value is converted to text by the server (arrays to JSON text) and cut to
-//! [`CELL_CHAR_LIMIT`] characters before it is sent, so wide or huge values cost little.
+//! Every value is converted to text by the server (arrays to JSON text). For pages it is cut to
+//! [`CELL_CHAR_LIMIT`] characters before it is sent, so wide or huge values cost little; exports
+//! stream complete values, one row at a time, to a [`RowSink`].
 //!
 //! In a `SQL_ASCII` database the server neither knows nor checks the bytes' encoding: `left()`
 //! counts bytes there and can split a character, and stored invalid bytes would make the server
@@ -18,7 +19,9 @@ use sqlx::postgres::PgConnection;
 use sqlx::postgres::types::Oid;
 use sqlx::{AssertSqlSafe, Connection, Row};
 
-use crate::adapters::database::{DbError, DbErrorKind};
+use crate::adapters::database::{DbError, DbErrorKind, ExportError};
+use crate::domain::catalog::ObjectName;
+use crate::domain::export::{ExportSummary, RowSink};
 use crate::domain::table_data::{
     CELL_CHAR_LIMIT, CellRef, FilterOperator, PageColumn, PageLimits, PageRequest, SortDirection,
     SortKey, TablePage, ValueKind, escape_like, truncate_cell,
@@ -66,15 +69,35 @@ impl ColumnRow {
     }
 }
 
-/// Reads one page. The outer error is a driver failure for the caller to classify; the inner
-/// one a problem with the request itself.
-pub(super) async fn read_page(
+/// The object and its live columns, checked for read access.
+struct Target {
+    relation: RelationRow,
+    columns: Vec<ColumnRow>,
+}
+
+impl Target {
+    fn readable(&self) -> Vec<&ColumnRow> {
+        self.columns.iter().filter(|c| c.readable).collect()
+    }
+
+    fn page_columns(&self) -> Vec<PageColumn> {
+        self.readable()
+            .iter()
+            .map(|column| PageColumn {
+                name: column.name.clone(),
+                data_type: column.data_type.clone(),
+                kind: column.kind(),
+            })
+            .collect()
+    }
+}
+
+/// Looks up the object and its columns. The outer error is a driver failure for the caller to
+/// classify; the inner one a problem with the request itself.
+async fn target(
     connection: &mut PgConnection,
-    request: &PageRequest,
-    limits: PageLimits,
-) -> Result<Result<TablePage, DbError>, sqlx::Error> {
-    let mut transaction = connection.begin_with("BEGIN READ ONLY").await?;
-    let object = &request.object;
+    object: &ObjectName,
+) -> Result<Result<Target, DbError>, sqlx::Error> {
     let relation: Option<RelationRow> = sqlx::query_as(
         r"SELECT c.oid, quote_ident(n.nspname) || '.' || quote_ident(c.relname) AS quoted,
                  has_schema_privilege(n.oid, 'USAGE') AS usable,
@@ -84,7 +107,7 @@ pub(super) async fn read_page(
     )
     .bind(&object.schema)
     .bind(&object.name)
-    .fetch_optional(&mut *transaction)
+    .fetch_optional(&mut *connection)
     .await?;
     let Some(relation) = relation else {
         return Ok(Err(DbError::new(
@@ -109,11 +132,11 @@ pub(super) async fn read_page(
           ORDER BY a.attnum",
     )
     .bind(relation.oid)
-    .fetch_all(&mut *transaction)
+    .fetch_all(&mut *connection)
     .await?;
 
-    let readable: Vec<&ColumnRow> = columns.iter().filter(|c| c.readable).collect();
-    if !relation.usable || (readable.is_empty() && !columns.is_empty()) {
+    let readable = columns.iter().filter(|c| c.readable).count();
+    if !relation.usable || (readable == 0 && !columns.is_empty()) {
         return Ok(Err(DbError::new(
             DbErrorKind::PermissionDenied,
             format!(
@@ -122,7 +145,34 @@ pub(super) async fn read_page(
             ),
         )));
     }
-    let statement = match Statement::build(request, limits, &relation, &columns, &readable) {
+    Ok(Ok(Target { relation, columns }))
+}
+
+/// Reads one page. The outer error is a driver failure for the caller to classify; the inner
+/// one a problem with the request itself.
+pub(super) async fn read_page(
+    connection: &mut PgConnection,
+    request: &PageRequest,
+    limits: PageLimits,
+) -> Result<Result<TablePage, DbError>, sqlx::Error> {
+    let mut transaction = connection.begin_with("BEGIN READ ONLY").await?;
+    let object = &request.object;
+    let target = match target(&mut transaction, object).await? {
+        Ok(target) => target,
+        Err(error) => return Ok(Err(error)),
+    };
+    let readable = target.readable();
+    let limit = request
+        .limit
+        .map_or(limits.max_rows, |limit| limit.min(limits.max_rows));
+    let statement = match Statement::build(
+        request,
+        limit,
+        CellLength::Cut,
+        &target.relation,
+        &target.columns,
+        &readable,
+    ) {
         Ok(statement) => statement,
         Err(error) => return Ok(Err(error)),
     };
@@ -146,12 +196,7 @@ pub(super) async fn read_page(
         let mut truncated = Vec::new();
         let mut row_bytes = 0;
         for index in 0..readable.len() {
-            let mut cell: Option<String> = if statement.raw_bytes {
-                let bytes: Option<Vec<u8>> = row.try_get(index)?;
-                bytes.map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
-            } else {
-                row.try_get(index)?
-            };
+            let mut cell = decode_cell(&row, index, statement.raw_bytes)?;
             if let Some(text) = &mut cell {
                 if truncate_cell(text) {
                     truncated.push(CellRef {
@@ -179,15 +224,9 @@ pub(super) async fn read_page(
 
     Ok(Ok(TablePage {
         object: object.clone(),
-        columns: readable
-            .iter()
-            .map(|column| PageColumn {
-                name: column.name.clone(),
-                data_type: column.data_type.clone(),
-                kind: column.kind(),
-            })
-            .collect(),
-        omitted_columns: columns
+        columns: target.page_columns(),
+        omitted_columns: target
+            .columns
             .iter()
             .filter(|c| !c.readable)
             .map(|c| c.name.clone())
@@ -201,6 +240,90 @@ pub(super) async fn read_page(
         stable_order: statement.stable_order,
         cell_char_limit: CELL_CHAR_LIMIT,
     }))
+}
+
+/// Streams every matching row, up to `max_rows`, to `sink`, in a read-only transaction. Driver
+/// errors are turned into [`DbError`]s by `classify`.
+pub(super) async fn export_rows(
+    connection: &mut PgConnection,
+    request: &PageRequest,
+    max_rows: u32,
+    sink: &mut (dyn RowSink + Send),
+    classify: impl Fn(sqlx::Error) -> DbError,
+) -> Result<ExportSummary, ExportError> {
+    let database = ExportError::Database;
+    let driver = |error| ExportError::Database(classify(error));
+    let mut transaction = connection
+        .begin_with("BEGIN READ ONLY")
+        .await
+        .map_err(driver)?;
+    let target = target(&mut transaction, &request.object)
+        .await
+        .map_err(driver)?
+        .map_err(database)?;
+    let readable = target.readable();
+    let statement = Statement::build(
+        request,
+        max_rows,
+        CellLength::Full,
+        &target.relation,
+        &target.columns,
+        &readable,
+    )
+    .map_err(database)?;
+    sink.columns(&target.page_columns())
+        .map_err(ExportError::Write)?;
+
+    let mut query = sqlx::query(AssertSqlSafe(statement.sql));
+    for value in statement.values {
+        query = query.bind(value);
+    }
+    let mut stream = query
+        .bind(i64::from(max_rows) + 1)
+        .bind(0_i64)
+        .fetch(&mut *transaction);
+    let mut summary = ExportSummary {
+        rows: 0,
+        truncated: false,
+    };
+    let mut cells = Vec::with_capacity(readable.len());
+    while let Some(row) = stream.try_next().await.map_err(driver)? {
+        if summary.rows == u64::from(max_rows) {
+            summary.truncated = true;
+            break;
+        }
+        cells.clear();
+        for index in 0..readable.len() {
+            cells.push(decode_cell(&row, index, statement.raw_bytes).map_err(driver)?);
+        }
+        sink.row(&cells).map_err(ExportError::Write)?;
+        summary.rows += 1;
+    }
+    drop(stream);
+    transaction.rollback().await.map_err(driver)?;
+    Ok(summary)
+}
+
+/// One cell as text; `SQL_ASCII` databases send bytes, decoded with invalid sequences replaced.
+fn decode_cell(
+    row: &sqlx::postgres::PgRow,
+    index: usize,
+    raw_bytes: bool,
+) -> Result<Option<String>, sqlx::Error> {
+    if raw_bytes {
+        let bytes: Option<Vec<u8>> = row.try_get(index)?;
+        Ok(bytes.map(|bytes| String::from_utf8_lossy(&bytes).into_owned()))
+    } else {
+        row.try_get(index)
+    }
+}
+
+/// Whether values are cut for display or sent whole.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CellLength {
+    /// One character past [`CELL_CHAR_LIMIT`], so a cut value can be flagged.
+    Cut,
+    Full,
 }
 
 #[derive(Default)]
@@ -228,7 +351,8 @@ struct Statement {
 impl Statement {
     fn build(
         request: &PageRequest,
-        limits: PageLimits,
+        limit: u32,
+        cell_length: CellLength,
         relation: &RelationRow,
         columns: &[ColumnRow],
         readable: &[&ColumnRow],
@@ -253,7 +377,7 @@ impl Statement {
         let raw_bytes = relation.raw_bytes();
         // One character past the limit shows that a value was cut. Without a known encoding,
         // `left()` counts bytes, so take enough for the limit in any UTF-8 text.
-        let cell_length = if raw_bytes {
+        let cut = if raw_bytes {
             (CELL_CHAR_LIMIT + 1) * MAX_CHAR_BYTES
         } else {
             CELL_CHAR_LIMIT + 1
@@ -265,10 +389,14 @@ impl Statement {
                     ValueKind::Array => format!("to_json({})::text", column.quoted),
                     _ => format!("({})::text", column.quoted),
                 };
+                let text = match cell_length {
+                    CellLength::Cut => format!("left({text}, {cut})"),
+                    CellLength::Full => text,
+                };
                 if raw_bytes {
-                    format!("convert_to(left({text}, {cell_length}), 'SQL_ASCII')")
+                    format!("convert_to({text}, 'SQL_ASCII')")
                 } else {
-                    format!("left({text}, {cell_length})")
+                    text
                 }
             })
             .collect::<Vec<_>>()
@@ -344,7 +472,9 @@ impl Statement {
                     SortDirection::Asc => "ASC",
                     SortDirection::Desc => "DESC",
                 };
-                Ok(format!("{} {direction}", column.quoted))
+                // Qualified, so the name cannot resolve to an output column of the same name
+                // (PostgreSQL matches ORDER BY names against the select list first).
+                Ok(format!("{}.{} {direction}", relation.quoted, column.quoted))
             })
             .collect::<Result<Vec<_>, DbError>>()?;
         if !terms.is_empty() {
@@ -352,9 +482,6 @@ impl Statement {
             sql.push_str(&terms.join(", "));
         }
 
-        let limit = request
-            .limit
-            .map_or(limits.max_rows, |limit| limit.min(limits.max_rows));
         sql.push_str(&format!(
             " LIMIT ${} OFFSET ${}",
             values.len() + 1,
@@ -411,7 +538,17 @@ mod tests {
 
     fn build(request: &PageRequest, columns: &[ColumnRow]) -> Result<Statement, DbError> {
         let readable: Vec<&ColumnRow> = columns.iter().filter(|c| c.readable).collect();
-        Statement::build(request, LIMITS, &relation(), columns, &readable)
+        let limit = request
+            .limit
+            .map_or(LIMITS.max_rows, |limit| limit.min(LIMITS.max_rows));
+        Statement::build(
+            request,
+            limit,
+            CellLength::Cut,
+            &relation(),
+            columns,
+            &readable,
+        )
     }
 
     #[test]
@@ -451,7 +588,7 @@ mod tests {
 
         assert_eq!(
             statement.sql,
-            r#"SELECT left((id)::text, 2001), left(("Weird ""name""")::text, 2001), left(to_json(tags)::text, 2001) FROM public."Order Items" WHERE "Weird ""name""" >= CAST($1 AS pg_catalog.int4) AND (id)::text ILIKE $2 AND tags IS NULL ORDER BY "Weird ""name""" DESC, id ASC LIMIT $3 OFFSET $4"#
+            r#"SELECT left((id)::text, 2001), left(("Weird ""name""")::text, 2001), left(to_json(tags)::text, 2001) FROM public."Order Items" WHERE "Weird ""name""" >= CAST($1 AS pg_catalog.int4) AND (id)::text ILIKE $2 AND tags IS NULL ORDER BY public."Order Items"."Weird ""name""" DESC, public."Order Items".id ASC LIMIT $3 OFFSET $4"#
         );
         assert_eq!(statement.values, ["1; DROP TABLE x", r"%5\%%"]);
         assert_eq!(statement.limit, LIMITS.max_rows, "capped by the setting");
@@ -466,8 +603,24 @@ mod tests {
         let columns = [column("id", "id", None)];
         let readable: Vec<&ColumnRow> = columns.iter().collect();
 
-        let statement =
-            Statement::build(&request(), LIMITS, &ascii, &columns, &readable).expect("builds");
+        let statement = Statement::build(
+            &request(),
+            LIMITS.max_rows,
+            CellLength::Cut,
+            &ascii,
+            &columns,
+            &readable,
+        )
+        .expect("builds");
+        let full = Statement::build(
+            &request(),
+            LIMITS.max_rows,
+            CellLength::Full,
+            &ascii,
+            &columns,
+            &readable,
+        )
+        .expect("builds");
 
         assert!(statement.raw_bytes);
         assert!(
@@ -476,6 +629,12 @@ mod tests {
                 .starts_with("SELECT convert_to(left((id)::text, 8004), 'SQL_ASCII') FROM"),
             "{}",
             statement.sql
+        );
+        assert!(
+            full.sql
+                .starts_with("SELECT convert_to((id)::text, 'SQL_ASCII') FROM"),
+            "exports send whole values: {}",
+            full.sql
         );
     }
 
@@ -518,7 +677,11 @@ mod tests {
             &[column("b", "b", Some(2)), column("a", "a", Some(1))],
         )
         .expect("builds");
-        assert!(composite.sql.contains("ORDER BY a ASC, b ASC"));
+        assert!(
+            composite
+                .sql
+                .contains(r#"ORDER BY public."Order Items".a ASC, public."Order Items".b ASC"#)
+        );
     }
 
     #[test]

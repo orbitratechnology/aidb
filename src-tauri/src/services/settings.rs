@@ -6,8 +6,8 @@
 use serde::de::DeserializeOwned;
 
 use crate::adapters::local_store::{LocalStore, StoreError};
-use crate::domain::settings::{AppSettings, SafetySettings, SettingsPatch, keys};
-use crate::errors::AppResult;
+use crate::domain::settings::{AiSettings, AppSettings, SafetySettings, SettingsPatch, keys};
+use crate::errors::{AppError, AppResult};
 
 /// Current settings, with defaults for anything never saved.
 ///
@@ -24,7 +24,40 @@ pub async fn load(store: &LocalStore) -> AppResult<AppSettings> {
             SafetySettings::default()
         }
     };
-    Ok(AppSettings { appearance, safety })
+    let ai: AiSettings = section(store, keys::AI).await?;
+    // A provider deleted outside the app (or a damaged row) turns AI off rather than failing.
+    let ai = match ai.provider_id {
+        Some(id) if store.providers().get(id).await?.is_none() => {
+            tracing::warn!("the chosen AI provider no longer exists; AI is off");
+            AiSettings::default()
+        }
+        _ => ai,
+    };
+    Ok(AppSettings {
+        appearance,
+        safety,
+        ai,
+    })
+}
+
+/// Turns AI off and forgets the chosen provider if it is `id`. Called when a provider is deleted.
+///
+/// # Errors
+///
+/// `storage` if the settings cannot be read or saved.
+pub async fn forget_provider(
+    store: &LocalStore,
+    id: crate::domain::providers::ProviderId,
+) -> AppResult<()> {
+    let ai: AiSettings = section(store, keys::AI).await?;
+    if ai.provider_id == Some(id) {
+        store
+            .settings()
+            .set(keys::AI, &AiSettings::default())
+            .await?;
+        tracing::info!("the chosen AI provider was deleted; AI is off");
+    }
+    Ok(())
 }
 
 /// Replaces the sections present in `patch`, after validating them, and returns the result.
@@ -36,11 +69,28 @@ pub async fn update(store: &LocalStore, patch: SettingsPatch) -> AppResult<AppSe
     if let Some(safety) = &patch.safety {
         safety.validate()?;
     }
+    if let Some(ai) = &patch.ai {
+        match ai.provider_id {
+            None if ai.enabled => {
+                return Err(AppError::invalid_input(
+                    "Choose a provider before turning on AI.",
+                ));
+            }
+            Some(id) if store.providers().get(id).await?.is_none() => {
+                return Err(AppError::not_found("That provider no longer exists."));
+            }
+            _ => {}
+        }
+    }
     if let Some(appearance) = &patch.appearance {
         store.settings().set(keys::APPEARANCE, appearance).await?;
     }
     if let Some(safety) = &patch.safety {
         store.settings().set(keys::SAFETY, safety).await?;
+    }
+    if let Some(ai) = &patch.ai {
+        store.settings().set(keys::AI, ai).await?;
+        tracing::info!(enabled = ai.enabled, "AI settings saved");
     }
     load(store).await
 }
@@ -115,6 +165,7 @@ mod tests {
                 statement_timeout_secs: 0,
                 ..SafetySettings::default()
             }),
+            ai: None,
         };
 
         let error = update(&store, patch).await.expect_err("rejected");
@@ -141,5 +192,67 @@ mod tests {
             .expect("store out-of-range value");
 
         assert_eq!(load(&store).await.expect("load"), AppSettings::default());
+    }
+
+    #[tokio::test]
+    async fn ai_needs_an_existing_provider_and_turns_off_without_it() {
+        use crate::domain::providers::{ProviderDraft, ProviderId, ProviderPreset};
+
+        let (_dir, store) = temp_store().await;
+        assert_eq!(load(&store).await.expect("load").ai, AiSettings::default());
+
+        let on_without_provider = SettingsPatch {
+            ai: Some(AiSettings {
+                enabled: true,
+                provider_id: None,
+            }),
+            ..SettingsPatch::default()
+        };
+        let error = update(&store, on_without_provider)
+            .await
+            .expect_err("needs a provider");
+        assert_eq!(error.code(), ErrorCode::InvalidInput);
+        let unknown = SettingsPatch {
+            ai: Some(AiSettings {
+                enabled: true,
+                provider_id: Some(ProviderId::new()),
+            }),
+            ..SettingsPatch::default()
+        };
+        assert_eq!(
+            update(&store, unknown).await.expect_err("unknown").code(),
+            ErrorCode::NotFound
+        );
+
+        let provider = store
+            .providers()
+            .insert(
+                &ProviderDraft::new("Local", ProviderPreset::Ollama, "qwen2.5")
+                    .validated()
+                    .expect("valid"),
+            )
+            .await
+            .expect("provider");
+        let on = AiSettings {
+            enabled: true,
+            provider_id: Some(provider.id),
+        };
+        let saved = update(
+            &store,
+            SettingsPatch {
+                ai: Some(on),
+                ..SettingsPatch::default()
+            },
+        )
+        .await
+        .expect("on");
+        assert_eq!(saved.ai, on);
+
+        // Deleting the chosen provider turns AI off.
+        store.providers().delete(provider.id).await.expect("delete");
+        assert_eq!(load(&store).await.expect("load").ai, AiSettings::default());
+        forget_provider(&store, provider.id).await.expect("forget");
+        let stored: Option<AiSettings> = store.settings().get(keys::AI).await.expect("get");
+        assert_eq!(stored, Some(AiSettings::default()));
     }
 }

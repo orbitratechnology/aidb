@@ -87,7 +87,7 @@ SQLite through SQLx (`src-tauri/src/adapters/local_store/`), schema in
 
 | Table                   | Holds                                                                   | Repository           |
 | ----------------------- | ----------------------------------------------------------------------- | -------------------- |
-| `app_settings`          | JSON preferences, one key per section (`appearance`, `safety`)          | `Settings`           |
+| `app_settings`          | JSON preferences, one key per section (`appearance`, `safety`, `ai`)    | `Settings`           |
 | `connection_profiles`   | Connection settings, environment, read-only flag, credential-store ref  | `ConnectionProfiles` |
 | `provider_profiles`     | AI provider settings, credential-store ref, last checked features       | `ProviderProfiles`   |
 | `saved_queries`         | User-authored SQL, named; kept until deleted                            | `SavedQueries`       |
@@ -400,6 +400,18 @@ say which service to use; the settings UI arrives in 7.3 and the agent in 8.x.
   previous, next) and remembers the offsets visited, since a page can stop early at the size
   limit. Notices explain early stops, unstable order (no primary key) and columns the role
   cannot read. Below 640px rows are cards that open the same detail sheet.
+- **AI providers** (Settings › AI providers): "Use the AI assistant" (off by default) with a
+  provider picker; the `ai` settings section stores the switch and the chosen profile, the core
+  refuses to turn AI on without an existing provider, and deleting that provider turns AI off.
+  Turning AI on with a hosted provider, or switching to one, first shows what the assistant sends
+  and where it goes; a provider on this computer needs no confirmation. The same "What the
+  assistant sends" disclosure is always shown in the section. Providers are listed with their
+  kind, model, endpoint, key storage, "On this computer" or "Plain HTTP", and the features the
+  last test found (or "Not tested yet"); a provider without a required key cannot be tested or
+  chosen, and says why. A sheet adds or edits a provider (kind presets, name, model, endpoint,
+  masked API key, timeout, context budget, plain-HTTP consent); "Save and test" saves, then runs
+  "Test provider" in a dialog that lists each check with an icon and words, the features saved
+  and the models listed.
 - **SQL editor** (SQL): CodeMirror 6 in a small React wrapper, loaded only with the SQL screen.
   PostgreSQL highlighting with theme-token colors, table-name completion from the schema
   catalog, search, bracket matching and undo per tab (one editor; each tab keeps its own state).

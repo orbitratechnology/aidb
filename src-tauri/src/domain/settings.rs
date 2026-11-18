@@ -1,4 +1,5 @@
-//! App preferences: appearance and the safety limits applied to every query.
+//! App preferences: appearance, the safety limits applied to every query, and whether the AI
+//! assistant is on.
 //!
 //! Stored per section under `app_settings` keys. Fields added later fall back to their defaults
 //! (`#[serde(default)]`), and values outside their range are rejected on save.
@@ -8,12 +9,14 @@ use std::ops::RangeInclusive;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use super::providers::ProviderId;
 use crate::errors::AppError;
 
 /// Storage keys, one per section.
 pub mod keys {
     pub const APPEARANCE: &str = "appearance";
     pub const SAFETY: &str = "safety";
+    pub const AI: &str = "ai";
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -132,6 +135,18 @@ impl SafetySettings {
     }
 }
 
+/// Whether the AI assistant is on, and which provider it uses. Off until the user turns it on;
+/// manual tools never depend on it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
+#[serde(default, rename_all = "camelCase")]
+pub struct AiSettings {
+    pub enabled: bool,
+    /// The provider profile the assistant uses. Kept while AI is off, so turning it back on
+    /// needs no new choice.
+    pub provider_id: Option<ProviderId>,
+}
+
 /// Every settings section.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[cfg_attr(test, derive(ts_rs::TS), ts(export))]
@@ -139,6 +154,7 @@ impl SafetySettings {
 pub struct AppSettings {
     pub appearance: AppearanceSettings,
     pub safety: SafetySettings,
+    pub ai: AiSettings,
 }
 
 /// Sections to replace; omitted sections stay as they are.
@@ -148,6 +164,7 @@ pub struct AppSettings {
 pub struct SettingsPatch {
     pub appearance: Option<AppearanceSettings>,
     pub safety: Option<SafetySettings>,
+    pub ai: Option<AiSettings>,
 }
 
 #[cfg(test)]

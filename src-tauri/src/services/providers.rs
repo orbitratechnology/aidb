@@ -191,6 +191,7 @@ pub async fn delete(
     if !store.providers().delete(id).await? {
         return Err(AppError::not_found("The provider no longer exists."));
     }
+    super::settings::forget_provider(store, id).await?;
     let (credentials, key) = (credentials.clone(), SecretRef::provider(id));
     if let Err(error) = run_blocking(move || credentials.forget(&key)).await? {
         // The profile is gone; a leftover key is reported in the log, not to the user.
@@ -401,7 +402,11 @@ impl Report {
 
     fn skip_rest(&mut self, kinds: &[CheckKind]) {
         for &kind in kinds {
-            self.add(kind, CheckOutcome::Skipped, "Not checked.");
+            self.add(
+                kind,
+                CheckOutcome::Skipped,
+                "Skipped because an earlier check failed.",
+            );
         }
     }
 }
@@ -453,7 +458,10 @@ pub async fn test(
             report.add(
                 K::Endpoint,
                 O::Passed,
-                format!("Reached the endpoint. It lists {} models.", listed.len()),
+                match listed.len() {
+                    1 => "Reached the endpoint. It lists 1 model.".to_owned(),
+                    n => format!("Reached the endpoint. It lists {n} models."),
+                },
             );
             if listed.iter().any(|m| m.id == profile.settings.model) {
                 report.add(K::Model, O::Passed, "The model is offered.");

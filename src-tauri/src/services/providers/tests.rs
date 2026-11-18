@@ -434,3 +434,37 @@ async fn keys_never_reach_the_database_files_or_logs() {
     assert!(logs.contains("provider key saved"), "{logs}");
     assert!(!logs.contains(LEAK_KEY), "{logs}");
 }
+
+#[tokio::test]
+async fn deleting_the_chosen_provider_turns_ai_off() {
+    use crate::domain::settings::{AiSettings, SettingsPatch};
+    use crate::services::settings;
+
+    let (_dir, store) = temp_store().await;
+    let credentials = credentials();
+    let created = create(&store, &credentials, local("http://localhost:8080/v1"))
+        .await
+        .expect("create");
+    let on = AiSettings {
+        enabled: true,
+        provider_id: Some(created.id),
+    };
+    settings::update(
+        &store,
+        SettingsPatch {
+            ai: Some(on),
+            ..SettingsPatch::default()
+        },
+    )
+    .await
+    .expect("turn on");
+
+    delete(&store, &credentials, created.id)
+        .await
+        .expect("delete");
+
+    assert_eq!(
+        settings::load(&store).await.expect("load").ai,
+        AiSettings::default()
+    );
+}

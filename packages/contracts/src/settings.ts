@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import type { AiSettings } from './generated/AiSettings'
 import type { AppearanceSettings } from './generated/AppearanceSettings'
 import type { AppSettings } from './generated/AppSettings'
 import type { ClearResult } from './generated/ClearResult'
@@ -44,9 +45,15 @@ export const SafetySettingsSchema = z
     error: 'Cannot be longer than the statement timeout.',
   }) satisfies z.ZodType<SafetySettings>
 
+export const AiSettingsSchema = z.object({
+  enabled: z.boolean(),
+  providerId: z.uuid().nullable(),
+}) satisfies z.ZodType<AiSettings>
+
 export const AppSettingsSchema = z.object({
   appearance: AppearanceSettingsSchema,
   safety: SafetySettingsSchema,
+  ai: AiSettingsSchema,
 }) satisfies z.ZodType<AppSettings>
 
 const count = z.number().int().nonnegative()

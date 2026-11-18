@@ -155,6 +155,7 @@ mod tests {
                     max_result_megabytes: 2,
                     ..SafetySettings::default()
                 }),
+                ai: None,
             },
         )
         .await

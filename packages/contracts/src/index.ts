@@ -1,6 +1,7 @@
 // Types under `generated/` come from the Rust core via ts-rs (`cargo test` regenerates them).
 // The schemas here validate data at runtime and are type-checked against those types.
 export type { ActiveSession } from './generated/ActiveSession'
+export type { AiSettings } from './generated/AiSettings'
 export type { AnalyzedStatement } from './generated/AnalyzedStatement'
 export type { AppearanceSettings } from './generated/AppearanceSettings'
 export type { AppInfo } from './generated/AppInfo'
@@ -166,6 +167,7 @@ export {
   ServerInfoSchema,
 } from './sessions'
 export {
+  AiSettingsSchema,
   AppSettingsSchema,
   AppearanceSettingsSchema,
   ClearResultSchema,

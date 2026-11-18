@@ -110,7 +110,7 @@ Status legend: `[x]` done · `[~]` in progress · `[ ]` not started
       an Anthropic adapter.
 - [x] **7.2 Provider profiles.** Storage with keyring-held API keys, endpoint trust policy (plain
       HTTP only for loopback unless acknowledged), "Test provider" command.
-- [ ] **7.3 Provider settings UI.** Configure, test and disable AI; disclosure of what is sent.
+- [x] **7.3 Provider settings UI.** Configure, test and disable AI; disclosure of what is sent.
 
 ## Phase 8: Read-only agent
 

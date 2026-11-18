@@ -41,14 +41,22 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      # Ubuntu's mirrors are sometimes slow: keep downloaded packages between runs (refreshed
+      # weekly), so a run only fetches package lists and what changed.
+      - id: apt-week
+        run: echo "week=$(date -u +%G-%V)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v6
+        with:
+          path: ~/.cache/apt-archives
+          key: apt-${{ runner.os }}-${{ github.job }}-${{ steps.apt-week.outputs.week }}
+          restore-keys: |
+            apt-${{ runner.os }}-${{ github.job }}-
+            apt-${{ runner.os }}-
       - name: Install Tauri system dependencies and a Secret Service for credential tests
-        # Ubuntu's mirrors are sometimes slow; retry stalled downloads rather than fail the run.
         timeout-minutes: 20
-        run: |
-          printf 'Acquire::Retries "3";\nAcquire::http::Timeout "60";\n' | sudo tee /etc/apt/apt.conf.d/80-ci-retries
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev libxdo-dev libssl-dev \
-            libayatana-appindicator3-dev librsvg2-dev gnome-keyring dbus
+        run: >-
+          scripts/ci-install-apt.sh libwebkit2gtk-4.1-dev libxdo-dev libssl-dev
+          libayatana-appindicator3-dev librsvg2-dev gnome-keyring dbus
       - name: Install pinned Rust toolchain
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
@@ -85,14 +93,22 @@ jobs:
         postgres: ['15', '16', '17', '18']
     steps:
       - uses: actions/checkout@v7
+      # Ubuntu's mirrors are sometimes slow: keep downloaded packages between runs (refreshed
+      # weekly), so a run only fetches package lists and what changed.
+      - id: apt-week
+        run: echo "week=$(date -u +%G-%V)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v6
+        with:
+          path: ~/.cache/apt-archives
+          key: apt-${{ runner.os }}-${{ github.job }}-${{ steps.apt-week.outputs.week }}
+          restore-keys: |
+            apt-${{ runner.os }}-${{ github.job }}-
+            apt-${{ runner.os }}-
       - name: Install Tauri system dependencies and the PostgreSQL client
-        # Ubuntu's mirrors are sometimes slow; retry stalled downloads rather than fail the run.
         timeout-minutes: 20
-        run: |
-          printf 'Acquire::Retries "3";\nAcquire::http::Timeout "60";\n' | sudo tee /etc/apt/apt.conf.d/80-ci-retries
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev libxdo-dev libssl-dev \
-            libayatana-appindicator3-dev librsvg2-dev postgresql-client
+        run: >-
+          scripts/ci-install-apt.sh libwebkit2gtk-4.1-dev libxdo-dev libssl-dev
+          libayatana-appindicator3-dev librsvg2-dev postgresql-client
       - name: Install pinned Rust toolchain
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
@@ -123,14 +139,22 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      # Ubuntu's mirrors are sometimes slow: keep downloaded packages between runs (refreshed
+      # weekly), so a run only fetches package lists and what changed.
+      - id: apt-week
+        run: echo "week=$(date -u +%G-%V)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v6
+        with:
+          path: ~/.cache/apt-archives
+          key: apt-${{ runner.os }}-${{ github.job }}-${{ steps.apt-week.outputs.week }}
+          restore-keys: |
+            apt-${{ runner.os }}-${{ github.job }}-
+            apt-${{ runner.os }}-
       - name: Install Tauri system dependencies
-        # Ubuntu's mirrors are sometimes slow; retry stalled downloads rather than fail the run.
         timeout-minutes: 20
-        run: |
-          printf 'Acquire::Retries "3";\nAcquire::http::Timeout "60";\n' | sudo tee /etc/apt/apt.conf.d/80-ci-retries
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev libxdo-dev libssl-dev \
-            libayatana-appindicator3-dev librsvg2-dev
+        run: >-
+          scripts/ci-install-apt.sh libwebkit2gtk-4.1-dev libxdo-dev libssl-dev
+          libayatana-appindicator3-dev librsvg2-dev
       - name: Install pinned Rust toolchain
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2

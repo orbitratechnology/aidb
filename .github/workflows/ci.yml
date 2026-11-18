@@ -42,8 +42,10 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Install Tauri system dependencies and a Secret Service for credential tests
-        timeout-minutes: 10
+        # Ubuntu's mirrors are sometimes slow; retry stalled downloads rather than fail the run.
+        timeout-minutes: 20
         run: |
+          printf 'Acquire::Retries "3";\nAcquire::http::Timeout "60";\n' | sudo tee /etc/apt/apt.conf.d/80-ci-retries
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev libxdo-dev libssl-dev \
             libayatana-appindicator3-dev librsvg2-dev gnome-keyring dbus
@@ -84,8 +86,10 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Install Tauri system dependencies and the PostgreSQL client
-        timeout-minutes: 10
+        # Ubuntu's mirrors are sometimes slow; retry stalled downloads rather than fail the run.
+        timeout-minutes: 20
         run: |
+          printf 'Acquire::Retries "3";\nAcquire::http::Timeout "60";\n' | sudo tee /etc/apt/apt.conf.d/80-ci-retries
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev libxdo-dev libssl-dev \
             libayatana-appindicator3-dev librsvg2-dev postgresql-client
@@ -120,8 +124,10 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Install Tauri system dependencies
-        timeout-minutes: 10
+        # Ubuntu's mirrors are sometimes slow; retry stalled downloads rather than fail the run.
+        timeout-minutes: 20
         run: |
+          printf 'Acquire::Retries "3";\nAcquire::http::Timeout "60";\n' | sudo tee /etc/apt/apt.conf.d/80-ci-retries
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev libxdo-dev libssl-dev \
             libayatana-appindicator3-dev librsvg2-dev

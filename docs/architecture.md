@@ -366,8 +366,8 @@ say which service to use; the settings UI arrives in 7.3 and the agent in 8.x.
 
 ## Assistant
 
-`domain::agent` defines what the assistant is and may do; the planner loop that runs it (8.2) and
-the Ask screen (8.3) build on it. The model proposes; Rust decides.
+`domain::agent` defines what the assistant is and may do; `services::assistant` runs it, and the
+Ask screen (8.3) drives it. The model proposes; Rust decides.
 
 - **Risk** (`risk`): R0 introspection, R1 bounded read, R2 scoped reversible write, R3 sensitive
   or production change, R4 destructive or privileged, each with its default approval (none,
@@ -399,6 +399,33 @@ the Ask screen (8.3) build on it. The model proposes; Rust decides.
   name inside the content is removed, so content can neither close the frame nor open another.
   The system prompt says such content is data only and never instructions. Tool results are
   capped at 24,000 characters and long cell values at 200.
+- **Planner loop** (`services::assistant::run`): earlier exchanges (six at most) and the context
+  message start the conversation. Each round sends it with the tool registry; a refusal fails the
+  task and a cut-off answer makes it partial (their tool calls never run). Every call is parsed
+  by the registry (refusals go back to the model as error results and are reported as
+  `call_rejected`), added to the plan within the read-only risk limit, held back when it returns
+  data values and sending them is not allowed (the provider is hosted and the user has not
+  agreed), and only then run. All results of a round go back in one message, framed as
+  untrusted. The loop stops when the model answers, after 10 rounds, 25 steps or 5 refused
+  calls, on a provider error, or when cancelled. A model that ends with a ```sql block it never
+  ran is reminded once to run it. Events (`started`, `round_started`, `text`, `step_started`,
+  `step_finished`, `call_rejected`) report progress as it happens.
+- **Tools at run time** (`SessionTools`): catalog tools read the cached catalog of the open
+  session; `run_read_query` and `explain_query` (`EXPLAIN (FORMAT TEXT)`, with `ANALYZE` when
+  asked) go through the editor's read path (`query::run_for_assistant`): the same classification,
+  read-only transaction, timeouts and cell limits, at most 50 rows, and no entry in query
+  history. Each query has an operation id, so cancelling stops it on the server.
+- **Verification**: after the loop, fixed checks are recorded with the plan: the assistant gave
+  an answer; the last query it relied on ran; every result it saw was complete; SQL its answer
+  shows was run. The task is `succeeded` only when it ended normally and all checks passed,
+  otherwise `partial` (or `failed` when there is no answer, or `cancelled`).
+- **Tasks** (`agent_tasks`): recorded as `executing` when they start, updated after every round
+  and when they end with the status, plan and answer (20,000 characters at most). Tasks keep
+  their record when the connection is deleted; tasks still `executing` at startup were cut off
+  by a quit and are marked `cancelled`. `RunningTasks` maps task ids to cancel signals for the
+  commands of 8.3.
+- **End-to-end test**: `tests/assistant.rs` asks a real model about a scratch database on the
+  PostgreSQL fixture, through the app's services; ignored by default.
 
 ## Frontend
 

@@ -116,7 +116,7 @@ Status legend: `[x]` done · `[~]` in progress · `[ ]` not started
 
 - [x] **8.1 Agent domain.** Versioned task plan, typed tool registry (R0/R1 tools), context builder
       with budgets and untrusted-content framing.
-- [ ] **8.2 Planner loop.** Tool-call validation (unknown or malformed calls rejected), cancellation,
+- [x] **8.2 Planner loop.** Tool-call validation (unknown or malformed calls rejected), cancellation,
       verification, task persistence.
 - [ ] **8.3 Ask UI.** Composer, context review list, attachments (`.sql`, `.csv`, `.json`, `.md`,
       `.txt`), streamed activity trace, results and follow-ups.

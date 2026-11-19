@@ -43,12 +43,31 @@ pub async fn run<A: DatabaseAdapter>(
     request: QueryRequest,
 ) -> AppResult<QueryRun> {
     let first_page = request.offset == 0;
-    let (run, ran) = execute(store, sessions, id, &request).await?;
+    let (run, ran) = execute(store, sessions, id, &request, None).await?;
     // Later pages re-run the same statement; history records it once.
     if first_page && !ran.trim().is_empty() {
         library::record(store, id, &ran, &run).await;
     }
     Ok(run)
+}
+
+/// Runs one read statement for the assistant: the same checks and read-only transaction as the
+/// editor, at most `max_rows` rows (within the Safety limit), and nothing recorded in the
+/// editor's history.
+///
+/// # Errors
+///
+/// As [`run`].
+pub async fn run_for_assistant<A: DatabaseAdapter>(
+    store: &LocalStore,
+    sessions: &Sessions<A>,
+    id: ConnectionId,
+    request: QueryRequest,
+    max_rows: u32,
+) -> AppResult<QueryRun> {
+    Ok(execute(store, sessions, id, &request, Some(max_rows))
+        .await?
+        .0)
 }
 
 /// Runs the request; returns the outcome and the text it is about (the one statement, or the
@@ -58,6 +77,7 @@ async fn execute<A: DatabaseAdapter>(
     sessions: &Sessions<A>,
     id: ConnectionId,
     request: &QueryRequest,
+    max_rows: Option<u32>,
 ) -> AppResult<(QueryRun, String)> {
     request.validate()?;
     let session = sessions.get(id).ok_or_else(not_connected)?;
@@ -102,7 +122,10 @@ async fn execute<A: DatabaseAdapter>(
         return Ok((refusal, request.sql.clone()));
     };
 
-    let limits = page_limits(&settings::load(store).await?.safety);
+    let mut limits = page_limits(&settings::load(store).await?.safety);
+    if let Some(max_rows) = max_rows {
+        limits.max_rows = limits.max_rows.min(max_rows);
+    }
     let started = Instant::now();
     let outcome = session
         .run_read(

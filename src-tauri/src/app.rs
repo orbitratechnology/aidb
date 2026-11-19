@@ -57,7 +57,15 @@ fn setup<R: Runtime>(app: &AppHandle<R>) -> AppResult<()> {
     );
 
     let local_store = match tauri::async_runtime::block_on(LocalStore::open(paths.data_dir())) {
-        Ok(store) => LocalStoreState::Ready(store),
+        Ok(store) => {
+            // Tasks still marked running were cut off when the app last quit.
+            match tauri::async_runtime::block_on(store.agent_tasks().close_abandoned()) {
+                Ok(0) => {}
+                Ok(closed) => tracing::info!(closed, "closed assistant tasks left running"),
+                Err(error) => tracing::warn!(error = %error, "could not close abandoned tasks"),
+            }
+            LocalStoreState::Ready(store)
+        }
         Err(error) => {
             tracing::error!(error = ?crate::errors::AppError::from(error), "local database unavailable");
             LocalStoreState::Unavailable {

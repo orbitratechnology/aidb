@@ -230,7 +230,9 @@ const fn action_name(action: ReferentialAction) -> &'static str {
     }
 }
 
-fn object_line(object: &ObjectSummary) -> String {
+/// One line naming a table or view: kind, row estimate, access and comment.
+#[must_use]
+pub fn object_line(object: &ObjectSummary) -> String {
     let mut line = format!(
         "{}.{} ({}",
         object.schema,

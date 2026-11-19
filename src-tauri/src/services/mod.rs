@@ -2,6 +2,7 @@
 //! adapters directly.
 
 pub mod ai;
+pub mod assistant;
 pub mod catalog;
 pub mod connection_secrets;
 pub mod connections;

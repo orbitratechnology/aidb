@@ -7,4 +7,5 @@
 pub mod context;
 pub mod plan;
 pub mod risk;
+pub mod task;
 pub mod tools;

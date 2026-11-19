@@ -9,6 +9,7 @@
 mod catalog;
 mod errors;
 mod options;
+mod policy;
 mod query;
 mod table_data;
 
@@ -30,6 +31,7 @@ use crate::domain::catalog::{CatalogOverview, ObjectDetails, ObjectName};
 use crate::domain::connections::Engine;
 use crate::domain::database::{Capabilities, OperationId, SUPPORTED_POSTGRES_VERSIONS, ServerInfo};
 use crate::domain::export::{ExportSummary, RowSink};
+use crate::domain::policy::facts::TargetTable;
 use crate::domain::query::QueryRows;
 use crate::domain::sql::ReadShape;
 use crate::domain::table_data::{PageLimits, PageRequest, TablePage};
@@ -272,6 +274,16 @@ impl DatabaseSession for PgSession {
             self.session_error(e)
         })
         .await
+    }
+
+    async fn estimate_written_rows(&self, sql: &str) -> Result<u64, DbError> {
+        let mut connection = self.begin_operation(OperationId::new()).await?;
+        policy::estimate_written_rows(&mut connection, sql, |e| self.session_error(e)).await
+    }
+
+    async fn write_targets(&self, targets: &[String]) -> Result<Vec<TargetTable>, DbError> {
+        let mut connection = self.begin_operation(OperationId::new()).await?;
+        policy::write_targets(&mut connection, targets, |e| self.session_error(e)).await
     }
 }
 

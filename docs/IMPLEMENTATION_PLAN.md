@@ -125,7 +125,7 @@ Status legend: `[x]` done · `[~]` in progress · `[ ]` not started
 
 ## Phase 9: Policy and approval engine
 
-- [ ] **9.1 Risk classifier.** Deterministic R0–R4 classification from statement, environment,
+- [x] **9.1 Risk classifier.** Deterministic R0–R4 classification from statement, environment,
       permissions and estimated impact.
 - [ ] **9.2 Approvals.** State machine, digest binding, short expiry, single use, invalidation on
       connection or environment change.

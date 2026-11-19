@@ -1649,3 +1649,154 @@ mod query {
         drop_scratch(&name, session).await;
     }
 }
+
+mod policy {
+    use aidb_lib::domain::table_data::PageLimits;
+
+    use super::*;
+
+    const SCHEMA_SQL: &str = r"
+        CREATE TABLE orders (id int PRIMARY KEY, status text NOT NULL);
+        CREATE TABLE order_items (
+            order_id int NOT NULL REFERENCES orders (id) ON DELETE CASCADE,
+            sku text NOT NULL
+        );
+        CREATE TABLE audit (order_id int REFERENCES orders (id));
+        INSERT INTO orders SELECT g, 'pending' FROM generate_series(1, 1000) g;
+        INSERT INTO order_items SELECT g, 'sku' FROM generate_series(1, 1000) g;
+        ANALYZE;
+    ";
+
+    async fn count(session: &PgSession, table: &str) -> String {
+        session
+            .run_read(
+                &format!("SELECT count(*) FROM {table}"),
+                aidb_lib::domain::sql::ReadShape::Query,
+                PageLimits {
+                    max_rows: 1,
+                    max_bytes: 1024,
+                },
+                0,
+                None,
+            )
+            .await
+            .expect("count")
+            .rows[0][0]
+            .clone()
+            .expect("a count")
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PostgreSQL: run scripts/postgres-fixture.sh start"]
+    async fn write_estimates_plan_without_running() {
+        let (name, admin) = scratch_database("aidb_policy", SCHEMA_SQL).await;
+        // A read-only session, as new connections are: planning a write must still work.
+        let mut reader = target(&fixture(), true);
+        reader.settings.database = name.clone();
+        let session = open(reader).await;
+
+        let one = session
+            .estimate_written_rows("UPDATE orders SET status = 'shipped' WHERE id = 7")
+            .await
+            .expect("update");
+        let some = session
+            .estimate_written_rows("DELETE FROM orders WHERE id <= 10")
+            .await
+            .expect("delete");
+        let all = session
+            .estimate_written_rows("UPDATE orders SET status = 'x'")
+            .await
+            .expect("update all");
+        let inserted = session
+            .estimate_written_rows(
+                "INSERT INTO orders SELECT g, 'new' FROM generate_series(2001, 2050) g",
+            )
+            .await
+            .expect("insert");
+        let merged = session
+            .estimate_written_rows(
+                "MERGE INTO orders o USING (SELECT 5 AS id) s ON o.id = s.id \
+                 WHEN MATCHED THEN UPDATE SET status = 'merged'",
+            )
+            .await
+            .expect("merge");
+        let cte = session
+            .estimate_written_rows(
+                "WITH gone AS (DELETE FROM order_items WHERE order_id < 3 RETURNING 1) \
+                 SELECT count(*) FROM gone",
+            )
+            .await
+            .expect("cte");
+        let invalid = session
+            .estimate_written_rows("UPDATE no_such_table SET x = 1")
+            .await
+            .expect_err("missing table");
+
+        assert_eq!(one, 1);
+        assert!((5..=20).contains(&some), "{some}");
+        assert_eq!(all, 1000);
+        assert_eq!(inserted, 50);
+        assert_eq!(merged, 1);
+        assert!((1..=10).contains(&cte), "{cte}");
+        assert_eq!(invalid.kind(), DbErrorKind::ObjectNotFound);
+        // Nothing ran.
+        assert_eq!(count(&session, "orders").await, "1000");
+        assert_eq!(count(&session, "order_items").await, "1000");
+        session.close().await;
+        drop_scratch(&name, admin).await;
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PostgreSQL: run scripts/postgres-fixture.sh start"]
+    async fn write_targets_report_privileges_and_cascades() {
+        let (name, admin) = scratch_database("aidb_policy", SCHEMA_SQL).await;
+        let role = format!(
+            "aidb_clerk_{}",
+            OperationId::new().to_string().replace('-', "")
+        );
+        run(
+            &admin,
+            &format!(
+                "CREATE ROLE {role} LOGIN PASSWORD 'clerk-only'; \
+                 GRANT SELECT, UPDATE ON orders TO {role};"
+            ),
+        )
+        .await
+        .expect("role");
+        let mut clerk = target(&fixture(), true);
+        clerk.settings.database = name.clone();
+        clerk.settings.username = role.clone();
+        clerk.password = Some(SecretString::from("clerk-only"));
+        let session = open(clerk).await;
+
+        let tables = session
+            .write_targets(&[
+                "orders".to_owned(),
+                "public.order_items".to_owned(),
+                "\"Missing\"".to_owned(),
+            ])
+            .await
+            .expect("targets");
+
+        assert_eq!(tables.len(), 3);
+        let orders = &tables[0];
+        assert_eq!(orders.resolved.as_deref(), Some("public.orders"));
+        assert!(orders.can_update && !orders.can_delete && !orders.can_insert);
+        assert!(!orders.can_truncate);
+        // order_items cascades; audit references orders without CASCADE.
+        assert_eq!(orders.cascades_to, ["public.order_items"]);
+        let items = &tables[1];
+        assert_eq!(items.resolved.as_deref(), Some("public.order_items"));
+        assert!(!items.can_update && !items.can_delete);
+        assert!(items.cascades_to.is_empty());
+        assert_eq!(tables[2].resolved, None);
+
+        session.close().await;
+        drop_scratch(&name, admin).await;
+        let cleanup = open(target(&fixture(), false)).await;
+        run(&cleanup, &format!("DROP ROLE {role}"))
+            .await
+            .expect("drop role");
+        cleanup.close().await;
+    }
+}

@@ -21,7 +21,7 @@ pub const MAX_SQL_BYTES: usize = 1024 * 1024;
 
 /// Functions that act outside the transaction, outlive its rollback, touch server files or run
 /// SQL given as text. Matched by name, ignoring schema and case.
-const BLOCKED_FUNCTIONS: &[&str] = &[
+pub(crate) const BLOCKED_FUNCTIONS: &[&str] = &[
     "pg_terminate_backend",
     "pg_cancel_backend",
     "pg_reload_conf",

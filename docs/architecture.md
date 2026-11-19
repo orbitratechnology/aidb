@@ -297,6 +297,46 @@ Current commands: `app_info`, `diagnostics`, `open_external_url`, `get_settings`
   listed, searched and deleted through `save_query`, `list_saved_queries` and
   `delete_saved_query`. They are never run on their own.
 
+## Policy
+
+`domain::policy` decides how risky a statement is; nothing in it trusts a model's or the UI's
+label. It is deterministic and versioned (`POLICY_VERSION` 1); approvals (9.2) will record the
+version they were given under.
+
+- **Facts** (`facts::inspect`): splits the SQL with the editor's analyzer, then reads each
+  statement: the operation (from its kind and first keywords, so statements the parser cannot
+  read still get one), the objects it writes as written, whether an UPDATE or DELETE has a WHERE
+  that refers to a column (`WHERE 1 = 1` does not), rows in an INSERT's VALUES list, and flags:
+  destructive (DROP COLUMN or CONSTRAINT, CASCADE), disables safeguards (triggers, row-level
+  security, rules, `session_replication_role`, read-only settings), non-transactional
+  (CONCURRENTLY, VACUUM), server file or program access (COPY), and blocked functions anywhere
+  in it. Data-changing CTEs count as the write they contain.
+- **Database facts** (`services::policy::assess`): for writes the planner can plan, the rows
+  its data-changing nodes are fed (`EXPLAIN (FORMAT JSON)` without ANALYZE, in a read-only
+  transaction that is rolled back; it works in read-only sessions and runs nothing); for each
+  written table, resolved with the session's search path, whether the role holds the needed
+  privilege and which tables delete with it (`ON DELETE CASCADE`). Statements the policy blocks
+  from their text alone are not planned. A failed estimate counts as unknown.
+- **Rules** (`classify`), each with a reason in words:
+
+  | Statement                                                                       | Risk |
+  | ------------------------------------------------------------------------------- | ---- |
+  | Reads; EXPLAIN without ANALYZE                                                  | R1   |
+  | Writes of at most 100 rows (counted or estimated); comments                     | R2   |
+  | Larger or unestimated writes; schema changes; maintenance; GRANT, REVOKE        | R3   |
+  | Small cascading deletes; non-transactional statements                           | R3   |
+  | Any change in a production environment                                          | ≥ R3 |
+  | Several statements together when one changes something                          | ≥ R3 |
+  | UPDATE or DELETE that would change every row; DROP; TRUNCATE; destructive ALTER | R4   |
+  | Broad or unestimated cascading deletes; disabled safeguards                     | R4   |
+  | Roles, extensions, server settings, procedures, server files, blocked functions | R4   |
+  | Session settings and transaction control (aidb manages both); unreadable SQL    | R4   |
+
+- **Assessment**: the highest statement risk (raised for batches), the approval it needs (none,
+  Apply, elevated, blocked), and blockers that stop it here whatever its risk: R4, a read-only
+  profile or standby server for anything from R2, a missing privilege. Permissions never lower
+  the risk. There is no command yet: the approval flow (9.2) and controlled writes (10.x) use it.
+
 ## AI providers
 
 Provider-independent conversations live in `domain::ai`; `adapters::ai_providers` speaks each

@@ -10,6 +10,7 @@ pub mod connections;
 pub mod database;
 pub mod export;
 pub mod library;
+pub mod policy;
 pub mod providers;
 pub mod query;
 pub mod settings;

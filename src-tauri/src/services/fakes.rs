@@ -15,6 +15,7 @@ use crate::domain::catalog::{
 use crate::domain::connections::{ConnectionDraft, Engine};
 use crate::domain::database::{Capabilities, OperationId, ServerInfo, SessionLimits};
 use crate::domain::export::{ExportSummary, RowSink};
+use crate::domain::policy::facts::TargetTable;
 use crate::domain::query::QueryRows;
 use crate::domain::settings::SafetySettings;
 use crate::domain::sql::ReadShape;
@@ -30,6 +31,10 @@ pub struct FakeCatalog {
     pub describe_loads: AtomicUsize,
     /// The last page read and the limits it was read with.
     pub last_page: Mutex<Option<(PageRequest, PageLimits)>>,
+    /// The planner's estimate for any write; `None` fails the estimate.
+    pub write_estimate: Mutex<Option<u64>>,
+    /// What `write_targets` reports for a target; others exist with every privilege.
+    pub targets: Mutex<Vec<TargetTable>>,
 }
 
 impl FakeCatalog {
@@ -266,6 +271,42 @@ impl DatabaseSession for FakeSession {
             has_more: false,
             byte_limit_reached: false,
         })
+    }
+
+    async fn estimate_written_rows(&self, _sql: &str) -> Result<u64, DbError> {
+        let estimate = *self
+            .catalog
+            .write_estimate
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        estimate.ok_or_else(|| DbError::new(DbErrorKind::Other, "no estimate"))
+    }
+
+    async fn write_targets(&self, targets: &[String]) -> Result<Vec<TargetTable>, DbError> {
+        let known = self
+            .catalog
+            .targets
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        Ok(targets
+            .iter()
+            .map(|target| {
+                known
+                    .iter()
+                    .find(|table| &table.target == target)
+                    .cloned()
+                    .unwrap_or_else(|| TargetTable {
+                        target: target.clone(),
+                        resolved: Some(format!("public.{target}")),
+                        can_insert: true,
+                        can_update: true,
+                        can_delete: true,
+                        can_truncate: true,
+                        cascades_to: Vec::new(),
+                    })
+            })
+            .collect())
     }
 }
 

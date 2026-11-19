@@ -13,6 +13,7 @@ use crate::domain::catalog::{CatalogOverview, ObjectDetails, ObjectName};
 use crate::domain::connections::ConnectionDraft;
 use crate::domain::database::{Capabilities, OperationId, ServerInfo, SessionLimits};
 use crate::domain::export::{ExportSummary, RowSink};
+use crate::domain::policy::facts::TargetTable;
 use crate::domain::query::QueryRows;
 use crate::domain::sql::ReadShape;
 use crate::domain::table_data::{PageLimits, PageRequest, TablePage};
@@ -94,6 +95,18 @@ pub trait DatabaseSession: std::fmt::Debug + Send + Sync + 'static {
         offset: u64,
         operation: Option<OperationId>,
     ) -> impl Future<Output = Result<QueryRows, DbError>> + Send;
+
+    /// The planner's estimate of the rows one INSERT, UPDATE, DELETE or MERGE would write.
+    /// Plans it with `EXPLAIN` in a read-only transaction that is rolled back: nothing runs.
+    fn estimate_written_rows(&self, sql: &str)
+    -> impl Future<Output = Result<u64, DbError>> + Send;
+
+    /// For tables a statement writes (as written, resolved with the session's search path):
+    /// whether they exist, what the role may do to them, and which tables delete with them.
+    fn write_targets(
+        &self,
+        targets: &[String],
+    ) -> impl Future<Output = Result<Vec<TargetTable>, DbError>> + Send;
 }
 
 impl From<ExportError> for AppError {

@@ -3,6 +3,7 @@
 
 pub mod agent;
 pub mod ai;
+pub mod audit;
 pub mod catalog;
 pub mod connection_transfer;
 pub mod connection_uri;

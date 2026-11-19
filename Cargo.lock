@@ -72,6 +72,7 @@ dependencies = [
  "percent-encoding",
  "regex",
  "reqwest",
+ "ring",
  "rustls",
  "secrecy",
  "serde",

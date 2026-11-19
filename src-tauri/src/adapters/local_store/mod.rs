@@ -5,6 +5,7 @@
 //! data. Secrets and query results are never stored here.
 
 mod agent_tasks;
+mod audit;
 mod connections;
 mod library;
 mod maintenance;
@@ -24,6 +25,7 @@ use thiserror::Error;
 use crate::errors::{AppError, ErrorCode};
 
 pub use agent_tasks::{AgentTasks, StoredTask};
+pub use audit::AuditLog;
 pub use connections::ConnectionProfiles;
 pub use library::{LIST_LIMIT, QueryHistory, SavedQueries};
 pub use maintenance::{ClearTarget, Maintenance, StorageSummary};
@@ -146,6 +148,11 @@ impl LocalStore {
     #[must_use]
     pub fn connections(&self) -> ConnectionProfiles<'_> {
         ConnectionProfiles::new(&self.pool)
+    }
+
+    #[must_use]
+    pub fn audit(&self) -> AuditLog<'_> {
+        AuditLog::new(&self.pool)
     }
 
     #[must_use]

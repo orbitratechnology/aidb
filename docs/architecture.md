@@ -335,7 +335,31 @@ version they were given under.
 - **Assessment**: the highest statement risk (raised for batches), the approval it needs (none,
   Apply, elevated, blocked), and blockers that stop it here whatever its risk: R4, a read-only
   profile or standby server for anything from R2, a missing privilege. Permissions never lower
-  the risk. There is no command yet: the approval flow (9.2) and controlled writes (10.x) use it.
+  the risk.
+- **Approvals** (`policy::approval`, `services::approvals`): the PRD's lifecycle (draft →
+  validated → preview ready → awaiting approval → approved → executing → verifying → succeeded,
+  failed, partial or cancelled, plus expired and invalidated); any other transition is refused.
+  An approval is bound to a binding: policy version, connection id and session serial, database,
+  server role, environment, write setting, schema fingerprint, a digest of the parameter values,
+  and each statement's exact text, operation, targets, risk and estimated rows, with the overall
+  risk and required approval. Its digest is SHA-256 of the canonical JSON.
+  - `request` assesses the SQL and refuses what needs no approval or is blocked here; the
+    request waits 10 minutes for a decision.
+  - `approve` (the user only) needs the database name typed for elevated approvals, rebuilds the
+    binding from live state and compares digests, then issues a 256-bit random token, kept only
+    as its SHA-256, valid for 2 minutes.
+  - `consume` (the execution layer) takes the token away before checking, so it works once even
+    under concurrent use; it checks connection, state and expiry, rebuilds the binding for the
+    SQL and parameters about to run, and moves the approval to executing. `finish` reports the
+    outcome.
+  - Any failed check fails closed: the approval is invalidated and the refusal is written to the
+    audit log with its reason and the binding digest, never the SQL or values. Grants are
+    audited too.
+  - Approvals live in memory only. Connecting drops all of them; disconnecting, editing or
+    deleting a profile drops that connection's. A running change keeps its entry until its
+    outcome is reported.
+  - No command exists yet: controlled writes (10.x) add the preview, the approval UI and the
+    execution layer that consumes tokens.
 
 ## AI providers
 

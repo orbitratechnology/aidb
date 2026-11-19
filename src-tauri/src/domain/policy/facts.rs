@@ -47,6 +47,34 @@ pub enum Operation {
     Unknown,
 }
 
+impl Operation {
+    /// The name used in serialized form, digests and logs.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Read => "read",
+            Self::Explain => "explain",
+            Self::Insert => "insert",
+            Self::Update => "update",
+            Self::Delete => "delete",
+            Self::Merge => "merge",
+            Self::Copy => "copy",
+            Self::OtherWrite => "other_write",
+            Self::CreateObject => "create_object",
+            Self::AlterObject => "alter_object",
+            Self::DropObject => "drop_object",
+            Self::Truncate => "truncate",
+            Self::Comment => "comment",
+            Self::Maintenance => "maintenance",
+            Self::PrivilegeChange => "privilege_change",
+            Self::ServerAdministration => "server_administration",
+            Self::SessionControl => "session_control",
+            Self::TransactionControl => "transaction_control",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
 /// One statement and what it does.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StatementFacts {

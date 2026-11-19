@@ -9,6 +9,7 @@ use crate::adapters::credentials::Credentials;
 use crate::adapters::local_store::LocalStore;
 use crate::adapters::postgres::PostgresAdapter;
 use crate::errors::{AppError, AppResult, ErrorCode};
+use crate::services::approvals::Approvals;
 use crate::services::assistant::RunningTasks;
 use crate::services::catalog::CatalogCache;
 use crate::services::sessions::Sessions;
@@ -82,6 +83,7 @@ pub struct AppState {
     sessions: Sessions<PostgresAdapter>,
     catalog: CatalogCache,
     assistant: RunningTasks,
+    approvals: Approvals,
 }
 
 impl AppState {
@@ -94,6 +96,7 @@ impl AppState {
             sessions: Sessions::new(PostgresAdapter),
             catalog: CatalogCache::default(),
             assistant: RunningTasks::default(),
+            approvals: Approvals::default(),
         }
     }
 
@@ -101,6 +104,12 @@ impl AppState {
     #[must_use]
     pub fn catalog(&self) -> &CatalogCache {
         &self.catalog
+    }
+
+    /// Open approvals for changes. Only the core creates, grants or uses them.
+    #[must_use]
+    pub fn approvals(&self) -> &Approvals {
+        &self.approvals
     }
 
     /// Assistant questions being answered, by task id.

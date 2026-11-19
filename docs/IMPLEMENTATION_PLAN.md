@@ -127,7 +127,7 @@ Status legend: `[x]` done · `[~]` in progress · `[ ]` not started
 
 - [x] **9.1 Risk classifier.** Deterministic R0–R4 classification from statement, environment,
       permissions and estimated impact.
-- [ ] **9.2 Approvals.** State machine, digest binding, short expiry, single use, invalidation on
+- [x] **9.2 Approvals.** State machine, digest binding, short expiry, single use, invalidation on
       connection or environment change.
 - [ ] **9.3 Audit and Changes view.** Redacted audit events, Changes/History UI, bypass and
       prompt-injection tests.

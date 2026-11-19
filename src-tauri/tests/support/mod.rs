@@ -174,6 +174,13 @@ impl ScratchDatabase {
         rows
     }
 
+    /// Runs fixed test SQL as the fixture's owner (to change the schema under a session).
+    pub async fn execute(&self, sql: &str) {
+        let session = admin_session(Self::settings(&self.name), fixture().1).await;
+        execute(&session, sql).await;
+        session.close().await;
+    }
+
     pub async fn drop(self) {
         let (settings, password) = fixture();
         let admin = admin_session(settings, password).await;
@@ -203,10 +210,17 @@ pub struct Workspace {
 
 impl Workspace {
     pub async fn connect(database: &str) -> Self {
+        Self::connect_with(database, |_| {}).await
+    }
+
+    /// As [`Workspace::connect`], with the profile adjusted first (environment, writes).
+    pub async fn connect_with(database: &str, adjust: impl FnOnce(&mut ConnectionDraft)) -> Self {
         let dir = tempfile::tempdir().expect("temp dir");
         let store = LocalStore::open(dir.path()).await.expect("store");
         let credentials = Credentials::session_only("assistant tests");
-        let settings = ScratchDatabase::settings(database);
+        let mut settings = ScratchDatabase::settings(database);
+        adjust(&mut settings);
+        let read_only = settings.read_only;
         let profile = store
             .connections()
             .insert(&settings.validated().expect("valid settings"))
@@ -222,7 +236,10 @@ impl Workspace {
         )
         .await
         .expect("connect");
-        assert!(active.server.read_only, "new connections are read-only");
+        assert_eq!(
+            active.server.read_only, read_only,
+            "the session enforces the profile's access mode"
+        );
         Self {
             _dir: dir,
             store,

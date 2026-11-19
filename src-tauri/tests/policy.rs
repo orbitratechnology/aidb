@@ -95,3 +95,130 @@ async fn assessments_use_the_database_and_the_profile() {
 
     assert_eq!(before, after, "assessing changed the database");
 }
+
+mod approvals {
+    use aidb_lib::domain::audit::Actor;
+    use aidb_lib::domain::connections::Environment;
+    use aidb_lib::domain::policy::approval::ApprovalState;
+    use aidb_lib::domain::policy::risk::ApprovalLevel;
+    use aidb_lib::errors::ErrorCode;
+    use aidb_lib::services::approvals::{self, Approvals};
+
+    use super::schema;
+    use super::support::{ScratchDatabase, Workspace};
+
+    // Literal: statements with $n placeholders cannot be planned without their values yet, so
+    // their impact counts as unknown (R3).
+    const UPDATE: &str = "UPDATE orders SET status = 'shipped' WHERE id = 3";
+
+    fn params() -> Vec<Option<String>> {
+        Vec::new()
+    }
+
+    /// Requests and approves the UPDATE on a writable profile.
+    async fn approved(workspace: &Workspace, approvals: &Approvals) -> approvals::ApprovalGrant {
+        let request = approvals::request(
+            &workspace.store,
+            &workspace.sessions,
+            approvals,
+            workspace.connection_id,
+            UPDATE,
+            params(),
+            Actor::User,
+        )
+        .await
+        .expect("request");
+        assert_eq!(request.level, ApprovalLevel::Apply);
+        approvals::approve(
+            &workspace.store,
+            &workspace.sessions,
+            approvals,
+            request.id,
+            None,
+        )
+        .await
+        .expect("approve")
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PostgreSQL: run scripts/postgres-fixture.sh start"]
+    async fn approvals_bind_to_the_live_database() {
+        let database = ScratchDatabase::create("aidb_approval", &schema()).await;
+        let workspace =
+            Workspace::connect_with(&database.name, |draft| draft.read_only = false).await;
+        let approvals = Approvals::default();
+
+        // Used as approved: the execution layer gets the go-ahead (nothing runs here).
+        let grant = approved(&workspace, &approvals).await;
+        let operation = approvals::consume(
+            &workspace.store,
+            &workspace.sessions,
+            &approvals,
+            workspace.connection_id,
+            &grant.token,
+            UPDATE,
+            &params(),
+        )
+        .await
+        .expect("use");
+        assert_eq!(
+            approvals.state(operation.id),
+            Some(ApprovalState::Executing)
+        );
+        approvals::finish(&approvals, operation.id, ApprovalState::Cancelled).expect("finish");
+
+        // The schema changes after approval: the live fingerprint no longer matches.
+        let grant = approved(&workspace, &approvals).await;
+        database
+            .execute("ALTER TABLE orders ADD COLUMN note text")
+            .await;
+        let error = approvals::consume(
+            &workspace.store,
+            &workspace.sessions,
+            &approvals,
+            workspace.connection_id,
+            &grant.token,
+            UPDATE,
+            &params(),
+        )
+        .await
+        .expect_err("schema changed");
+        assert_eq!(error.code(), ErrorCode::PermissionDenied);
+        assert!(error.message().contains("structure"), "{error}");
+
+        // The profile's environment changes after approval.
+        let grant = approved(&workspace, &approvals).await;
+        let mut profile = workspace
+            .store
+            .connections()
+            .get(workspace.connection_id)
+            .await
+            .expect("read")
+            .expect("profile");
+        profile.settings.environment = Environment::Staging;
+        workspace
+            .store
+            .connections()
+            .update(
+                workspace.connection_id,
+                &profile.settings.clone().validated().expect("valid"),
+            )
+            .await
+            .expect("update");
+        let error = approvals::consume(
+            &workspace.store,
+            &workspace.sessions,
+            &approvals,
+            workspace.connection_id,
+            &grant.token,
+            UPDATE,
+            &params(),
+        )
+        .await
+        .expect_err("environment changed");
+        assert!(error.message().contains("environment"), "{error}");
+
+        workspace.close().await;
+        database.drop().await;
+    }
+}

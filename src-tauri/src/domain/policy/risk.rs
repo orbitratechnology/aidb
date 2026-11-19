@@ -36,6 +36,18 @@ pub enum ApprovalLevel {
 }
 
 impl RiskLevel {
+    /// `R0` to `R4`, as serialized.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::R0 => "R0",
+            Self::R1 => "R1",
+            Self::R2 => "R2",
+            Self::R3 => "R3",
+            Self::R4 => "R4",
+        }
+    }
+
     /// The approval this risk needs by default. Environment-specific rules (production writes)
     /// tighten this in the policy engine.
     #[must_use]
@@ -60,6 +72,8 @@ mod tests {
         assert_eq!(RiskLevel::R2.required_approval(), ApprovalLevel::Apply);
         assert_eq!(RiskLevel::R3.required_approval(), ApprovalLevel::Elevated);
         assert_eq!(RiskLevel::R4.required_approval(), ApprovalLevel::Blocked);
-        assert_eq!(serde_json::to_value(RiskLevel::R1).expect("json"), "R1");
+        for risk in [RiskLevel::R0, RiskLevel::R1, RiskLevel::R4] {
+            assert_eq!(serde_json::to_value(risk).expect("json"), risk.as_str());
+        }
     }
 }

@@ -46,6 +46,9 @@ const COMMANDS: &[&str] = &[
     "ask_assistant",
     "cancel_assistant_task",
     "list_audit_events",
+    "preview_data_change",
+    "apply_data_change",
+    "cancel_data_change",
 ];
 
 fn main() {

@@ -23,8 +23,8 @@ use crate::adapters::database::{DbError, DbErrorKind, ExportError};
 use crate::domain::catalog::ObjectName;
 use crate::domain::export::{ExportSummary, RowSink};
 use crate::domain::table_data::{
-    CELL_CHAR_LIMIT, CellRef, FilterOperator, PageColumn, PageLimits, PageRequest, SortDirection,
-    SortKey, TablePage, ValueKind, escape_like, truncate_cell,
+    CELL_CHAR_LIMIT, CellRef, Filter, FilterOperator, PageColumn, PageLimits, PageRequest,
+    SortDirection, SortKey, TablePage, ValueKind, escape_like, truncate_cell,
 };
 
 /// Rough per-cell cost of a value in the reply, on top of its text.
@@ -33,46 +33,60 @@ const CELL_OVERHEAD_BYTES: usize = 4;
 const MAX_CHAR_BYTES: usize = 4;
 
 #[derive(sqlx::FromRow)]
-struct RelationRow {
-    oid: Oid,
+pub(super) struct RelationRow {
+    pub oid: Oid,
     /// `schema.name`, quoted by the server.
-    quoted: String,
-    usable: bool,
+    pub quoted: String,
+    pub usable: bool,
     /// The server's `server_encoding`.
-    encoding: String,
+    pub encoding: String,
+    /// A table (plain or partitioned), whose rows aidb may change.
+    pub table: bool,
 }
 
 impl RelationRow {
-    fn raw_bytes(&self) -> bool {
+    pub fn raw_bytes(&self) -> bool {
         self.encoding == "SQL_ASCII"
     }
 }
 
 #[derive(sqlx::FromRow)]
-struct ColumnRow {
-    name: String,
+pub(super) struct ColumnRow {
+    pub name: String,
     /// The name quoted by the server.
-    quoted: String,
-    data_type: String,
+    pub quoted: String,
+    /// The type as the server prints it, with its modifier (`character varying(20)`).
+    pub data_type: String,
+    /// The type without its modifier (`character varying`, `bpchar`), which casts values of
+    /// any length.
+    pub plain_type: String,
+    /// The column's type has a modifier (a length, precision or scale).
+    pub has_modifier: bool,
     /// The base type (a domain's underlying type) as `schema.name`, quoted by the server.
-    base_type: String,
-    category: String,
-    type_name: String,
-    readable: bool,
+    pub base_type: String,
+    pub category: String,
+    pub type_name: String,
+    pub readable: bool,
+    pub can_insert: bool,
+    pub can_update: bool,
+    /// A generated column, computed by the database.
+    pub generated: bool,
+    /// An identity column the database always fills (`GENERATED ALWAYS AS IDENTITY`).
+    pub always_identity: bool,
     /// Position in the primary key, from 1.
-    key_position: Option<i32>,
+    pub key_position: Option<i32>,
 }
 
 impl ColumnRow {
-    fn kind(&self) -> ValueKind {
+    pub fn kind(&self) -> ValueKind {
         ValueKind::classify(&self.category, &self.type_name)
     }
 }
 
 /// The object and its live columns, checked for read access.
-struct Target {
-    relation: RelationRow,
-    columns: Vec<ColumnRow>,
+pub(super) struct Target {
+    pub relation: RelationRow,
+    pub columns: Vec<ColumnRow>,
 }
 
 impl Target {
@@ -94,14 +108,15 @@ impl Target {
 
 /// Looks up the object and its columns. The outer error is a driver failure for the caller to
 /// classify; the inner one a problem with the request itself.
-async fn target(
+pub(super) async fn target(
     connection: &mut PgConnection,
     object: &ObjectName,
 ) -> Result<Result<Target, DbError>, sqlx::Error> {
     let relation: Option<RelationRow> = sqlx::query_as(
         r"SELECT c.oid, quote_ident(n.nspname) || '.' || quote_ident(c.relname) AS quoted,
                  has_schema_privilege(n.oid, 'USAGE') AS usable,
-                 current_setting('server_encoding') AS encoding
+                 current_setting('server_encoding') AS encoding,
+                 c.relkind IN ('r', 'p') AS table
           FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
           WHERE n.nspname = $1 AND c.relname = $2 AND c.relkind IN ('r', 'p', 'v', 'm', 'f')",
     )
@@ -116,12 +131,20 @@ async fn target(
         )));
     };
 
+    // `plain_type` uses typmod -1, not NULL: that prints `bpchar` and `"bit"`, which keep any
+    // length, where NULL prints `character` and `bit`, which mean length 1.
     let columns: Vec<ColumnRow> = sqlx::query_as(
         r"SELECT a.attname::text AS name, quote_ident(a.attname) AS quoted,
                  format_type(a.atttypid, a.atttypmod) AS data_type,
+                 format_type(a.atttypid, -1) AS plain_type,
+                 a.atttypmod >= 0 AS has_modifier,
                  quote_ident(bn.nspname) || '.' || quote_ident(bt.typname) AS base_type,
                  bt.typcategory::text AS category, bt.typname::text AS type_name,
                  has_column_privilege(a.attrelid, a.attnum, 'SELECT') AS readable,
+                 has_column_privilege(a.attrelid, a.attnum, 'INSERT') AS can_insert,
+                 has_column_privilege(a.attrelid, a.attnum, 'UPDATE') AS can_update,
+                 a.attgenerated <> '' AS generated,
+                 a.attidentity = 'a' AS always_identity,
                  array_position(pk.conkey, a.attnum)::int4 AS key_position
           FROM pg_attribute a
           JOIN pg_type t ON t.oid = a.atttypid
@@ -372,6 +395,79 @@ pub(super) fn text_expression(value: &str, kind: ValueKind, cut: bool, raw_bytes
     }
 }
 
+/// The column `name` of `object`, which the role must be able to read.
+pub(super) fn readable_column<'c>(
+    columns: &'c [ColumnRow],
+    object: &ObjectName,
+    name: &str,
+) -> Result<&'c ColumnRow, DbError> {
+    match columns.iter().find(|c| c.name == name) {
+        Some(column) if column.readable => Ok(column),
+        Some(_) => Err(DbError::new(
+            DbErrorKind::PermissionDenied,
+            format!("Your database role cannot read the column {name}."),
+        )),
+        None => Err(DbError::new(
+            DbErrorKind::InvalidRequest,
+            format!("{}.{} has no column {name}.", object.schema, object.name),
+        )),
+    }
+}
+
+/// One condition per filter, to be joined with AND. Each value is appended to `values` and
+/// referred to as `$n`, where `n` is `offset` plus its position in `values` (from 1).
+pub(super) fn conditions(
+    filters: &[Filter],
+    columns: &[ColumnRow],
+    object: &ObjectName,
+    values: &mut Vec<String>,
+    offset: usize,
+) -> Result<Vec<String>, DbError> {
+    let mut conditions = Vec::with_capacity(filters.len());
+    for filter in filters {
+        let column = readable_column(columns, object, &filter.column)?;
+        let value = filter.value.clone().unwrap_or_default();
+        let comparison = match filter.operator {
+            FilterOperator::IsNull => {
+                conditions.push(format!("{} IS NULL", column.quoted));
+                continue;
+            }
+            FilterOperator::IsNotNull => {
+                conditions.push(format!("{} IS NOT NULL", column.quoted));
+                continue;
+            }
+            FilterOperator::Contains | FilterOperator::StartsWith => {
+                let pattern = escape_like(&value);
+                values.push(if filter.operator == FilterOperator::Contains {
+                    format!("%{pattern}%")
+                } else {
+                    format!("{pattern}%")
+                });
+                conditions.push(format!(
+                    "({})::text ILIKE ${}",
+                    column.quoted,
+                    offset + values.len()
+                ));
+                continue;
+            }
+            FilterOperator::Equals => "=",
+            FilterOperator::NotEquals => "<>",
+            FilterOperator::Less => "<",
+            FilterOperator::LessOrEqual => "<=",
+            FilterOperator::Greater => ">",
+            FilterOperator::GreaterOrEqual => ">=",
+        };
+        values.push(value);
+        conditions.push(format!(
+            "{} {comparison} CAST(${} AS {})",
+            column.quoted,
+            offset + values.len(),
+            column.base_type
+        ));
+    }
+    Ok(conditions)
+}
+
 /// The SELECT for one page, with its bound values in `$n` order. The limit and offset are bound
 /// last, after `values`.
 #[derive(Debug)]
@@ -392,22 +488,7 @@ impl Statement {
         columns: &[ColumnRow],
         readable: &[&ColumnRow],
     ) -> Result<Self, DbError> {
-        let find = |name: &str| -> Result<&ColumnRow, DbError> {
-            match columns.iter().find(|c| c.name == name) {
-                Some(column) if column.readable => Ok(column),
-                Some(_) => Err(DbError::new(
-                    DbErrorKind::PermissionDenied,
-                    format!("Your database role cannot read the column {name}."),
-                )),
-                None => Err(DbError::new(
-                    DbErrorKind::InvalidRequest,
-                    format!(
-                        "{}.{} has no column {name}.",
-                        request.object.schema, request.object.name
-                    ),
-                )),
-            }
-        };
+        let find = |name: &str| readable_column(columns, &request.object, name);
 
         let raw_bytes = relation.raw_bytes();
         let select = readable
@@ -425,44 +506,7 @@ impl Statement {
         let mut sql = format!("SELECT {select} FROM {}", relation.quoted);
 
         let mut values = Vec::new();
-        let mut conditions = Vec::new();
-        for filter in &request.filters {
-            let column = find(&filter.column)?;
-            let value = filter.value.clone().unwrap_or_default();
-            let comparison = match filter.operator {
-                FilterOperator::IsNull => {
-                    conditions.push(format!("{} IS NULL", column.quoted));
-                    continue;
-                }
-                FilterOperator::IsNotNull => {
-                    conditions.push(format!("{} IS NOT NULL", column.quoted));
-                    continue;
-                }
-                FilterOperator::Contains | FilterOperator::StartsWith => {
-                    let pattern = escape_like(&value);
-                    values.push(if filter.operator == FilterOperator::Contains {
-                        format!("%{pattern}%")
-                    } else {
-                        format!("{pattern}%")
-                    });
-                    conditions.push(format!("({})::text ILIKE ${}", column.quoted, values.len()));
-                    continue;
-                }
-                FilterOperator::Equals => "=",
-                FilterOperator::NotEquals => "<>",
-                FilterOperator::Less => "<",
-                FilterOperator::LessOrEqual => "<=",
-                FilterOperator::Greater => ">",
-                FilterOperator::GreaterOrEqual => ">=",
-            };
-            values.push(value);
-            conditions.push(format!(
-                "{} {comparison} CAST(${} AS {})",
-                column.quoted,
-                values.len(),
-                column.base_type
-            ));
-        }
+        let conditions = conditions(&request.filters, columns, &request.object, &mut values, 0)?;
         if !conditions.is_empty() {
             sql.push_str(" WHERE ");
             sql.push_str(&conditions.join(" AND "));
@@ -529,10 +573,16 @@ mod tests {
             name: name.into(),
             quoted: quoted.into(),
             data_type: "integer".into(),
+            plain_type: "integer".into(),
+            has_modifier: false,
             base_type: "pg_catalog.int4".into(),
             category: "N".into(),
             type_name: "int4".into(),
             readable: true,
+            can_insert: true,
+            can_update: true,
+            generated: false,
+            always_identity: false,
             key_position,
         }
     }
@@ -543,6 +593,7 @@ mod tests {
             quoted: r#"public."Order Items""#.into(),
             usable: true,
             encoding: "UTF8".into(),
+            table: true,
         }
     }
 

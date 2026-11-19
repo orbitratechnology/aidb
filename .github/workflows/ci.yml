@@ -131,6 +131,7 @@ jobs:
           cargo test -p aidb --locked --lib session_commands_work_over_ipc -- --ignored
           cargo test -p aidb --locked --test agent_eval -- --ignored scripted
           cargo test -p aidb --locked --test policy -- --ignored
+          cargo test -p aidb --locked --test data_changes -- --ignored
       - name: Stop PostgreSQL
         if: always()
         run: scripts/postgres-fixture.sh stop

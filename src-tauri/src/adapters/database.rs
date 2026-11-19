@@ -11,6 +11,7 @@ use thiserror::Error;
 
 use crate::domain::catalog::{CatalogOverview, ObjectDetails, ObjectName};
 use crate::domain::connections::ConnectionDraft;
+use crate::domain::data_change::{DataChange, DataChangePlan};
 use crate::domain::database::{Capabilities, OperationId, ServerInfo, SessionLimits};
 use crate::domain::export::{ExportSummary, RowSink};
 use crate::domain::policy::facts::TargetTable;
@@ -107,6 +108,39 @@ pub trait DatabaseSession: std::fmt::Debug + Send + Sync + 'static {
         &self,
         targets: &[String],
     ) -> impl Future<Output = Result<Vec<TargetTable>, DbError>> + Send;
+
+    /// Makes `change` ready to run against the live table, in a read-only transaction: writes
+    /// its statement, counts the rows an UPDATE or DELETE matches (refusing more than
+    /// [`MAX_CHANGED_ROWS`](crate::domain::data_change::MAX_CHANGED_ROWS)), and has the
+    /// database convert every value to its column's type. With `preview`, also reads some of
+    /// the matching rows as they are now. Nothing is written.
+    fn plan_data_change(
+        &self,
+        change: &DataChange,
+        preview: Option<PageLimits>,
+    ) -> impl Future<Output = Result<DataChangePlan, DbError>> + Send;
+
+    /// Applies `change` in one transaction, only if it still plans to exactly `approved` (same
+    /// statement, parameters, matching rows and stored values): locks the table against
+    /// structure changes and the matching rows against other writers, runs the statement,
+    /// checks the rows written and their stored values, and commits. Any difference rolls it
+    /// back. Returns the rows written.
+    fn apply_data_change(
+        &self,
+        change: &DataChange,
+        approved: &DataChangePlan,
+    ) -> impl Future<Output = Result<u64, ApplyError>> + Send;
+}
+
+/// Why an approved change was not applied.
+#[derive(Debug, Error)]
+pub enum ApplyError {
+    /// It failed or a check refused it, and was rolled back: nothing was written.
+    #[error(transparent)]
+    RolledBack(DbError),
+    /// The connection was lost while committing: it may or may not have been written.
+    #[error(transparent)]
+    Uncertain(DbError),
 }
 
 impl From<ExportError> for AppError {

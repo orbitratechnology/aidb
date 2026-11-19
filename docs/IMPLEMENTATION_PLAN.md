@@ -134,7 +134,7 @@ Status legend: `[x]` done · `[~]` in progress · `[ ]` not started
 
 ## Phase 10: Controlled writes and CSV import
 
-- [ ] **10.1 Data change engine.** INSERT/UPDATE/DELETE preview, predicate requirement, impact
+- [x] **10.1 Data change engine.** INSERT/UPDATE/DELETE preview, predicate requirement, impact
       estimate, transactional apply with an approval token, verification.
 - [ ] **10.2 Grid editing.** Pending-change buffer, before/after diff, Save/Discard, delete
       confirmation.

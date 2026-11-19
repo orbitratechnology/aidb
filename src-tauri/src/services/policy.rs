@@ -61,6 +61,23 @@ pub async fn assess<A: DatabaseAdapter>(
     id: ConnectionId,
     sql: &str,
 ) -> AppResult<RiskAssessment> {
+    assess_with_rows(store, sessions, id, sql, None).await
+}
+
+/// Assesses a single data-changing statement aidb wrote itself, with the rows it writes
+/// counted beforehand (`counted`) instead of estimated by the planner. The count is used only
+/// when `sql` is exactly one statement that writes rows.
+///
+/// # Errors
+///
+/// As [`assess`].
+pub async fn assess_with_rows<A: DatabaseAdapter>(
+    store: &LocalStore,
+    sessions: &Sessions<A>,
+    id: ConnectionId,
+    sql: &str,
+    counted: Option<u64>,
+) -> AppResult<RiskAssessment> {
     if sql.len() > MAX_SQL_BYTES {
         return Err(AppError::invalid_input(format!(
             "The SQL is too long ({} MB at most).",
@@ -103,10 +120,21 @@ pub async fn assess<A: DatabaseAdapter>(
             })
     };
 
+    let counted = counted.filter(|_| {
+        sql_facts.problem.is_none()
+            && sql_facts.statements.len() == 1
+            && matches!(
+                sql_facts.statements[0].operation,
+                Operation::Insert | Operation::Update | Operation::Delete
+            )
+    });
     let mut impacts = Vec::with_capacity(sql_facts.statements.len());
     for statement in &sql_facts.statements {
         let mut impact = ImpactFacts::unknown();
-        if let Some(rows) = statement.literal_rows {
+        if let Some(rows) = counted {
+            impact.rows = Some(rows);
+            impact.source = ImpactSource::Counted;
+        } else if let Some(rows) = statement.literal_rows {
             impact.rows = Some(rows);
             impact.source = ImpactSource::Statement;
         } else if worth_estimating(statement) {

@@ -48,6 +48,9 @@ export const COMMANDS = {
   askAssistant: 'ask_assistant',
   cancelAssistantTask: 'cancel_assistant_task',
   listAuditEvents: 'list_audit_events',
+  previewDataChange: 'preview_data_change',
+  applyDataChange: 'apply_data_change',
+  cancelDataChange: 'cancel_data_change',
 } as const
 
 export type CommandName = (typeof COMMANDS)[keyof typeof COMMANDS]

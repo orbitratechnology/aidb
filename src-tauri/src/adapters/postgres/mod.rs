@@ -7,6 +7,7 @@
 //! the next operation.
 
 mod catalog;
+mod data_change;
 mod errors;
 mod options;
 mod policy;
@@ -25,10 +26,11 @@ use sqlx::{Connection, Postgres};
 use self::errors::{Endpoint, Phase, classify, connect_timeout};
 pub use self::options::APPLICATION_NAME;
 use super::database::{
-    ConnectTarget, DatabaseAdapter, DatabaseSession, DbError, DbErrorKind, ExportError,
+    ApplyError, ConnectTarget, DatabaseAdapter, DatabaseSession, DbError, DbErrorKind, ExportError,
 };
 use crate::domain::catalog::{CatalogOverview, ObjectDetails, ObjectName};
 use crate::domain::connections::Engine;
+use crate::domain::data_change::{ChangeKind, DataChange, DataChangePlan, PREVIEW_ROWS};
 use crate::domain::database::{Capabilities, OperationId, SUPPORTED_POSTGRES_VERSIONS, ServerInfo};
 use crate::domain::export::{ExportSummary, RowSink};
 use crate::domain::policy::facts::TargetTable;
@@ -284,6 +286,47 @@ impl DatabaseSession for PgSession {
     async fn write_targets(&self, targets: &[String]) -> Result<Vec<TargetTable>, DbError> {
         let mut connection = self.begin_operation(OperationId::new()).await?;
         policy::write_targets(&mut connection, targets, |e| self.session_error(e)).await
+    }
+
+    async fn plan_data_change(
+        &self,
+        change: &DataChange,
+        preview: Option<PageLimits>,
+    ) -> Result<DataChangePlan, DbError> {
+        let mut connection = self.begin_operation(OperationId::new()).await?;
+        let mut plan = data_change::plan(&mut connection, change)
+            .await
+            .map_err(|e| self.session_error(e))??;
+        if let Some(limits) = preview
+            && change.kind() != ChangeKind::Insert
+        {
+            let request = PageRequest {
+                object: change.table().clone(),
+                filters: change.filters().to_vec(),
+                sort: Vec::new(),
+                offset: 0,
+                limit: Some(PREVIEW_ROWS),
+                operation_id: None,
+            };
+            plan.before = Some(
+                table_data::read_page(&mut connection, &request, limits)
+                    .await
+                    .map_err(|e| self.session_error(e))??,
+            );
+        }
+        Ok(plan)
+    }
+
+    async fn apply_data_change(
+        &self,
+        change: &DataChange,
+        approved: &DataChangePlan,
+    ) -> Result<u64, ApplyError> {
+        let mut connection = self
+            .begin_operation(OperationId::new())
+            .await
+            .map_err(ApplyError::RolledBack)?;
+        data_change::apply(&mut connection, change, approved, |e| self.session_error(e)).await
     }
 }
 

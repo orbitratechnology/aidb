@@ -8,6 +8,7 @@ pub mod audit;
 pub mod catalog;
 pub mod connection_secrets;
 pub mod connections;
+pub mod data_changes;
 #[cfg(test)]
 pub(crate) mod fakes;
 pub mod library;

@@ -358,8 +358,46 @@ version they were given under.
   - Approvals live in memory only. Connecting drops all of them; disconnecting, editing or
     deleting a profile drops that connection's. A running change keeps its entry until its
     outcome is reported.
-  - No command exists yet: controlled writes (10.x) add the preview, the approval UI and the
-    execution layer that consumes tokens.
+  - An approval's subject is SQL with parameters, or a data change (below). For a data change
+    the binding is rebuilt by planning the change again, so its impact is a fresh exact count:
+    one more or one fewer matching row invalidates the approval.
+
+## Data changes
+
+`domain::data_change`, `adapters::postgres::data_change` and `services::data_changes` turn a
+structured INSERT, UPDATE or DELETE into a checked write. A change is data, not SQL: a table,
+column names and values as text, and for UPDATE and DELETE the grid's filters (at least one, so
+a change never addresses a whole table by omission). Limits: 1,000 rows per INSERT, 200
+columns, 10,000 values, 1 MB per value, 8 MB in all, and 10,000 matching rows for an UPDATE or
+DELETE.
+
+- **Plan** (read-only transaction, rolled back): look up the table (plain or partitioned; views
+  are refused) and its columns, and write the statement from the server's quoting of the live
+  names, with each value bound as `CAST($n AS <type>)`. Generated columns, `GENERATED ALWAYS`
+  identity columns, columns the role cannot write or read, and unknown columns are refused.
+  Count the matching rows exactly (refused past 10,000) and have the database convert every
+  value to its column's type, as text. Values are cast to the type without its modifier, so
+  storing them applies assignment rules (an over-long `varchar(n)` value is refused, not cut);
+  a string or bit value the modifier would shorten is refused at planning time. Numeric scale
+  and timestamp precision round as the column does, and the preview shows the rounded value.
+- **Preview** (`preview_data_change`): the plan, the counted rows, up to 20 matching rows as
+  they are now and up to 20 rows of values as they will be stored, the risk with its reasons,
+  and an approval held in the core. The policy assesses the generated statement itself, with
+  the counted rows as its impact (`counted`); a refusal by the policy is audited.
+- **Apply** (`apply_data_change`, the user only): approve (with the database name typed for
+  elevated changes) and use the approval inside the core, so the token never leaves it; each
+  step rebuilds the binding. Then, in one transaction opened with a plain `BEGIN` (a read-only
+  session still refuses it): lock the table in `ROW EXCLUSIVE` mode (blocks structure changes),
+  plan again and compare with the approved statement and parameters, recount the matching rows
+  `FOR UPDATE` (locks them against other writers) and compare, convert the values again and
+  compare, run the statement with `RETURNING` the stored values as text, check the rows written
+  and that every stored value is the planned one (a trigger or rule that changes them rolls the
+  change back), and commit. Any difference rolls back with nothing written. A commit that loses
+  the connection is reported as uncertain, never retried.
+- **Outcome**: applied (rows written), rolled back (with the database's reason), or uncertain;
+  the approval finishes as succeeded or failed and the outcome is audited.
+- `cancel_data_change` declines a preview. The assistant cannot reach any of this yet; 10.3
+  lets it propose changes that wait for the same approval.
 
 ## Audit log
 
@@ -373,6 +411,7 @@ redacted detail; never SQL text, parameter values, rows, questions or anything t
 | ---------------- | ----------------------------------------------------- | ------------------------------------------------- |
 | `approve`        | the user approves a change                            | none; the binding's digest is the fingerprint     |
 | `approval_check` | any approval check fails (it fails closed)            | a reason code and message                         |
+| `data_change`    | a data change is refused, declined, applied or fails  | kind and table, and the outcome; rows written     |
 | `sql_refused`    | the SQL editor refuses a statement that is not a read | the statement's kind; its digest and policy risk  |
 | `tool_call`      | the planner refuses a model's tool request            | the tool, if it is a registry tool, and a code    |
 | `assistant_task` | an assistant task ends                                | task id and counts of steps, queries and refusals |

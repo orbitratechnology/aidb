@@ -156,6 +156,9 @@ pub(super) fn from_sqlstate(code: &str, server_message: &str, endpoint: &Endpoin
         "42703" | "42883" | "42804" => (Kind::InvalidRequest, format!("{server_message}.")),
         // Data exceptions: a value the column's type cannot hold, out of range, and so on.
         other if other.starts_with("22") => (Kind::InvalidRequest, format!("{server_message}.")),
+        // Integrity constraints: unique, not-null, check, foreign key. The server's message
+        // names the constraint; the values are only in its detail, which is left out.
+        other if other.starts_with("23") => (Kind::InvalidRequest, format!("{server_message}.")),
         "25006" => (
             Kind::ReadOnly,
             "This connection is read-only, so the database refused the change.".to_owned(),

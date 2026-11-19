@@ -10,6 +10,8 @@ import {
   ConnectionTestReportSchema,
   ContextPreviewSchema,
   CredentialBackendSchema,
+  DataChangePreviewSchema,
+  DataChangeResultSchema,
   ProviderDetailsSchema,
   ProviderTestReportSchema,
   DiagnosticsInfoSchema,
@@ -42,6 +44,9 @@ import {
   type ConnectionTestReport,
   type ContextPreview,
   type CredentialBackend,
+  type DataChange,
+  type DataChangePreview,
+  type DataChangeResult,
   type ProviderDetails,
   type ProviderDraft,
   type ProviderId,
@@ -382,4 +387,36 @@ export function cancelAssistantTask(taskId: TaskId): Promise<boolean> {
 /** Audit events, newest first. */
 export function listAuditEvents(filter: AuditFilter): Promise<AuditEntry[]> {
   return callCommand(COMMANDS.listAuditEvents, z.array(AuditEntrySchema), { filter })
+}
+
+/**
+ * Plans an INSERT, UPDATE or DELETE against the live table and holds it for the user's
+ * approval. Nothing is written.
+ */
+export function previewDataChange(
+  connectionId: ConnectionId,
+  change: DataChange,
+): Promise<DataChangePreview> {
+  return callCommand(COMMANDS.previewDataChange, DataChangePreviewSchema, { connectionId, change })
+}
+
+/**
+ * The user's approval of a previewed change, which then runs in one checked transaction.
+ * Elevated changes need the database name in `confirmation`.
+ */
+export function applyDataChange(
+  connectionId: ConnectionId,
+  approvalId: string,
+  confirmation: string | null,
+): Promise<DataChangeResult> {
+  return callCommand(COMMANDS.applyDataChange, DataChangeResultSchema, {
+    connectionId,
+    approvalId,
+    confirmation,
+  })
+}
+
+/** Declines a previewed change. */
+export function cancelDataChange(approvalId: string): Promise<void> {
+  return callCommand(COMMANDS.cancelDataChange, z.null(), { approvalId }).then(() => undefined)
 }

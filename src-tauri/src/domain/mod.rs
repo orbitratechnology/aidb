@@ -8,6 +8,7 @@ pub mod catalog;
 pub mod connection_transfer;
 pub mod connection_uri;
 pub mod connections;
+pub mod data_change;
 pub mod database;
 pub mod export;
 pub mod library;

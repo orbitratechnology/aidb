@@ -149,23 +149,7 @@ impl PageRequest {
                 return Err(RequestError::DuplicateSort(key.column.clone()));
             }
         }
-        for filter in &self.filters {
-            match (&filter.value, filter.operator.takes_value()) {
-                (None, true) => return Err(RequestError::MissingValue(filter.column.clone())),
-                (Some(_), false) => {
-                    return Err(RequestError::UnexpectedValue(filter.column.clone()));
-                }
-                (Some(value), true) => {
-                    if value.chars().count() > MAX_FILTER_VALUE_CHARS {
-                        return Err(RequestError::ValueTooLong);
-                    }
-                    if value.contains('\0') {
-                        return Err(RequestError::NulInValue);
-                    }
-                }
-                (None, false) => {}
-            }
-        }
+        validate_filters(&self.filters)?;
         if self.limit == Some(0) {
             return Err(RequestError::ZeroLimit);
         }
@@ -174,6 +158,36 @@ impl PageRequest {
         }
         Ok(())
     }
+}
+
+/// Checks the filters' shape: how many, and that each has a value exactly when its operator
+/// takes one. Column names are checked later, against the live table.
+///
+/// # Errors
+///
+/// The first problem found.
+pub fn validate_filters(filters: &[Filter]) -> Result<(), RequestError> {
+    if filters.len() > MAX_FILTERS {
+        return Err(RequestError::TooManyFilters);
+    }
+    for filter in filters {
+        match (&filter.value, filter.operator.takes_value()) {
+            (None, true) => return Err(RequestError::MissingValue(filter.column.clone())),
+            (Some(_), false) => {
+                return Err(RequestError::UnexpectedValue(filter.column.clone()));
+            }
+            (Some(value), true) => {
+                if value.chars().count() > MAX_FILTER_VALUE_CHARS {
+                    return Err(RequestError::ValueTooLong);
+                }
+                if value.contains('\0') {
+                    return Err(RequestError::NulInValue);
+                }
+            }
+            (None, false) => {}
+        }
+    }
+    Ok(())
 }
 
 /// How the UI should present a column's values. Every value arrives as text.

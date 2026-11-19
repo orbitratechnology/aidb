@@ -22,6 +22,7 @@ use crate::adapters::database::{DatabaseAdapter, DatabaseSession};
 use crate::adapters::local_store::LocalStore;
 use crate::domain::audit::{Actor, AuditEvent, AuditStatus};
 use crate::domain::connections::{ConnectionId, Environment};
+use crate::domain::data_change::{DataChange, DataChangePlan};
 use crate::domain::policy::approval::{
     APPROVAL_TTL, ApprovalError, ApprovalId, ApprovalState, Binding, BindingContext,
     MAX_OPEN_APPROVALS, PENDING_TTL, hex, needs_typed_confirmation, sha256_hex,
@@ -29,6 +30,7 @@ use crate::domain::policy::approval::{
 use crate::domain::policy::classify::RiskAssessment;
 use crate::domain::policy::facts;
 use crate::domain::policy::risk::ApprovalLevel;
+use crate::domain::table_data::PageLimits;
 use crate::errors::{AppError, AppResult, ErrorCode};
 
 /// A change waiting for the user's decision.
@@ -52,14 +54,28 @@ pub struct ApprovalGrant {
     pub expires_at: String,
 }
 
+/// What an approval is for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Subject {
+    /// SQL text with bound parameters.
+    Sql {
+        sql: String,
+        parameters: Vec<Option<String>>,
+    },
+    /// A change to a table's rows; its statement is written from the live table.
+    DataChange(DataChange),
+}
+
 /// What the execution layer gets for a valid token: the approval to report the outcome to,
-/// the operation's digest for its audit record, and the assessment it was approved under.
+/// the operation's digest for its audit record, the assessment it was approved under and, for
+/// a data change, the plan it must still match when it runs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ApprovedOperation {
     pub id: ApprovalId,
     pub digest: String,
     pub assessment: RiskAssessment,
     pub environment: Environment,
+    pub plan: Option<DataChangePlan>,
 }
 
 #[derive(Debug)]
@@ -72,8 +88,7 @@ struct Entry {
     level: ApprovalLevel,
     binding: Binding,
     digest: String,
-    sql: String,
-    parameters: Vec<Option<String>>,
+    subject: Subject,
     assessment: RiskAssessment,
     expires: Instant,
     /// SHA-256 of the token, once approved and until used.
@@ -124,6 +139,15 @@ impl Approvals {
     #[must_use]
     pub fn state(&self, id: ApprovalId) -> Option<ApprovalState> {
         self.lock().get(&id).map(|entry| entry.state)
+    }
+
+    /// The data change an open approval is for, and its connection.
+    #[must_use]
+    pub fn data_change(&self, id: ApprovalId) -> Option<(ConnectionId, DataChange)> {
+        self.lock().get(&id).and_then(|entry| match &entry.subject {
+            Subject::DataChange(change) => Some((entry.connection_id, change.clone())),
+            Subject::Sql { .. } => None,
+        })
     }
 
     /// Removes approvals that lapsed, and the oldest ones beyond [`MAX_OPEN_APPROVALS`].
@@ -180,31 +204,44 @@ fn to_app_error(error: &ApprovalError) -> AppError {
     AppError::new(code, error.to_string())
 }
 
-/// The binding of `sql` with `parameters` on the open connection, built from live state: the
-/// session and its serial, the profile's environment and write setting, the schema fingerprint
-/// and a fresh assessment.
+/// The binding of `subject` on the open connection, built from live state: the session and
+/// its serial, the profile's environment and write setting, the schema fingerprint and a fresh
+/// assessment. A data change is planned again (its statement written and its rows counted);
+/// with `preview`, the plan includes some of the rows it matches.
 async fn bind<A: DatabaseAdapter>(
     store: &LocalStore,
     sessions: &Sessions<A>,
     connection_id: ConnectionId,
-    sql: &str,
-    parameters: &[Option<String>],
-) -> AppResult<(Binding, RiskAssessment)> {
-    let assessment = policy::assess(store, sessions, connection_id, sql).await?;
+    subject: &Subject,
+    preview: Option<PageLimits>,
+) -> AppResult<(Binding, RiskAssessment, Option<DataChangePlan>)> {
+    let (session, serial) = sessions
+        .get_with_serial(connection_id)
+        .ok_or_else(not_connected)?;
+    let (sql, parameters, plan) = match subject {
+        Subject::Sql { sql, parameters } => (sql.clone(), parameters.clone(), None),
+        Subject::DataChange(change) => {
+            let plan = session
+                .plan_data_change(change, preview)
+                .await
+                .map_err(AppError::from)?;
+            (plan.statement.clone(), plan.parameters.clone(), Some(plan))
+        }
+    };
+    let counted = plan.as_ref().map(|plan| plan.rows);
+    let assessment =
+        policy::assess_with_rows(store, sessions, connection_id, &sql, counted).await?;
     let profile = store
         .connections()
         .get(connection_id)
         .await?
         .ok_or_else(|| AppError::not_found("The connection no longer exists."))?;
-    let (session, serial) = sessions
-        .get_with_serial(connection_id)
-        .ok_or_else(not_connected)?;
     let server = session.server_info();
     let schema_fingerprint = session
         .catalog_fingerprint()
         .await
         .map_err(AppError::from)?;
-    let texts: Vec<String> = facts::inspect(sql)
+    let texts: Vec<String> = facts::inspect(&sql)
         .statements
         .into_iter()
         .map(|statement| statement.text)
@@ -221,9 +258,9 @@ async fn bind<A: DatabaseAdapter>(
         },
         &assessment,
         &texts,
-        parameters,
+        &parameters,
     );
-    Ok((binding, assessment))
+    Ok((binding, assessment, plan))
 }
 
 /// Records a refused check. The audit log gets the digest and the reason, never the SQL.
@@ -263,8 +300,66 @@ pub async fn request<A: DatabaseAdapter>(
     parameters: Vec<Option<String>>,
     actor: Actor,
 ) -> AppResult<ApprovalRequest> {
+    let subject = Subject::Sql {
+        sql: sql.to_owned(),
+        parameters,
+    };
+    request_subject(
+        store,
+        sessions,
+        approvals,
+        connection_id,
+        subject,
+        None,
+        actor,
+    )
+    .await
+    .map(|(request, _)| request)
+}
+
+/// Prepares a data change for approval on the open connection, and returns its plan with
+/// some of the rows it matches (read with `preview`), for the user to review.
+///
+/// # Errors
+///
+/// As [`request`], and the planning errors: an unknown table or column, a value its column
+/// cannot hold, too many matching rows.
+pub async fn request_data_change<A: DatabaseAdapter>(
+    store: &LocalStore,
+    sessions: &Sessions<A>,
+    approvals: &Approvals,
+    connection_id: ConnectionId,
+    change: DataChange,
+    preview: PageLimits,
+    actor: Actor,
+) -> AppResult<(ApprovalRequest, DataChangePlan)> {
+    let subject = Subject::DataChange(change);
+    let (request, plan) = request_subject(
+        store,
+        sessions,
+        approvals,
+        connection_id,
+        subject,
+        Some(preview),
+        actor,
+    )
+    .await?;
+    let plan = plan.ok_or_else(|| AppError::internal("a data change was not planned"))?;
+    Ok((request, plan))
+}
+
+async fn request_subject<A: DatabaseAdapter>(
+    store: &LocalStore,
+    sessions: &Sessions<A>,
+    approvals: &Approvals,
+    connection_id: ConnectionId,
+    subject: Subject,
+    preview: Option<PageLimits>,
+    actor: Actor,
+) -> AppResult<(ApprovalRequest, Option<DataChangePlan>)> {
     let mut state = ApprovalState::Draft;
-    let (binding, assessment) = bind(store, sessions, connection_id, sql, &parameters).await?;
+    let (binding, assessment, plan) =
+        bind(store, sessions, connection_id, &subject, preview).await?;
     let advance =
         |state: &mut ApprovalState, next| state.advance(next).map_err(|error| to_app_error(&error));
     if !assessment.blockers.is_empty() {
@@ -297,22 +392,31 @@ pub async fn request<A: DatabaseAdapter>(
                 level,
                 binding,
                 digest,
-                sql: sql.to_owned(),
-                parameters,
+                subject,
                 assessment: assessment.clone(),
                 expires: Instant::now() + PENDING_TTL,
                 token_digest: None,
             },
         );
     }
-    Ok(ApprovalRequest {
+    let request = ApprovalRequest {
         id,
         assessment,
         level,
         state,
         expires_at: rfc3339_in(PENDING_TTL),
         confirmation,
-    })
+    };
+    Ok((request, plan))
+}
+
+/// Why an approval could not be checked again, for the user and the audit log.
+fn unchecked(error: &AppError) -> &'static str {
+    if error.code() == ErrorCode::Unavailable {
+        "the connection is no longer open"
+    } else {
+        "it could not be checked again"
+    }
 }
 
 /// Marks an entry invalidated and removes it.
@@ -372,15 +476,14 @@ pub async fn approve<A: DatabaseAdapter>(
                     entry.connection_id,
                     entry.binding.clone(),
                     entry.digest.clone(),
-                    entry.sql.clone(),
-                    entry.parameters.clone(),
+                    entry.subject.clone(),
                     entry.level,
                     entry.actor,
                 ))
             }
         }
     };
-    let (connection_id, binding, digest, sql, parameters, level, actor) = match claimed {
+    let (connection_id, binding, digest, subject, level, actor) = match claimed {
         Ok(claimed) => claimed,
         Err((error, snapshot)) => {
             let entry = snapshot.as_ref().map(|(_, binding, digest, state, actor)| {
@@ -411,11 +514,11 @@ pub async fn approve<A: DatabaseAdapter>(
         return Err(to_app_error(&error));
     }
 
-    let fresh = bind(store, sessions, connection_id, &sql, &parameters).await;
+    let fresh = bind(store, sessions, connection_id, &subject, None).await;
     let error = match &fresh {
-        Ok((current, _)) if current.digest() == digest => None,
-        Ok((current, _)) => Some(ApprovalError::Changed(binding.first_difference(current))),
-        Err(_) => Some(ApprovalError::Changed("the connection is no longer open")),
+        Ok((current, ..)) if current.digest() == digest => None,
+        Ok((current, ..)) => Some(ApprovalError::Changed(binding.first_difference(current))),
+        Err(error) => Some(ApprovalError::Changed(unchecked(error))),
     };
     if let Some(error) = error {
         invalidate(approvals, id);
@@ -481,6 +584,27 @@ pub async fn consume<A: DatabaseAdapter>(
     sql: &str,
     parameters: &[Option<String>],
 ) -> AppResult<ApprovedOperation> {
+    let subject = Subject::Sql {
+        sql: sql.to_owned(),
+        parameters: parameters.to_vec(),
+    };
+    consume_subject(store, sessions, approvals, connection_id, token, &subject).await
+}
+
+/// As [`consume`], for any subject. For a data change, the operation carries the fresh plan
+/// the change must still match when it runs.
+///
+/// # Errors
+///
+/// As [`consume`].
+pub async fn consume_subject<A: DatabaseAdapter>(
+    store: &LocalStore,
+    sessions: &Sessions<A>,
+    approvals: &Approvals,
+    connection_id: ConnectionId,
+    token: &SecretString,
+    subject: &Subject,
+) -> AppResult<ApprovedOperation> {
     let token_digest = sha256_hex(token.expose_secret().as_bytes());
     // Claim it and take the token away first: a second use fails even if it arrives now.
     let claimed = {
@@ -524,14 +648,14 @@ pub async fn consume<A: DatabaseAdapter>(
         }
     };
 
-    let fresh = bind(store, sessions, connection_id, sql, parameters).await;
+    let fresh = bind(store, sessions, connection_id, subject, None).await;
     let checked = match fresh {
-        Ok((current, assessment)) if current.digest() == digest => Ok(assessment),
-        Ok((current, _)) => Err(ApprovalError::Changed(binding.first_difference(&current))),
-        Err(_) => Err(ApprovalError::Changed("the connection is no longer open")),
+        Ok((current, assessment, plan)) if current.digest() == digest => Ok((assessment, plan)),
+        Ok((current, ..)) => Err(ApprovalError::Changed(binding.first_difference(&current))),
+        Err(error) => Err(ApprovalError::Changed(unchecked(&error))),
     };
-    let assessment = match checked {
-        Ok(assessment) => assessment,
+    let (assessment, plan) = match checked {
+        Ok(checked) => checked,
         Err(error) => {
             invalidate(approvals, id);
             audit_refusal(
@@ -567,6 +691,7 @@ pub async fn consume<A: DatabaseAdapter>(
         digest,
         assessment,
         environment: binding.environment,
+        plan,
     })
 }
 

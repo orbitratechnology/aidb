@@ -6,6 +6,7 @@ export type { AiSettings } from './generated/AiSettings'
 export type { AnalyzedStatement } from './generated/AnalyzedStatement'
 export type { AppearanceSettings } from './generated/AppearanceSettings'
 export type { AppInfo } from './generated/AppInfo'
+export type { ApplyStatus } from './generated/ApplyStatus'
 export type { ApprovalLevel } from './generated/ApprovalLevel'
 export type { AppSettings } from './generated/AppSettings'
 export type { AskRequest } from './generated/AskRequest'
@@ -18,11 +19,13 @@ export type { Capabilities } from './generated/Capabilities'
 export type { CatalogOverview } from './generated/CatalogOverview'
 export type { CatalogSnapshot } from './generated/CatalogSnapshot'
 export type { CellRef } from './generated/CellRef'
+export type { ChangeKind } from './generated/ChangeKind'
 export type { CheckKind } from './generated/CheckKind'
 export type { CheckOutcome } from './generated/CheckOutcome'
 export type { ClearResult } from './generated/ClearResult'
 export type { ClearTarget } from './generated/ClearTarget'
 export type { Column } from './generated/Column'
+export type { ColumnValue } from './generated/ColumnValue'
 export type { ConnectionDetails } from './generated/ConnectionDetails'
 export type { ConnectionDraft } from './generated/ConnectionDraft'
 export type { ConnectionId } from './generated/ConnectionId'
@@ -32,6 +35,9 @@ export type { ContextItemKind } from './generated/ContextItemKind'
 export type { ContextPreview } from './generated/ContextPreview'
 export type { CredentialBackend } from './generated/CredentialBackend'
 export type { CredentialStoreStatus } from './generated/CredentialStoreStatus'
+export type { DataChange } from './generated/DataChange'
+export type { DataChangePreview } from './generated/DataChangePreview'
+export type { DataChangeResult } from './generated/DataChangeResult'
 export type { DiagnosticsInfo } from './generated/DiagnosticsInfo'
 export type { Engine } from './generated/Engine'
 export type { Environment } from './generated/Environment'
@@ -110,6 +116,7 @@ export type { TaskStatus } from './generated/TaskStatus'
 export type { ThemePreference } from './generated/ThemePreference'
 export type { ToolName } from './generated/ToolName'
 export type { ValueKind } from './generated/ValueKind'
+export type { ValueSample } from './generated/ValueSample'
 export type { VerificationStatus } from './generated/VerificationStatus'
 export type { VerificationStep } from './generated/VerificationStep'
 export { SAFETY_DEFAULTS, SAFETY_LIMITS } from './generated/SafetyLimits'
@@ -117,6 +124,7 @@ export { ASSISTANT_LIMITS } from './generated/AssistantLimits'
 export { CONNECTION_LIMITS } from './generated/ConnectionLimits'
 export { TABLE_DATA_LIMITS } from './generated/TableDataLimits'
 export { EXPORT_LIMITS } from './generated/ExportLimits'
+export { DATA_CHANGE_LIMITS } from './generated/DataChangeLimits'
 
 export { AppInfoSchema } from './app'
 export { ActorSchema, AuditEntrySchema, AuditStatusSchema } from './audit'
@@ -153,6 +161,15 @@ export {
   SchemaSummarySchema,
 } from './catalog'
 export { COMMANDS, type CommandName } from './commands'
+export {
+  ApplyStatusSchema,
+  ChangeKindSchema,
+  ColumnValueSchema,
+  DataChangePreviewSchema,
+  DataChangeResultSchema,
+  DataChangeSchema,
+  ValueSampleSchema,
+} from './data-change'
 export {
   ConnectionDetailsSchema,
   ConnectionDraftSchema,

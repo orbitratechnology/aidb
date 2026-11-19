@@ -15,6 +15,7 @@ mod assistant;
 mod audit;
 mod catalog;
 mod connections;
+mod data_changes;
 mod diagnostics;
 mod export;
 mod external;
@@ -75,7 +76,10 @@ pub(crate) fn handler<R: Runtime>() -> impl Fn(Invoke<R>) -> bool + Send + Sync 
         assistant::preview_assistant_context,
         assistant::ask_assistant,
         assistant::cancel_assistant_task,
-        audit::list_audit_events
+        audit::list_audit_events,
+        data_changes::preview_data_change,
+        data_changes::apply_data_change,
+        data_changes::cancel_data_change
     ]
 }
 
@@ -212,7 +216,13 @@ mod tests {
             .iter()
             .filter_map(serde_json::Value::as_str)
             .collect::<Vec<_>>();
-        for permission in &granted {
+        // The one write path: the user applies a change previewed in the core, which holds the
+        // approval and its token. Nothing else may approve, execute or write.
+        const USER_APPROVED_WRITES: [&str; 1] = ["allow-apply-data-change"];
+        for permission in granted
+            .iter()
+            .filter(|permission| !USER_APPROVED_WRITES.contains(permission))
+        {
             for word in ["approve", "apply", "execute", "write", "consume", "policy"] {
                 assert!(!permission.contains(word), "{permission} grants {word}");
             }
@@ -383,6 +393,41 @@ mod tests {
             json!({ "filter": { "connectionId": saved.id.to_string(), "limit": 10 } }),
         )
         .expect("list_audit_events");
+        let blocked_change = invoke(
+            &main,
+            "preview_data_change",
+            json!({
+                "connectionId": saved.id.to_string(),
+                "change": {
+                    "kind": "delete",
+                    "table": { "schema": "pg_catalog", "name": "pg_am" },
+                    "filters": [{ "column": "amname", "operator": "equals", "value": "none" }],
+                },
+            }),
+        )
+        .expect_err("the connection is read-only");
+        let unfiltered_change = invoke(
+            &main,
+            "preview_data_change",
+            json!({
+                "connectionId": saved.id.to_string(),
+                "change": {
+                    "kind": "delete",
+                    "table": { "schema": "pg_catalog", "name": "pg_am" },
+                    "filters": [],
+                },
+            }),
+        )
+        .expect_err("a delete needs a filter");
+        let never_previewed = invoke(
+            &main,
+            "apply_data_change",
+            json!({
+                "connectionId": saved.id.to_string(),
+                "approvalId": "6f9619ff-8b86-4d01-b42d-00c04fc964ff",
+            }),
+        )
+        .expect_err("nothing to apply");
         let closed =
             invoke(&main, "disconnect", json!({ "id": saved.id.to_string() })).expect("disconnect");
         let after = invoke(&main, "active_sessions", json!({})).expect("active_sessions");
@@ -425,6 +470,15 @@ mod tests {
         assert_eq!(event["risk"], "R4");
         assert_eq!(event["fingerprint"].as_str().map(str::len), Some(64));
         assert!(!audit.to_string().contains("DROP"), "{audit}");
+        assert_eq!(blocked_change["code"], "permission_denied");
+        assert!(
+            blocked_change["message"]
+                .as_str()
+                .is_some_and(|m| m.contains("read-only")),
+            "{blocked_change}"
+        );
+        assert_eq!(unfiltered_change["code"], "invalid_input");
+        assert_eq!(never_previewed["code"], "permission_denied");
         assert_eq!(closed, true);
         assert_eq!(after.as_array().map(Vec::len), Some(0));
         assert_eq!(export_closed["code"], "unavailable");

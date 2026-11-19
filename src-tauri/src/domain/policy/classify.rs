@@ -26,6 +26,8 @@ pub enum ImpactSource {
     Statement,
     /// The planner's estimate (`EXPLAIN`, which plans without running).
     Planner,
+    /// Counted exactly when the change was previewed (data changes aidb writes itself).
+    Counted,
     /// Not estimated.
     Unknown,
 }
@@ -256,16 +258,22 @@ fn write_reasons(facts: &StatementFacts, impact: &ImpactFacts, reasons: &mut Rea
             R2,
             match impact.source {
                 ImpactSource::Statement => format!("Writes {}.", rows_text(rows)),
+                ImpactSource::Counted => format!("Writes {} (counted).", rows_text(rows)),
                 _ => format!("Writes about {} (estimated).", rows_text(rows)),
             },
         ),
         Some(rows) => reasons.add(
             ReasonCode::BulkWrite,
             R3,
-            format!(
-                "Writes about {} (estimated), more than {SMALL_WRITE_ROWS}.",
-                rows_text(rows)
-            ),
+            match impact.source {
+                ImpactSource::Statement | ImpactSource::Counted => {
+                    format!("Writes {}, more than {SMALL_WRITE_ROWS}.", rows_text(rows))
+                }
+                _ => format!(
+                    "Writes about {} (estimated), more than {SMALL_WRITE_ROWS}.",
+                    rows_text(rows)
+                ),
+            },
         ),
         None => reasons.add(
             ReasonCode::UnknownImpact,

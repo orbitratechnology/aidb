@@ -364,6 +364,42 @@ say which service to use; the settings UI arrives in 7.3 and the agent in 8.x.
   endpoint (models, streaming, a tool round trip, JSON output, cancellation); ignored by
   default and driven by `AIDB_TEST_OPENAI_*` and `AIDB_TEST_ANTHROPIC_*` variables.
 
+## Assistant
+
+`domain::agent` defines what the assistant is and may do; the planner loop that runs it (8.2) and
+the Ask screen (8.3) build on it. The model proposes; Rust decides.
+
+- **Risk** (`risk`): R0 introspection, R1 bounded read, R2 scoped reversible write, R3 sensitive
+  or production change, R4 destructive or privileged, each with its default approval (none,
+  Apply, elevated, blocked). The read-only assistant may plan at most R1.
+- **Tools** (`tools`, version 1): `list_schemas`, `list_tables` (schema, search) and
+  `describe_table` (R0); `run_read_query` (SQL and a stated purpose; at most 50 rows reach the
+  model) and `explain_query` (optionally `analyze`) (R1). Each has a JSON Schema with
+  `additionalProperties: false` and a Rust input type that rejects unknown fields; `parse` turns a
+  model's call into a typed invocation or an error the model can act on (unknown tool, malformed
+  or extra arguments, identifiers over 63 bytes, control characters). SQL is accepted only when
+  the classifier finds exactly one read statement. Tools whose results carry data values are
+  marked, so hosted providers get them only with consent. There is no generic SQL tool.
+- **Task plan** (`plan`, version 1): the target (connection, database, environment, read-only)
+  comes from the open session; each step records the tool, a one-line summary, the checked
+  arguments, its risk from the registry, its status and outcome; assumptions and verification
+  steps are kept with it. The plan's risk and required approval are computed from the steps
+  whenever read, stored for display, and recomputed on load, so an edited record cannot lower
+  them. Plans of another version are not loaded; a task stops at 25 steps.
+- **Context** (`context`): the system prompt (role, database and environment, read-only rules,
+  how to use the tools, the untrusted-content rule), then the user's selected tables, attached
+  files (`.sql`, `.csv`, `.json`, `.md`, `.txt`) and the schema overview, with the question
+  last. The budget (in estimated tokens, four characters each; the provider's context budget or
+  16,000) gives selected tables up to 30% and attachments up to 40%, and the overview the rest,
+  listing tables whose names match the question's words first. Anything cut says so in the text
+  and is marked in the list of context items the user reviews, which also flags items carrying
+  data values (attached files). Questions are never cut (8,000 characters at most).
+- **Untrusted framing**: database text, attached files and tool results are wrapped in a tag
+  whose name is random for each request (`untrusted-` and 12 hex digits); any occurrence of the
+  name inside the content is removed, so content can neither close the frame nor open another.
+  The system prompt says such content is data only and never instructions. Tool results are
+  capped at 24,000 characters and long cell values at 200.
+
 ## Frontend
 
 - **Shell**: sidebar at 1024px and wider, icon sidebar from 640px, bottom navigation below 640px.

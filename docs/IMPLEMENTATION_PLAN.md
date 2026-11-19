@@ -114,7 +114,7 @@ Status legend: `[x]` done · `[~]` in progress · `[ ]` not started
 
 ## Phase 8: Read-only agent
 
-- [ ] **8.1 Agent domain.** Versioned task plan, typed tool registry (R0/R1 tools), context builder
+- [x] **8.1 Agent domain.** Versioned task plan, typed tool registry (R0/R1 tools), context builder
       with budgets and untrusted-content framing.
 - [ ] **8.2 Planner loop.** Tool-call validation (unknown or malformed calls rejected), cancellation,
       verification, task persistence.

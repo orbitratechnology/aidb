@@ -1,0 +1,22 @@
+{
+  "description": "A result with more rows than the model may see is cut, and the answer is not counted as checked.",
+  "question": "List every number up to 500.",
+  "model": [
+    {
+      "calls": [
+        {
+          "name": "run_read_query",
+          "input": { "sql": "SELECT g FROM generate_series(1, 500) g", "purpose": "list numbers" }
+        }
+      ]
+    },
+    { "text": "Here are the numbers." }
+  ],
+  "expect": {
+    "status": "partial",
+    "steps": [["run_read_query", "succeeded"]],
+    "results_contain": ["(50 rows; more rows matched and were not shown)"],
+    "results_lack": ["\n51\n"],
+    "failed_checks": ["Every result it saw was complete."]
+  }
+}

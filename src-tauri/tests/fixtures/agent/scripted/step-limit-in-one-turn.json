@@ -1,0 +1,13 @@
+{
+  "description": "Too many calls in one turn: the plan stops at 25 steps.",
+  "question": "What schemas are there?",
+  "model": [
+    { "calls": [{ "name": "list_schemas", "input": {}, "times": 30 }] },
+    { "text": "There is one schema." }
+  ],
+  "expect": {
+    "status": "partial",
+    "step_count": 25,
+    "notice": "25 steps"
+  }
+}

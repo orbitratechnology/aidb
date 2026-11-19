@@ -1,0 +1,31 @@
+{
+  "description": "A hosted provider without consent: structure tools run, the query is held back and the model is told why.",
+  "question": "List the customers in Lisbon.",
+  "data_allowed": false,
+  "model": [
+    {
+      "calls": [
+        { "name": "describe_table", "input": { "schema": "public", "name": "customers" } },
+        {
+          "name": "run_read_query",
+          "input": {
+            "sql": "SELECT name FROM customers WHERE city = 'Lisbon'",
+            "purpose": "list Lisbon customers"
+          }
+        }
+      ]
+    },
+    { "text": "I need your permission to read the customer names." }
+  ],
+  "expect": {
+    "status": "partial",
+    "rejected": 0,
+    "steps": [
+      ["describe_table", "succeeded"],
+      ["run_read_query", "skipped"]
+    ],
+    "results_contain": ["has not allowed sending data values"],
+    "results_lack": ["Linus"],
+    "failed_checks": ["The last query it relied on ran successfully."]
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "description": "A model that writes SQL instead of running it is reminded once, then runs it.",
+  "question": "How many products are there?",
+  "model": [
+    { "text": "Run this:\n```sql\nSELECT count(*) FROM products;\n```" },
+    {
+      "calls": [
+        {
+          "name": "run_read_query",
+          "input": { "sql": "SELECT count(*) FROM products", "purpose": "count products" }
+        }
+      ]
+    },
+    { "text": "There are 4 products.\n```sql\nSELECT count(*) FROM products;\n```" }
+  ],
+  "expect": {
+    "status": "succeeded",
+    "steps": [["run_read_query", "succeeded"]],
+    "results_contain": ["4"],
+    "requests": 3
+  }
+}

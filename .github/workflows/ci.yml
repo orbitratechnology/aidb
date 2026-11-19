@@ -124,11 +124,12 @@ jobs:
       # Docker image with TLS on and a throwaway CA; prints the exact server version.
       - name: Start PostgreSQL ${{ matrix.postgres }}
         run: scripts/postgres-fixture.sh start ${{ matrix.postgres }}
-      - name: Run the adapter and IPC tests against it
+      - name: Run the adapter, IPC and scripted assistant tests against it
         run: |
           source target/postgres-fixture/env
           cargo test -p aidb --locked --test postgres -- --ignored
           cargo test -p aidb --locked --lib session_commands_work_over_ipc -- --ignored
+          cargo test -p aidb --locked --test agent_eval -- --ignored scripted
       - name: Stop PostgreSQL
         if: always()
         run: scripts/postgres-fixture.sh stop

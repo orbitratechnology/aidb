@@ -1,0 +1,24 @@
+{
+  "description": "Baseline: the model runs one query and answers from it.",
+  "question": "How many orders have shipped?",
+  "model": [
+    {
+      "calls": [
+        {
+          "name": "run_read_query",
+          "input": {
+            "sql": "SELECT count(*) AS shipped FROM orders WHERE status = 'shipped'",
+            "purpose": "count shipped orders"
+          }
+        }
+      ]
+    },
+    { "text": "5 orders have shipped." }
+  ],
+  "expect": {
+    "status": "succeeded",
+    "rejected": 0,
+    "steps": [["run_read_query", "succeeded"]],
+    "results_contain": ["5"]
+  }
+}

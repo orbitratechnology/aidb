@@ -1,0 +1,21 @@
+{
+  "description": "Tool calls in a refused turn never run.",
+  "question": "How many orders are there?",
+  "model": [
+    {
+      "text": "I won't help with that.",
+      "calls": [
+        {
+          "name": "run_read_query",
+          "input": { "sql": "SELECT count(*) FROM orders", "purpose": "count" }
+        }
+      ],
+      "stop": "refusal"
+    }
+  ],
+  "expect": {
+    "status": "failed",
+    "step_count": 0,
+    "notice": "declined"
+  }
+}

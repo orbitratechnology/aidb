@@ -1,0 +1,21 @@
+{
+  "description": "An answer cut at the output limit is partial, and a half-written call in it never runs.",
+  "question": "How many orders are there?",
+  "model": [
+    {
+      "text": "There are",
+      "calls": [
+        {
+          "name": "run_read_query",
+          "input": { "sql": "SELECT count(*) FROM orders", "purpose": "count" }
+        }
+      ],
+      "stop": "max_tokens"
+    }
+  ],
+  "expect": {
+    "status": "partial",
+    "step_count": 0,
+    "notice": "output limit"
+  }
+}

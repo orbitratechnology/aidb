@@ -1,0 +1,33 @@
+{
+  "description": "Arguments that are not JSON, carry extra fields, or name an identifier that is too long are rejected before anything runs.",
+  "question": "Describe orders.",
+  "model": [
+    {
+      "calls": [
+        { "name": "describe_table", "raw": "{\"schema\": \"public\", \"name\": " },
+        {
+          "name": "run_read_query",
+          "input": { "sql": "SELECT 1", "purpose": "probe", "approved": true }
+        },
+        {
+          "name": "describe_table",
+          "input": { "schema": "public", "name": "orders", "risk": "R0" }
+        },
+        {
+          "name": "describe_table",
+          "input": {
+            "schema": "public",
+            "name": "oooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooo"
+          }
+        }
+      ]
+    },
+    { "calls": [{ "name": "describe_table", "input": { "schema": "public", "name": "orders" } }] },
+    { "text": "Orders have an id, a customer, a status and a date." }
+  ],
+  "expect": {
+    "status": "succeeded",
+    "rejected": 4,
+    "steps": [["describe_table", "succeeded"]]
+  }
+}

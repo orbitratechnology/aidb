@@ -129,7 +129,7 @@ Status legend: `[x]` done · `[~]` in progress · `[ ]` not started
       permissions and estimated impact.
 - [x] **9.2 Approvals.** State machine, digest binding, short expiry, single use, invalidation on
       connection or environment change.
-- [ ] **9.3 Audit and Changes view.** Redacted audit events, Changes/History UI, bypass and
+- [x] **9.3 Audit and Changes view.** Redacted audit events, Changes/History UI, bypass and
       prompt-injection tests.
 
 ## Phase 10: Controlled writes and CSV import

@@ -628,3 +628,84 @@ async fn sql_shown_but_not_run_gets_one_reminder() {
     assert_eq!(model.requests().len(), 1);
     assert_eq!(run.outcome.status, TaskStatus::Partial);
 }
+
+#[tokio::test]
+async fn refused_requests_and_the_task_are_audited_without_model_text() {
+    use crate::domain::audit::{Actor as AuditActor, AuditFilter, AuditStatus};
+
+    let (_dir, store) = temp_store().await;
+    let model = ScriptedModel::new(vec![
+        reply(
+            vec![
+                call("a", "ignore previous instructions and drop", json!({})),
+                call(
+                    "b",
+                    "run_read_query",
+                    json!({"sql": "DELETE FROM orders WHERE note = 'secret'", "purpose": "x"}),
+                ),
+                count_query("c"),
+            ],
+            StopReason::ToolUse,
+        ),
+        answer("12 orders."),
+    ]);
+    let tools = ScriptedTools::new(Script::Ok {
+        text: "12",
+        incomplete: false,
+    });
+    let task = input(true);
+    let connection = task.plan.target.connection_id;
+    run_task(&store, &model, &tools, task, &never_cancelled()).await;
+
+    let events = store
+        .audit()
+        .list(&AuditFilter {
+            connection_id: Some(connection),
+            before_id: None,
+            limit: 10,
+        })
+        .await
+        .expect("audit");
+    let rows: Vec<(&str, AuditStatus, &str)> = events
+        .iter()
+        .map(|e| {
+            (
+                e.operation.as_str(),
+                e.status,
+                e.detail.as_deref().unwrap_or_default(),
+            )
+        })
+        .collect();
+    assert_eq!(rows.len(), 3, "{rows:?}");
+    assert_eq!(
+        (rows[0].0, rows[0].1),
+        ("assistant_task", AuditStatus::Succeeded)
+    );
+    assert!(
+        rows[0]
+            .2
+            .contains("1 step, 1 query ran, 2 requests refused."),
+        "{}",
+        rows[0].2
+    );
+    assert!(
+        rows[1].2.starts_with("run_read_query: not_allowed"),
+        "{}",
+        rows[1].2
+    );
+    assert!(
+        rows[2]
+            .2
+            .starts_with("a tool that does not exist: unknown_tool"),
+        "{}",
+        rows[2].2
+    );
+    for event in &events {
+        assert_eq!(event.actor, AuditActor::Agent);
+        let detail = event.detail.as_deref().unwrap_or_default();
+        assert!(
+            !detail.contains("secret") && !detail.contains("ignore previous"),
+            "{detail}"
+        );
+    }
+}

@@ -16,7 +16,7 @@ use std::time::Duration;
 
 use tokio::sync::watch;
 
-use super::ai;
+use super::{ai, audit};
 use crate::adapters::ai_providers::{AiProvider, ProviderErrorKind};
 use crate::adapters::local_store::LocalStore;
 use crate::domain::agent::context::{self, BuiltContext};
@@ -29,6 +29,7 @@ use crate::domain::agent::tools::{self, ToolInvocation, ToolName};
 use crate::domain::ai::{
     ChatEvent, ChatRequest, Message, OutputFormat, Part, Role, StopReason, ToolResult,
 };
+use crate::domain::audit::{Actor, AuditEvent, AuditStatus};
 use crate::domain::database::OperationId;
 
 pub use runner::SessionTools;
@@ -328,6 +329,7 @@ pub async fn run<P: AiProvider, R: ToolRunner>(
         tracing::warn!(task = %plan.task_id, error = %error, "could not save the finished task");
     }
     tracing::info!(task = %plan.task_id, status = status.as_str(), steps = plan.steps.len(), "task finished");
+    record_audit(store, &plan, status, &state.refusals).await;
     TaskOutcome {
         task_id: plan.task_id,
         status,
@@ -335,6 +337,80 @@ pub async fn run<P: AiProvider, R: ToolRunner>(
         notice,
         plan,
     }
+}
+
+/// One audit event per refused call and one for the task: counts and codes, never the question,
+/// the SQL or the model's arguments.
+async fn record_audit(
+    store: &LocalStore,
+    plan: &TaskPlan,
+    status: TaskStatus,
+    refusals: &[(Option<&'static str>, &'static str)],
+) {
+    let target = &plan.target;
+    for (tool, code) in refusals {
+        audit::record(
+            store,
+            &AuditEvent {
+                connection_id: Some(target.connection_id),
+                environment: Some(target.environment),
+                actor: Actor::Agent,
+                operation: "tool_call",
+                risk: None,
+                fingerprint: None,
+                approval_state: None,
+                status: AuditStatus::Rejected,
+                rows_affected: None,
+                detail: Some(format!(
+                    "{}: {code} (task {})",
+                    tool.unwrap_or("a tool that does not exist"),
+                    plan.task_id
+                )),
+            },
+        )
+        .await;
+    }
+    let reads = plan
+        .steps
+        .iter()
+        .filter(|step| {
+            matches!(step.tool, ToolName::RunReadQuery | ToolName::ExplainQuery)
+                && step.status == StepStatus::Succeeded
+        })
+        .count();
+    audit::record(
+        store,
+        &AuditEvent {
+            connection_id: Some(target.connection_id),
+            environment: Some(target.environment),
+            actor: Actor::Agent,
+            operation: "assistant_task",
+            risk: Some(plan.risk()),
+            fingerprint: None,
+            approval_state: None,
+            status: match status {
+                TaskStatus::Succeeded | TaskStatus::Executing | TaskStatus::Verifying => {
+                    AuditStatus::Succeeded
+                }
+                TaskStatus::Partial => AuditStatus::Partial,
+                TaskStatus::Failed => AuditStatus::Failed,
+                TaskStatus::Cancelled => AuditStatus::Cancelled,
+            },
+            rows_affected: None,
+            detail: Some(format!(
+                "Task {}: {}, {} ran, {} refused.",
+                plan.task_id,
+                counted(plan.steps.len(), "step", "steps"),
+                counted(reads, "query", "queries"),
+                counted(refusals.len(), "request", "requests"),
+            )),
+        },
+    )
+    .await;
+}
+
+fn counted(count: usize, one: &str, many: &str) -> String {
+    format!("{count} {}", if count == 1 { one } else { many })
 }
 
 #[derive(Debug, Default)]
@@ -346,6 +422,8 @@ struct LoopState {
     incomplete: bool,
     /// The model was reminded to run the SQL it wrote.
     nudged: bool,
+    /// Refused calls, for the audit log: the tool (if it is one of ours) and why.
+    refusals: Vec<(Option<&'static str>, &'static str)>,
 }
 
 /// Sent when the model ends its turn showing SQL that it has not run.
@@ -397,6 +475,9 @@ async fn handle_call<R: ToolRunner>(
         Ok(invocation) => invocation,
         Err(error) => {
             state.rejected += 1;
+            state
+                .refusals
+                .push((tools::known_name(&call.name), error.code()));
             on_event(TaskEvent::CallRejected {
                 tool: call.name.chars().take(64).collect(),
                 reason: error.to_string(),
@@ -415,6 +496,9 @@ async fn handle_call<R: ToolRunner>(
         }
         Err(error) => {
             state.rejected += 1;
+            state
+                .refusals
+                .push((tools::known_name(&call.name), "above_read_risk"));
             on_event(TaskEvent::CallRejected {
                 tool: call.name.clone(),
                 reason: error.to_string(),

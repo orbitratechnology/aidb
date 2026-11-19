@@ -1,6 +1,8 @@
 //! Audit events: what happened to an operation, without its values. Written by the core only,
 //! append-only in the local store, cleared only through Settings › Storage.
 
+use serde::{Deserialize, Serialize};
+
 use crate::domain::connections::{ConnectionId, Environment};
 use crate::domain::policy::risk::RiskLevel;
 
@@ -8,7 +10,9 @@ use crate::domain::policy::risk::RiskLevel;
 pub const MAX_DETAIL_CHARS: usize = 1_000;
 
 /// Who caused the event.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
+#[serde(rename_all = "snake_case")]
 pub enum Actor {
     User,
     Agent,
@@ -24,10 +28,19 @@ impl Actor {
             Self::System => "system",
         }
     }
+
+    #[must_use]
+    pub fn parse(text: &str) -> Option<Self> {
+        [Self::User, Self::Agent, Self::System]
+            .into_iter()
+            .find(|actor| actor.as_str() == text)
+    }
 }
 
 /// How the operation ended, as the audit log records it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
+#[serde(rename_all = "snake_case")]
 pub enum AuditStatus {
     Succeeded,
     Failed,
@@ -48,6 +61,19 @@ impl AuditStatus {
             Self::Rejected => "rejected",
         }
     }
+
+    #[must_use]
+    pub fn parse(text: &str) -> Option<Self> {
+        [
+            Self::Succeeded,
+            Self::Failed,
+            Self::Partial,
+            Self::Cancelled,
+            Self::Rejected,
+        ]
+        .into_iter()
+        .find(|status| status.as_str() == text)
+    }
 }
 
 /// One audit record. `fingerprint` is a digest of the operation, never its text or values;
@@ -65,4 +91,45 @@ pub struct AuditEvent {
     pub status: AuditStatus,
     pub rows_affected: Option<u64>,
     pub detail: Option<String>,
+}
+
+/// Most events returned by one listing.
+pub const MAX_LISTED_EVENTS: u32 = 200;
+
+/// A stored audit event, as the Changes screen shows it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
+#[serde(rename_all = "camelCase")]
+pub struct AuditEntry {
+    #[cfg_attr(test, ts(type = "number"))]
+    pub id: i64,
+    pub occurred_at: String,
+    /// `None` for events not tied to a connection, or one that no longer parses.
+    pub connection_id: Option<ConnectionId>,
+    pub environment: Option<Environment>,
+    pub actor: Actor,
+    pub operation: String,
+    pub risk: Option<RiskLevel>,
+    /// SHA-256 of the operation (64 hex characters), never its text.
+    pub fingerprint: Option<String>,
+    pub approval_state: Option<String>,
+    pub status: AuditStatus,
+    #[cfg_attr(test, ts(type = "number | null"))]
+    pub rows_affected: Option<u64>,
+    pub detail: Option<String>,
+}
+
+/// Which events to list: newest first, optionally for one connection, older than an event.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AuditFilter {
+    #[serde(default)]
+    pub connection_id: Option<ConnectionId>,
+    /// Only events older than this one (for the next page).
+    #[serde(default)]
+    #[cfg_attr(test, ts(type = "number | null"))]
+    pub before_id: Option<i64>,
+    /// At most [`MAX_LISTED_EVENTS`].
+    pub limit: u32,
 }

@@ -12,6 +12,7 @@
 
 mod app;
 mod assistant;
+mod audit;
 mod catalog;
 mod connections;
 mod diagnostics;
@@ -73,7 +74,8 @@ pub(crate) fn handler<R: Runtime>() -> impl Fn(Invoke<R>) -> bool + Send + Sync 
         providers::test_provider,
         assistant::preview_assistant_context,
         assistant::ask_assistant,
-        assistant::cancel_assistant_task
+        assistant::cancel_assistant_task,
+        audit::list_audit_events
     ]
 }
 
@@ -173,6 +175,49 @@ mod tests {
                 .unwrap_or_default()
                 .contains("pw")
         );
+    }
+
+    /// Nothing the webview can call approves, applies or runs a change: such commands do not
+    /// exist, and no capability grants one. Approvals are issued and used inside the core only.
+    #[test]
+    fn nothing_in_the_webview_can_approve_or_write() {
+        let app = app();
+        let main = window(&app, "main");
+        for cmd in [
+            "approve",
+            "approve_change",
+            "request_approval",
+            "consume_approval",
+            "apply_change",
+            "execute_write",
+            "run_write",
+            "run_sql",
+            "plugin:sql|execute",
+            "plugin:shell|execute",
+        ] {
+            let error = invoke(&main, cmd, json!({})).expect_err(cmd);
+            let text = error.as_str().unwrap_or_default().to_lowercase();
+            assert!(
+                text.contains("not allowed") || text.contains("not found"),
+                "{cmd}: {error}"
+            );
+        }
+
+        let capability: serde_json::Value =
+            serde_json::from_str(include_str!("../../capabilities/default.json"))
+                .expect("capability parses");
+        let granted = capability["permissions"]
+            .as_array()
+            .expect("permissions")
+            .iter()
+            .filter_map(serde_json::Value::as_str)
+            .collect::<Vec<_>>();
+        for permission in &granted {
+            for word in ["approve", "apply", "execute", "write", "consume", "policy"] {
+                assert!(!permission.contains(word), "{permission} grants {word}");
+            }
+        }
+        assert!(granted.contains(&"allow-run-query"), "reads stay available");
     }
 
     /// The dialog plugin is registered (the core uses it), but no capability grants it.
@@ -332,6 +377,12 @@ mod tests {
             }),
         )
         .expect("refusals are outcomes");
+        let audit = invoke(
+            &main,
+            "list_audit_events",
+            json!({ "filter": { "connectionId": saved.id.to_string(), "limit": 10 } }),
+        )
+        .expect("list_audit_events");
         let closed =
             invoke(&main, "disconnect", json!({ "id": saved.id.to_string() })).expect("disconnect");
         let after = invoke(&main, "active_sessions", json!({})).expect("active_sessions");
@@ -367,6 +418,13 @@ mod tests {
         assert_eq!(query["rows"], json!([["1"]]));
         assert_eq!(refused["status"], "refused");
         assert_eq!(refused["kind"], "schema");
+        // The refused change is on record by fingerprint, never by text.
+        let event = &audit[0];
+        assert_eq!(event["operation"], "sql_refused");
+        assert_eq!(event["status"], "rejected");
+        assert_eq!(event["risk"], "R4");
+        assert_eq!(event["fingerprint"].as_str().map(str::len), Some(64));
+        assert!(!audit.to_string().contains("DROP"), "{audit}");
         assert_eq!(closed, true);
         assert_eq!(after.as_array().map(Vec::len), Some(0));
         assert_eq!(export_closed["code"], "unavailable");

@@ -47,6 +47,7 @@ export const COMMANDS = {
   previewAssistantContext: 'preview_assistant_context',
   askAssistant: 'ask_assistant',
   cancelAssistantTask: 'cancel_assistant_task',
+  listAuditEvents: 'list_audit_events',
 } as const
 
 export type CommandName = (typeof COMMANDS)[keyof typeof COMMANDS]

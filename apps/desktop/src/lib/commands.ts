@@ -1,5 +1,6 @@
 import {
   ActiveSessionSchema,
+  AuditEntrySchema,
   AppInfoSchema,
   AppSettingsSchema,
   CatalogSnapshotSchema,
@@ -28,6 +29,8 @@ import {
   TaskOutcomeSchema,
   type ActiveSession,
   type AskRequest,
+  type AuditEntry,
+  type AuditFilter,
   type AppInfo,
   type AppSettings,
   type CatalogSnapshot,
@@ -374,4 +377,9 @@ export function askAssistant(
 /** Stops a running question. Resolves to whether it was still running. */
 export function cancelAssistantTask(taskId: TaskId): Promise<boolean> {
   return callCommand(COMMANDS.cancelAssistantTask, z.boolean(), { taskId })
+}
+
+/** Audit events, newest first. */
+export function listAuditEvents(filter: AuditFilter): Promise<AuditEntry[]> {
+  return callCommand(COMMANDS.listAuditEvents, z.array(AuditEntrySchema), { filter })
 }

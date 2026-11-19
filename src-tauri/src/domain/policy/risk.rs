@@ -36,6 +36,14 @@ pub enum ApprovalLevel {
 }
 
 impl RiskLevel {
+    /// The level for `R0` to `R4`.
+    #[must_use]
+    pub fn parse(text: &str) -> Option<Self> {
+        [Self::R0, Self::R1, Self::R2, Self::R3, Self::R4]
+            .into_iter()
+            .find(|risk| risk.as_str() == text)
+    }
+
     /// `R0` to `R4`, as serialized.
     #[must_use]
     pub const fn as_str(self) -> &'static str {

@@ -4,6 +4,7 @@
 pub mod ai;
 pub mod approvals;
 pub mod assistant;
+pub mod audit;
 pub mod catalog;
 pub mod connection_secrets;
 pub mod connections;

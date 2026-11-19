@@ -16,8 +16,8 @@ use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 use tokio::time::Instant;
 
-use super::policy;
 use super::sessions::{Sessions, not_connected};
+use super::{audit, policy};
 use crate::adapters::database::{DatabaseAdapter, DatabaseSession};
 use crate::adapters::local_store::LocalStore;
 use crate::domain::audit::{Actor, AuditEvent, AuditStatus};
@@ -245,9 +245,7 @@ async fn audit_refusal(
         rows_affected: None,
         detail: Some(format!("{}: {error}", error.code())),
     };
-    if let Err(error) = store.audit().record(&event).await {
-        tracing::warn!(error = %error, "could not record a refused approval check");
-    }
+    audit::record(store, &event).await;
 }
 
 /// Prepares `sql` with `parameters` for approval on the open connection.
@@ -458,9 +456,7 @@ pub async fn approve<A: DatabaseAdapter>(
         rows_affected: None,
         detail: None,
     };
-    if let Err(error) = store.audit().record(&event).await {
-        tracing::warn!(error = %error, "could not record an approval");
-    }
+    audit::record(store, &event).await;
     Ok(ApprovalGrant {
         id,
         token: SecretString::from(token),

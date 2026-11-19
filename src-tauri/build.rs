@@ -45,6 +45,7 @@ const COMMANDS: &[&str] = &[
     "preview_assistant_context",
     "ask_assistant",
     "cancel_assistant_task",
+    "list_audit_events",
 ];
 
 fn main() {

@@ -10,11 +10,14 @@ use serde::Serialize;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
-use super::connection_secrets;
+use super::{audit, connection_secrets};
 use crate::adapters::credentials::{Credentials, SecretRef};
 use crate::adapters::local_store::{LocalStore, StoreError};
+use crate::domain::audit::{Actor, AuditEvent, AuditStatus};
 use crate::domain::connection_transfer::{self, FileEntry, MAX_ENTRIES};
-use crate::domain::connections::{ConnectionDraft, ConnectionId, ConnectionProfile, Engine};
+use crate::domain::connections::{
+    ConnectionDraft, ConnectionId, ConnectionProfile, Engine, Environment,
+};
 use crate::errors::{AppError, AppResult, ErrorCode};
 
 /// Where a connection's password is kept.
@@ -104,7 +107,50 @@ pub async fn create(
         .await
         .map_err(|error| profile_error(error, &draft.name))?;
     tracing::info!(connection = %profile.id, environment = draft.environment.as_str(), "connection created");
+    record(
+        store,
+        "connection_created",
+        profile.id,
+        draft.environment,
+        access(draft.read_only),
+    )
+    .await;
     Ok(ConnectionDetails::new(profile, credentials))
+}
+
+fn access(read_only: bool) -> String {
+    if read_only {
+        "Read-only.".to_owned()
+    } else {
+        "Writes allowed.".to_owned()
+    }
+}
+
+/// Records a profile change: its environment and access mode only, never its address, user or
+/// other settings.
+async fn record(
+    store: &LocalStore,
+    operation: &'static str,
+    id: ConnectionId,
+    environment: Environment,
+    detail: String,
+) {
+    audit::record(
+        store,
+        &AuditEvent {
+            connection_id: Some(id),
+            environment: Some(environment),
+            actor: Actor::User,
+            operation,
+            risk: None,
+            fingerprint: None,
+            approval_state: None,
+            status: AuditStatus::Succeeded,
+            rows_affected: None,
+            detail: Some(detail),
+        },
+    )
+    .await;
 }
 
 /// Validates and saves changes to an existing profile.
@@ -121,12 +167,41 @@ pub async fn update(
 ) -> AppResult<ConnectionDetails> {
     let draft = draft.validated()?;
     draft.check_transport(unencrypted_allowed)?;
+    let before = store.connections().get(id).await?;
     let profile = store
         .connections()
         .update(id, &draft)
         .await
         .map_err(|error| profile_error(error, &draft.name))?;
     tracing::info!(connection = %id, read_only = draft.read_only, "connection updated");
+    let mut changes = Vec::new();
+    if let Some(before) = &before {
+        if before.settings.environment != draft.environment {
+            changes.push(format!(
+                "Environment changed from {} to {}.",
+                before.settings.environment.as_str(),
+                draft.environment.as_str()
+            ));
+        }
+        if before.settings.read_only != draft.read_only {
+            changes.push(if draft.read_only {
+                "Writes turned off.".to_owned()
+            } else {
+                "Writes turned on.".to_owned()
+            });
+        }
+    }
+    if changes.is_empty() {
+        changes.push("Settings changed.".to_owned());
+    }
+    record(
+        store,
+        "connection_updated",
+        id,
+        draft.environment,
+        changes.join(" "),
+    )
+    .await;
     Ok(ConnectionDetails::new(profile, credentials))
 }
 
@@ -144,9 +219,9 @@ pub async fn delete(
     id: ConnectionId,
     forget_password: bool,
 ) -> AppResult<()> {
-    if store.connections().get(id).await?.is_none() {
+    let Some(profile) = store.connections().get(id).await? else {
         return Err(missing());
-    }
+    };
     if forget_password {
         connection_secrets::forget_password(store, credentials, id).await?;
     }
@@ -154,6 +229,18 @@ pub async fn delete(
         return Err(missing());
     }
     tracing::info!(connection = %id, forget_password, "connection deleted");
+    record(
+        store,
+        "connection_deleted",
+        id,
+        profile.settings.environment,
+        if forget_password {
+            "Removed with its saved password.".to_owned()
+        } else {
+            "Removed.".to_owned()
+        },
+    )
+    .await;
     Ok(())
 }
 
@@ -332,7 +419,17 @@ pub async fn import(
             Err(error) => Err(error.into()),
         };
         match saved {
-            Ok(_) => outcome.imported += 1,
+            Ok(profile) => {
+                outcome.imported += 1;
+                record(
+                    store,
+                    "connection_imported",
+                    profile.id,
+                    profile.settings.environment,
+                    access(profile.settings.read_only),
+                )
+                .await;
+            }
             Err(error) if error.code() == ErrorCode::Storage => return Err(error),
             Err(error) => outcome.skipped.push(SkippedImport {
                 name,
@@ -715,5 +812,55 @@ mod tests {
             .find(|c| c.settings.name == "Billing")
             .expect("imported");
         assert!(billing.settings.read_only);
+    }
+
+    #[tokio::test]
+    async fn safety_relevant_changes_are_audited_without_details() {
+        use crate::domain::audit::AuditFilter;
+
+        let (_dir, store) = temp_store().await;
+        let credentials = Credentials::session_only("tests");
+        let created = create(&store, &credentials, draft("Billing"), false)
+            .await
+            .expect("create");
+        let mut writable = draft("Billing");
+        writable.read_only = false;
+        writable.environment = Environment::Production;
+        update(&store, &credentials, created.id, writable, false)
+            .await
+            .expect("update");
+        delete(&store, &credentials, created.id, false)
+            .await
+            .expect("delete");
+
+        let events = store
+            .audit()
+            .list(&AuditFilter {
+                connection_id: Some(created.id),
+                before_id: None,
+                limit: 10,
+            })
+            .await
+            .expect("audit");
+        let summary: Vec<(&str, Option<&str>)> = events
+            .iter()
+            .map(|event| (event.operation.as_str(), event.detail.as_deref()))
+            .collect();
+        assert_eq!(
+            summary,
+            [
+                ("connection_deleted", Some("Removed.")),
+                (
+                    "connection_updated",
+                    Some("Environment changed from development to production. Writes turned on.")
+                ),
+                ("connection_created", Some("Read-only.")),
+            ]
+        );
+        assert_eq!(events[1].environment, Some(Environment::Production));
+        for event in &events {
+            let detail = event.detail.as_deref().unwrap_or_default();
+            assert!(!detail.contains("db.internal") && !detail.contains("reader"));
+        }
     }
 }

@@ -303,6 +303,29 @@ pub enum ToolCallError {
     NotAllowed(String),
 }
 
+impl ToolCallError {
+    /// A short code for the audit log; the message can quote the model's arguments.
+    #[must_use]
+    pub const fn code(&self) -> &'static str {
+        match self {
+            Self::UnknownTool(_) => "unknown_tool",
+            Self::MalformedArguments => "malformed_arguments",
+            Self::InvalidArguments(_) => "invalid_arguments",
+            Self::NotAllowed(_) => "not_allowed",
+        }
+    }
+}
+
+/// The tool's own name when `name` is one of the registry's, so audit records never hold text
+/// the model made up.
+#[must_use]
+pub fn known_name(name: &str) -> Option<&'static str> {
+    TOOLS
+        .iter()
+        .map(|tool| tool.name.as_str())
+        .find(|known| *known == name)
+}
+
 fn arguments<T: DeserializeOwned>(input: &ToolInput) -> Result<T, ToolCallError> {
     let ToolInput::Json(value) = input else {
         return Err(ToolCallError::MalformedArguments);

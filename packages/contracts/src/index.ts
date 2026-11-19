@@ -1,6 +1,7 @@
 // Types under `generated/` come from the Rust core via ts-rs (`cargo test` regenerates them).
 // The schemas here validate data at runtime and are type-checked against those types.
 export type { ActiveSession } from './generated/ActiveSession'
+export type { Actor } from './generated/Actor'
 export type { AiSettings } from './generated/AiSettings'
 export type { AnalyzedStatement } from './generated/AnalyzedStatement'
 export type { AppearanceSettings } from './generated/AppearanceSettings'
@@ -10,6 +11,9 @@ export type { AppSettings } from './generated/AppSettings'
 export type { AskRequest } from './generated/AskRequest'
 export type { AssistantProvider } from './generated/AssistantProvider'
 export type { AttachmentInput } from './generated/AttachmentInput'
+export type { AuditEntry } from './generated/AuditEntry'
+export type { AuditFilter } from './generated/AuditFilter'
+export type { AuditStatus } from './generated/AuditStatus'
 export type { Capabilities } from './generated/Capabilities'
 export type { CatalogOverview } from './generated/CatalogOverview'
 export type { CatalogSnapshot } from './generated/CatalogSnapshot'
@@ -115,6 +119,7 @@ export { TABLE_DATA_LIMITS } from './generated/TableDataLimits'
 export { EXPORT_LIMITS } from './generated/ExportLimits'
 
 export { AppInfoSchema } from './app'
+export { ActorSchema, AuditEntrySchema, AuditStatusSchema } from './audit'
 export {
   ApprovalLevelSchema,
   AssistantProviderSchema,

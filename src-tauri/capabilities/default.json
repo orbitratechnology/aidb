@@ -48,6 +48,7 @@
     "allow-test-provider",
     "allow-preview-assistant-context",
     "allow-ask-assistant",
-    "allow-cancel-assistant-task"
+    "allow-cancel-assistant-task",
+    "allow-list-audit-events"
   ]
 }

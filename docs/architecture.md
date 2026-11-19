@@ -361,6 +361,26 @@ version they were given under.
   - No command exists yet: controlled writes (10.x) add the preview, the approval UI and the
     execution layer that consumes tokens.
 
+## Audit log
+
+`operation_audit` is append-only (a trigger rejects updates); only Settings › Storage clears it.
+The core writes every event through `services::audit::record`, which logs a storage failure
+instead of failing the operation it describes. Events hold an actor (user, agent, system), an
+operation name, the environment, a risk class, a SHA-256 fingerprint, a status and a short
+redacted detail; never SQL text, parameter values, rows, questions or anything the model wrote.
+
+| Operation        | Recorded when                                         | Detail                                            |
+| ---------------- | ----------------------------------------------------- | ------------------------------------------------- |
+| `approve`        | the user approves a change                            | none; the binding's digest is the fingerprint     |
+| `approval_check` | any approval check fails (it fails closed)            | a reason code and message                         |
+| `sql_refused`    | the SQL editor refuses a statement that is not a read | the statement's kind; its digest and policy risk  |
+| `tool_call`      | the planner refuses a model's tool request            | the tool, if it is a registry tool, and a code    |
+| `assistant_task` | an assistant task ends                                | task id and counts of steps, queries and refusals |
+| `connection_*`   | a profile is added, imported, changed or removed      | environment and write access, and what changed    |
+
+`list_audit_events` lists events newest first (at most 200 per call), for one connection or all,
+continuing from an event id.
+
 ## AI providers
 
 Provider-independent conversations live in `domain::ai`; `adapters::ai_providers` speaks each
@@ -583,6 +603,11 @@ Ask screen (8.3) drives it. The model proposes; Rust decides.
   was opened from. The Library sheet has History (this connection's runs, with the outcome in
   words and an icon) and Saved tabs, each searchable; Open puts the SQL in a new tab (a saved
   query's tab, if one is open, is selected instead) and never runs it.
+- **Changes** (Changes): "Waiting for review", empty until controlled writes exist (10.x), and
+  History: audit events newest first, 50 at a time with "Show older", for the open connection or
+  all connections. Each shows what happened in words, the status with an icon and a word (Done,
+  Partly done, Failed, Stopped, Refused), the risk class, who did it (You, Assistant, aidb), the
+  connection and its environment, the time, and the first 12 characters of its fingerprint.
 - **Ask** (Ask): shown once the assistant is on with a usable provider; otherwise a link to
   Settings › AI. The header names the provider and model and says, in words, whether it runs on
   this computer or is hosted, and that access is read-only. The conversation (shadcn

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-active-sessions"
+description = "Enables the active_sessions command without any pre-configured scope."
+commands.allow = ["active_sessions"]
+
+[[permission]]
+identifier = "deny-active-sessions"
+description = "Denies the active_sessions command without any pre-configured scope."
+commands.deny = ["active_sessions"]

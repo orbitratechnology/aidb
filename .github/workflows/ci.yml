@@ -1,0 +1,175 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  web:
+    name: Web (format, lint, types, tests, build)
+    # Branches in this repository are covered by their push run; pull_request runs are for forks.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm format:check
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm build:web
+
+  rust:
+    name: Rust (fmt, clippy, tests)
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      # Ubuntu's mirrors are sometimes slow: keep downloaded packages between runs (refreshed
+      # weekly), so a run only fetches package lists and what changed.
+      - id: apt-week
+        run: echo "week=$(date -u +%G-%V)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v6
+        with:
+          path: ~/.cache/apt-archives
+          key: apt-${{ runner.os }}-${{ github.job }}-${{ steps.apt-week.outputs.week }}
+          restore-keys: |
+            apt-${{ runner.os }}-${{ github.job }}-
+            apt-${{ runner.os }}-
+      - name: Install Tauri system dependencies and a Secret Service for credential tests
+        timeout-minutes: 20
+        run: >-
+          scripts/ci-install-apt.sh libwebkit2gtk-4.1-dev libxdo-dev libssl-dev
+          libayatana-appindicator3-dev librsvg2-dev gnome-keyring dbus
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+      # tauri::generate_context! embeds the built frontend, so it must exist before compiling.
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build:web
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - run: cargo test --workspace --locked
+      # Round-trips a secret through the real Secret Service (gnome-keyring, throwaway keyring).
+      - name: Test the OS credential store
+        run: |
+          dbus-run-session -- sh -c 'printf "ci\n" | gnome-keyring-daemon --unlock --components=secrets >/dev/null \
+            && cargo test -p aidb --locked os_store -- --ignored'
+      # `cargo test` regenerates the TypeScript contracts; committed copies must match.
+      - name: Check generated TypeScript contracts are current
+        run: |
+          git status --porcelain -- packages/contracts/src/generated
+          test -z "$(git status --porcelain -- packages/contracts/src/generated)"
+
+  postgres:
+    name: PostgreSQL ${{ matrix.postgres }} integration
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The PRD's supported range; each runs the latest minor release of the official image.
+        postgres: ['15', '16', '17', '18']
+    steps:
+      - uses: actions/checkout@v7
+      # Ubuntu's mirrors are sometimes slow: keep downloaded packages between runs (refreshed
+      # weekly), so a run only fetches package lists and what changed.
+      - id: apt-week
+        run: echo "week=$(date -u +%G-%V)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v6
+        with:
+          path: ~/.cache/apt-archives
+          key: apt-${{ runner.os }}-${{ github.job }}-${{ steps.apt-week.outputs.week }}
+          restore-keys: |
+            apt-${{ runner.os }}-${{ github.job }}-
+            apt-${{ runner.os }}-
+      - name: Install Tauri system dependencies and the PostgreSQL client
+        timeout-minutes: 20
+        run: >-
+          scripts/ci-install-apt.sh libwebkit2gtk-4.1-dev libxdo-dev libssl-dev
+          libayatana-appindicator3-dev librsvg2-dev postgresql-client
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: postgres
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build:web
+      # Docker image with TLS on and a throwaway CA; prints the exact server version.
+      - name: Start PostgreSQL ${{ matrix.postgres }}
+        run: scripts/postgres-fixture.sh start ${{ matrix.postgres }}
+      - name: Run the adapter and IPC tests against it
+        run: |
+          source target/postgres-fixture/env
+          cargo test -p aidb --locked --test postgres -- --ignored
+          cargo test -p aidb --locked --lib session_commands_work_over_ipc -- --ignored
+      - name: Stop PostgreSQL
+        if: always()
+        run: scripts/postgres-fixture.sh stop
+
+  linux-bundle:
+    name: Linux release bundle
+    needs: [web, rust]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      # Ubuntu's mirrors are sometimes slow: keep downloaded packages between runs (refreshed
+      # weekly), so a run only fetches package lists and what changed.
+      - id: apt-week
+        run: echo "week=$(date -u +%G-%V)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v6
+        with:
+          path: ~/.cache/apt-archives
+          key: apt-${{ runner.os }}-${{ github.job }}-${{ steps.apt-week.outputs.week }}
+          restore-keys: |
+            apt-${{ runner.os }}-${{ github.job }}-
+            apt-${{ runner.os }}-
+      - name: Install Tauri system dependencies
+        timeout-minutes: 20
+        run: >-
+          scripts/ci-install-apt.sh libwebkit2gtk-4.1-dev libxdo-dev libssl-dev
+          libayatana-appindicator3-dev librsvg2-dev
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm tauri build --bundles deb
+      - uses: actions/upload-artifact@v7
+        with:
+          name: aidb-linux-deb
+          path: target/release/bundle/deb/*.deb
+          if-no-files-found: error
+          retention-days: 7

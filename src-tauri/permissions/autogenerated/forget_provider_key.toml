@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-forget-provider-key"
+description = "Enables the forget_provider_key command without any pre-configured scope."
+commands.allow = ["forget_provider_key"]
+
+[[permission]]
+identifier = "deny-forget-provider-key"
+description = "Denies the forget_provider_key command without any pre-configured scope."
+commands.deny = ["forget_provider_key"]

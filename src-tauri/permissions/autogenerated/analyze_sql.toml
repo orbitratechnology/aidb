@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-analyze-sql"
+description = "Enables the analyze_sql command without any pre-configured scope."
+commands.allow = ["analyze_sql"]
+
+[[permission]]
+identifier = "deny-analyze-sql"
+description = "Denies the analyze_sql command without any pre-configured scope."
+commands.deny = ["analyze_sql"]

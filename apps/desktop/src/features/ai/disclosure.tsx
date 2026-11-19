@@ -18,8 +18,9 @@ export function WhatIsSent({ destination }: { destination?: { local: boolean; ho
               keys and comments.
             </li>
             <li>
-              Rows from read queries the assistant runs, and files you attach, only after you allow
-              it in that conversation.
+              Rows from read queries the assistant runs, and files you attach. A hosted provider
+              gets them only after you allow it in that conversation; a provider on this computer
+              gets them without asking, since nothing leaves it.
             </li>
           </ul>
         </div>

@@ -6,6 +6,7 @@
 //! back framed as untrusted. The loop ends when the model answers, is cancelled, or reaches a
 //! limit; deterministic checks then say what actually succeeded, and the task is saved.
 
+pub mod ask;
 mod runner;
 
 use std::collections::HashMap;
@@ -101,6 +102,17 @@ impl RunningTasks {
             .unwrap_or_else(PoisonError::into_inner)
             .insert(id, sender);
         CancelSignal(receiver)
+    }
+
+    /// Registers a task unless another one is running.
+    pub fn start_alone(&self, id: TaskId) -> Option<CancelSignal> {
+        let mut tasks = self.tasks.lock().unwrap_or_else(PoisonError::into_inner);
+        if !tasks.is_empty() {
+            return None;
+        }
+        let (sender, receiver) = watch::channel(false);
+        tasks.insert(id, sender);
+        Some(CancelSignal(receiver))
     }
 
     /// Cancels a running task. Returns whether it was running.
@@ -481,6 +493,16 @@ fn finish(
     state: &LoopState,
     ending: Option<(TaskStatus, Option<String>)>,
 ) -> (TaskStatus, Option<String>) {
+    // A stopped task claims nothing, and a task that ended before the model said or did
+    // anything (the provider failed) has nothing to check either.
+    let nothing_happened = state.answer.trim().is_empty() && plan.steps.is_empty();
+    let ending = match ending {
+        Some(ending) if ending.0 == TaskStatus::Cancelled || nothing_happened => {
+            plan.verification.clear();
+            return ending;
+        }
+        other => other,
+    };
     let mut checks = vec![check(
         "The assistant gave an answer.",
         !state.answer.trim().is_empty(),

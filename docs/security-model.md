@@ -28,7 +28,7 @@ mitigations are listed in [threat-model.md](./threat-model.md).
 | Webview → core (IPC)    | Rust core    | UI code, npm dependencies, rendered content | Isolation hook, capability ACL, input validation in Rust                                                                                                                        |
 | Core → PostgreSQL       | Rust core    | Server responses, row data, error text      | TLS, role grants, bounded reads, redaction (from 4.2)                                                                                                                           |
 | Core → AI provider      | Rust core    | Model output, tool calls, provider errors   | TLS, response bounds, redaction (7.1); typed tool registry, computed risk, untrusted framing (8.1); planner loop with limits, consent gate and verification (8.2); policy (9.x) |
-| User files → core       | Rust core    | CSV, SQL, JSON, Markdown, text attachments  | Size caps, parsers with limits, no execution (from 8.3)                                                                                                                         |
+| User files → core       | Rust core    | CSV, SQL, JSON, Markdown, text attachments  | Read in the webview only when picked; name, kind, size and text checked again in Rust; framed as untrusted; sent only to local providers or with consent; never executed (8.3)  |
 | Webview → outside world | —            | Any URL                                     | CSP, navigation guard, validated `open_external_url`                                                                                                                            |
 
 ## Controls in place
@@ -93,7 +93,7 @@ Each gate must be implemented and tested before the feature that depends on it i
 | New connections read-only by default; statement timeouts and row/byte caps on every read                                                                                                                              | Running queries                   | 4.2, 6.1                         |
 | Statement classification with `sqlparser` plus database-side checks; unknown or multi-statement agent SQL rejected                                                                                                    | Manual SQL execution, agent reads | 6.1, 8.1, 8.2                    |
 | AI endpoints: HTTPS required except loopback; explicit acknowledgement for insecure remote endpoints; disclosure of what is sent                                                                                      | Any provider request              | Done (7.2, 7.3)                  |
-| Context minimization: schema-first, row data and files only with explicit consent; budgets with visible truncation                                                                                                    | Agent with hosted providers       | 8.1, 8.2, 8.3                    |
+| Context minimization: schema-first, row data and files only with explicit consent; budgets with visible truncation                                                                                                    | Agent with hosted providers       | Done (8.1–8.3)                   |
 | Deterministic R0–R4 risk classifier; approval state machine; approvals bound to connection, environment, statement, parameters, schema fingerprint and policy version; short-lived and single-use; redacted audit log | **Any write, agent or manual**    | 9.1–9.3                          |
 | R4 (destructive/privileged) blocked in agent tools                                                                                                                                                                    | Agent writes                      | 9.1, 10.3                        |
 | Transactions with rollback on failure; uncertain commit outcomes reported, never retried automatically                                                                                                                | Data changes, imports, migrations | 10.1–11.2                        |
@@ -112,4 +112,6 @@ commands reachable from the webview must also be allowed in the isolation hook.
 values in a type whose `Debug` and `Display` print `[redacted]`.
 
 **Rendering untrusted content:** render data as text. Never use `dangerouslySetInnerHTML` for
-database values, model output or file contents.
+database values, model output or file contents. Assistant answers are plain text with fenced
+code shown in code blocks; Markdown is not rendered, links are not made clickable, and nothing in
+an answer runs (SQL opens in an editor tab only when the user asks).

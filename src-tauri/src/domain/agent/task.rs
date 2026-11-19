@@ -73,7 +73,11 @@ pub struct Exchange {
 /// What the planner reports while a task runs.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS), ts(export))]
-#[serde(tag = "event", rename_all = "snake_case")]
+#[serde(
+    tag = "event",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
 pub enum TaskEvent {
     /// The task began; `items` is what was sent as context.
     Started {
@@ -104,9 +108,10 @@ pub enum TaskEvent {
     CallRejected { tool: String, reason: String },
 }
 
-/// How a task ended.
-#[derive(Debug, Clone, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
+/// How a task ended. Serialized with its plan as the view, carrying the computed risk and
+/// required approval.
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export, rename_all = "camelCase"))]
 pub struct TaskOutcome {
     pub task_id: TaskId,
     pub status: TaskStatus,
@@ -115,6 +120,28 @@ pub struct TaskOutcome {
     /// Why the task stopped short, when it did.
     pub notice: Option<String>,
     pub plan: TaskPlan,
+}
+
+impl Serialize for TaskOutcome {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        #[derive(Serialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Wire<'a> {
+            task_id: TaskId,
+            status: TaskStatus,
+            answer: &'a str,
+            notice: Option<&'a str>,
+            plan: super::plan::PlanView<'a>,
+        }
+        Wire {
+            task_id: self.task_id,
+            status: self.status,
+            answer: &self.answer,
+            notice: self.notice.as_deref(),
+            plan: self.plan.view(),
+        }
+        .serialize(serializer)
+    }
 }
 
 /// A remembered task, for the list of past tasks.
@@ -134,6 +161,44 @@ pub struct TaskSummary {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The UI validates these shapes; the plan carries its computed risk and approval.
+    #[test]
+    fn outcomes_and_events_serialize_as_the_contract_says() {
+        use crate::domain::agent::plan::PlanTarget;
+        use crate::domain::connections::{ConnectionId, Environment};
+
+        let plan = TaskPlan::new(
+            PlanTarget {
+                connection_id: ConnectionId::new(),
+                database: "shop".into(),
+                environment: Environment::Development,
+                read_only: true,
+            },
+            "How many orders?",
+        )
+        .expect("plan");
+        let outcome = TaskOutcome {
+            task_id: plan.task_id,
+            status: TaskStatus::Succeeded,
+            answer: "12".into(),
+            notice: None,
+            plan: plan.clone(),
+        };
+        let json = serde_json::to_value(&outcome).expect("json");
+        assert_eq!(json["taskId"], plan.task_id.to_string());
+        assert_eq!(json["plan"]["risk"], "R0");
+        assert_eq!(json["plan"]["requiredApproval"], "none");
+        assert_eq!(json["plan"]["target"]["readOnly"], true);
+
+        let event = serde_json::to_value(TaskEvent::Started {
+            task_id: plan.task_id,
+            items: Vec::new(),
+        })
+        .expect("json");
+        assert_eq!(event["event"], "started");
+        assert_eq!(event["taskId"], plan.task_id.to_string());
+    }
 
     #[test]
     fn statuses_round_trip() {

@@ -422,8 +422,18 @@ Ask screen (8.3) drives it. The model proposes; Rust decides.
 - **Tasks** (`agent_tasks`): recorded as `executing` when they start, updated after every round
   and when they end with the status, plan and answer (20,000 characters at most). Tasks keep
   their record when the connection is deleted; tasks still `executing` at startup were cut off
-  by a quit and are marked `cancelled`. `RunningTasks` maps task ids to cancel signals for the
-  commands of 8.3.
+  by a quit and are marked `cancelled`. `RunningTasks` maps task ids to cancel signals and
+  admits one question at a time.
+- **Commands**: `preview_assistant_context` builds the context for a draft question without
+  sending anything; `ask_assistant` runs it, streaming `TaskEvent`s over a Tauri channel and
+  returning the outcome (its plan as the view with computed risk); `cancel_assistant_task` stops
+  it. Both take an `AskRequest` (question; up to 10 tables to describe in full; up to 5 attached
+  `.sql`, `.csv`, `.json`, `.md` or `.txt` files of 512 KB each, with path parts and control
+  characters stripped from their names; the last six exchanges; `shareData`), checked in
+  `domain::agent::ask`. The core picks the provider from Settings › AI, refuses one whose last
+  test found no tool calls, decides whether data values may be sent (the provider is on this
+  computer, or `shareData`), and refuses attached files to a hosted provider without it. Checks
+  are skipped for a task that was stopped or ended before the model said or did anything.
 - **End-to-end test**: `tests/assistant.rs` asks a real model about a scratch database on the
   PostgreSQL fixture, through the app's services; ignored by default.
 
@@ -490,6 +500,23 @@ Ask screen (8.3) drives it. The model proposes; Rust decides.
   was opened from. The Library sheet has History (this connection's runs, with the outcome in
   words and an icon) and Saved tabs, each searchable; Open puts the SQL in a new tab (a saved
   query's tab, if one is open, is selected instead) and never runs it.
+- **Ask** (Ask): shown once the assistant is on with a usable provider; otherwise a link to
+  Settings › AI. The header names the provider and model and says, in words, whether it runs on
+  this computer or is hosted, and that access is read-only. The conversation (shadcn
+  `MessageScroller`, `Message`, `Bubble`) shows each question with its tables and files, then
+  the reply: the context that was sent, a `Trace` of steps (summary, outcome in words; failed or
+  skipped steps open to show why and the SQL), refused tool requests, and the model's notes
+  between steps. The answer is plain text; fenced code becomes a `CodeBlock` (SQL highlighted by
+  shiki's JavaScript engine) with Copy and, for SQL, "Open in SQL editor", which opens a new tab
+  and runs nothing. The outcome is a badge with an icon and a word (Checked, Partly checked,
+  Failed, Stopped), any notice, and the checks. The composer has Attach (the webview reads the
+  picked file; disabled for a hosted provider until sharing is allowed), Tables (a searchable
+  picker), the context review (items, sizes, what was cut, what carries data, the token estimate,
+  refreshed 400 ms after typing stops), Ask or Stop, and, for hosted providers, the
+  per-conversation "Share query results and files" switch. Enter sends; Shift+Enter adds a line.
+  Follow-ups send the last six answered exchanges. The conversation lives in memory for the
+  session (a Zustand store, so a running question survives leaving the screen) and starts over on
+  another connection or with "New conversation"; finished tasks are saved by the core.
 - **Copy and export**: the row detail sheet copies a single value or the whole row (as JSON,
   with the same typing rules as the JSON export); Ctrl/Cmd+C copies the focused grid row. Values
   cut at 2,000 characters are copied as loaded, and the confirmation says so. The Export menu

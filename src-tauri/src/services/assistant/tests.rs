@@ -427,6 +427,7 @@ async fn cancelling_stops_the_running_query_in_the_database() {
 
     assert_eq!(run.outcome.status, TaskStatus::Cancelled);
     assert_eq!(run.outcome.plan.steps[0].status, StepStatus::Cancelled);
+    assert!(run.outcome.plan.verification.is_empty());
     let operation = tools.runs.lock().expect("lock")[0].1;
     assert_eq!(*tools.cancels.lock().expect("lock"), vec![operation]);
     let stored = store
@@ -559,6 +560,7 @@ async fn model_stops_and_errors_end_the_task() {
     let run = run_task(&store, &model, &tools, input(true), &never_cancelled()).await;
     assert_eq!(run.outcome.status, TaskStatus::Failed);
     assert_eq!(run.outcome.notice.as_deref(), Some("Too many requests."));
+    assert!(run.outcome.plan.verification.is_empty());
 
     let model = ScriptedModel::new(vec![answer("  ")]);
     let run = run_task(&store, &model, &tools, input(true), &never_cancelled()).await;

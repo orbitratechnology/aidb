@@ -7,6 +7,7 @@ import {
   COMMANDS,
   ConnectionDetailsSchema,
   ConnectionTestReportSchema,
+  ContextPreviewSchema,
   CredentialBackendSchema,
   ProviderDetailsSchema,
   ProviderTestReportSchema,
@@ -23,7 +24,10 @@ import {
   StorageSummarySchema,
   TableExportOutcomeSchema,
   TablePageSchema,
+  TaskEventSchema,
+  TaskOutcomeSchema,
   type ActiveSession,
+  type AskRequest,
   type AppInfo,
   type AppSettings,
   type CatalogSnapshot,
@@ -33,6 +37,7 @@ import {
   type ConnectionDraft,
   type ConnectionId,
   type ConnectionTestReport,
+  type ContextPreview,
   type CredentialBackend,
   type ProviderDetails,
   type ProviderDraft,
@@ -58,7 +63,11 @@ import {
   type StorageSummary,
   type TableExportOutcome,
   type TablePage,
+  type TaskEvent,
+  type TaskId,
+  type TaskOutcome,
 } from '@aidb/contracts'
+import { Channel } from '@tauri-apps/api/core'
 import { z } from 'zod'
 import { callCommand, NativeError } from './native'
 
@@ -329,4 +338,40 @@ export function forgetProviderKey(id: ProviderId): Promise<boolean> {
 /** Sends a few short, fixed prompts to the provider and saves what it supports. */
 export function testProvider(id: ProviderId): Promise<ProviderTestReport> {
   return callCommand(COMMANDS.testProvider, ProviderTestReportSchema, { id })
+}
+
+/** What a question would send to the provider, for review. Nothing is sent. */
+export function previewAssistantContext(
+  connectionId: ConnectionId,
+  request: AskRequest,
+): Promise<ContextPreview> {
+  return callCommand(COMMANDS.previewAssistantContext, ContextPreviewSchema, {
+    connectionId,
+    request,
+  })
+}
+
+/**
+ * Asks the assistant a question on the open connection. Progress arrives through `onEvent`;
+ * events that do not match the contract are dropped.
+ */
+export function askAssistant(
+  connectionId: ConnectionId,
+  request: AskRequest,
+  onEvent: (event: TaskEvent) => void,
+): Promise<TaskOutcome> {
+  const channel = new Channel<unknown>((raw) => {
+    const event = TaskEventSchema.safeParse(raw)
+    if (event.success) onEvent(event.data)
+  })
+  return callCommand(COMMANDS.askAssistant, TaskOutcomeSchema, {
+    connectionId,
+    request,
+    onEvent: channel,
+  })
+}
+
+/** Stops a running question. Resolves to whether it was still running. */
+export function cancelAssistantTask(taskId: TaskId): Promise<boolean> {
+  return callCommand(COMMANDS.cancelAssistantTask, z.boolean(), { taskId })
 }

@@ -11,6 +11,7 @@
 //! missing from a capability is rejected by Tauri before it runs.
 
 mod app;
+mod assistant;
 mod catalog;
 mod connections;
 mod diagnostics;
@@ -69,7 +70,10 @@ pub(crate) fn handler<R: Runtime>() -> impl Fn(Invoke<R>) -> bool + Send + Sync 
         providers::delete_provider,
         providers::save_provider_key,
         providers::forget_provider_key,
-        providers::test_provider
+        providers::test_provider,
+        assistant::preview_assistant_context,
+        assistant::ask_assistant,
+        assistant::cancel_assistant_task
     ]
 }
 

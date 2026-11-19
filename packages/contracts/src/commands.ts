@@ -44,6 +44,9 @@ export const COMMANDS = {
   saveProviderKey: 'save_provider_key',
   forgetProviderKey: 'forget_provider_key',
   testProvider: 'test_provider',
+  previewAssistantContext: 'preview_assistant_context',
+  askAssistant: 'ask_assistant',
+  cancelAssistantTask: 'cancel_assistant_task',
 } as const
 
 export type CommandName = (typeof COMMANDS)[keyof typeof COMMANDS]

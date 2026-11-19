@@ -45,6 +45,9 @@
     "allow-delete-provider",
     "allow-save-provider-key",
     "allow-forget-provider-key",
-    "allow-test-provider"
+    "allow-test-provider",
+    "allow-preview-assistant-context",
+    "allow-ask-assistant",
+    "allow-cancel-assistant-task"
   ]
 }

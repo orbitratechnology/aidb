@@ -5,7 +5,11 @@ export type { AiSettings } from './generated/AiSettings'
 export type { AnalyzedStatement } from './generated/AnalyzedStatement'
 export type { AppearanceSettings } from './generated/AppearanceSettings'
 export type { AppInfo } from './generated/AppInfo'
+export type { ApprovalLevel } from './generated/ApprovalLevel'
 export type { AppSettings } from './generated/AppSettings'
+export type { AskRequest } from './generated/AskRequest'
+export type { AssistantProvider } from './generated/AssistantProvider'
+export type { AttachmentInput } from './generated/AttachmentInput'
 export type { Capabilities } from './generated/Capabilities'
 export type { CatalogOverview } from './generated/CatalogOverview'
 export type { CatalogSnapshot } from './generated/CatalogSnapshot'
@@ -19,6 +23,9 @@ export type { ConnectionDetails } from './generated/ConnectionDetails'
 export type { ConnectionDraft } from './generated/ConnectionDraft'
 export type { ConnectionId } from './generated/ConnectionId'
 export type { ConnectionTestReport } from './generated/ConnectionTestReport'
+export type { ContextItem } from './generated/ContextItem'
+export type { ContextItemKind } from './generated/ContextItemKind'
+export type { ContextPreview } from './generated/ContextPreview'
 export type { CredentialBackend } from './generated/CredentialBackend'
 export type { CredentialStoreStatus } from './generated/CredentialStoreStatus'
 export type { DiagnosticsInfo } from './generated/DiagnosticsInfo'
@@ -26,6 +33,7 @@ export type { Engine } from './generated/Engine'
 export type { Environment } from './generated/Environment'
 export type { ErrorCode } from './generated/ErrorCode'
 export type { ErrorPayload } from './generated/ErrorPayload'
+export type { Exchange } from './generated/Exchange'
 export type { ExportFormat } from './generated/ExportFormat'
 export type { ExportOutcome } from './generated/ExportOutcome'
 export type { ExportRequest } from './generated/ExportRequest'
@@ -54,6 +62,8 @@ export type { PageColumn } from './generated/PageColumn'
 export type { PageRequest } from './generated/PageRequest'
 export type { ParsedConnectionUri } from './generated/ParsedConnectionUri'
 export type { PasswordStorage } from './generated/PasswordStorage'
+export type { PlanStep } from './generated/PlanStep'
+export type { PlanTarget } from './generated/PlanTarget'
 export type { ProviderCheck } from './generated/ProviderCheck'
 export type { ProviderDetails } from './generated/ProviderDetails'
 export type { ProviderDraft } from './generated/ProviderDraft'
@@ -67,6 +77,7 @@ export type { QueryRequest } from './generated/QueryRequest'
 export type { QueryResult } from './generated/QueryResult'
 export type { QueryRun } from './generated/QueryRun'
 export type { ReferentialAction } from './generated/ReferentialAction'
+export type { RiskLevel } from './generated/RiskLevel'
 export type { SafetySettings } from './generated/SafetySettings'
 export type { SavedQuery } from './generated/SavedQuery'
 export type { SavedQueryDraft } from './generated/SavedQueryDraft'
@@ -82,18 +93,46 @@ export type { SqlAnalysis } from './generated/SqlAnalysis'
 export type { SqlProblem } from './generated/SqlProblem'
 export type { SslMode } from './generated/SslMode'
 export type { StatementKind } from './generated/StatementKind'
+export type { StepStatus } from './generated/StepStatus'
 export type { StorageSummary } from './generated/StorageSummary'
 export type { StructuredOutput } from './generated/StructuredOutput'
 export type { TableExportOutcome } from './generated/TableExportOutcome'
 export type { TablePage } from './generated/TablePage'
+export type { TaskEvent } from './generated/TaskEvent'
+export type { TaskId } from './generated/TaskId'
+export type { TaskOutcome } from './generated/TaskOutcome'
+export type { TaskPlan } from './generated/TaskPlan'
+export type { TaskStatus } from './generated/TaskStatus'
 export type { ThemePreference } from './generated/ThemePreference'
+export type { ToolName } from './generated/ToolName'
 export type { ValueKind } from './generated/ValueKind'
+export type { VerificationStatus } from './generated/VerificationStatus'
+export type { VerificationStep } from './generated/VerificationStep'
 export { SAFETY_DEFAULTS, SAFETY_LIMITS } from './generated/SafetyLimits'
+export { ASSISTANT_LIMITS } from './generated/AssistantLimits'
 export { CONNECTION_LIMITS } from './generated/ConnectionLimits'
 export { TABLE_DATA_LIMITS } from './generated/TableDataLimits'
 export { EXPORT_LIMITS } from './generated/ExportLimits'
 
 export { AppInfoSchema } from './app'
+export {
+  ApprovalLevelSchema,
+  AssistantProviderSchema,
+  ContextItemKindSchema,
+  ContextItemSchema,
+  ContextPreviewSchema,
+  PlanStepSchema,
+  PlanTargetSchema,
+  RiskLevelSchema,
+  StepStatusSchema,
+  TaskEventSchema,
+  TaskOutcomeSchema,
+  TaskPlanSchema,
+  TaskStatusSchema,
+  ToolNameSchema,
+  VerificationStatusSchema,
+  VerificationStepSchema,
+} from './assistant'
 export {
   CatalogSnapshotSchema,
   ColumnSchema,

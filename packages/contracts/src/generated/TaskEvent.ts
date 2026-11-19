@@ -6,4 +6,4 @@ import type { TaskId } from "./TaskId";
 /**
  * What the planner reports while a task runs.
  */
-export type TaskEvent = { "event": "started", task_id: TaskId, items: Array<ContextItem>, } | { "event": "round_started", round: number, } | { "event": "text", text: string, } | { "event": "step_started", index: number, step: PlanStep, } | { "event": "step_finished", index: number, step: PlanStep, } | { "event": "call_rejected", tool: string, reason: string, };
+export type TaskEvent = { "event": "started", taskId: TaskId, items: Array<ContextItem>, } | { "event": "round_started", round: number, } | { "event": "text", text: string, } | { "event": "step_started", index: number, step: PlanStep, } | { "event": "step_finished", index: number, step: PlanStep, } | { "event": "call_rejected", tool: string, reason: string, };

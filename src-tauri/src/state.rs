@@ -9,6 +9,7 @@ use crate::adapters::credentials::Credentials;
 use crate::adapters::local_store::LocalStore;
 use crate::adapters::postgres::PostgresAdapter;
 use crate::errors::{AppError, AppResult, ErrorCode};
+use crate::services::assistant::RunningTasks;
 use crate::services::catalog::CatalogCache;
 use crate::services::sessions::Sessions;
 
@@ -80,6 +81,7 @@ pub struct AppState {
     credentials: Credentials,
     sessions: Sessions<PostgresAdapter>,
     catalog: CatalogCache,
+    assistant: RunningTasks,
 }
 
 impl AppState {
@@ -91,6 +93,7 @@ impl AppState {
             credentials,
             sessions: Sessions::new(PostgresAdapter),
             catalog: CatalogCache::default(),
+            assistant: RunningTasks::default(),
         }
     }
 
@@ -98,6 +101,12 @@ impl AppState {
     #[must_use]
     pub fn catalog(&self) -> &CatalogCache {
         &self.catalog
+    }
+
+    /// Assistant questions being answered, by task id.
+    #[must_use]
+    pub fn assistant(&self) -> &RunningTasks {
+        &self.assistant
     }
 
     /// Open database sessions.

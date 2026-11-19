@@ -42,6 +42,9 @@ const COMMANDS: &[&str] = &[
     "save_provider_key",
     "forget_provider_key",
     "test_provider",
+    "preview_assistant_context",
+    "ask_assistant",
+    "cancel_assistant_task",
 ];
 
 fn main() {

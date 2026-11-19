@@ -118,7 +118,7 @@ Status legend: `[x]` done · `[~]` in progress · `[ ]` not started
       with budgets and untrusted-content framing.
 - [x] **8.2 Planner loop.** Tool-call validation (unknown or malformed calls rejected), cancellation,
       verification, task persistence.
-- [ ] **8.3 Ask UI.** Composer, context review list, attachments (`.sql`, `.csv`, `.json`, `.md`,
+- [x] **8.3 Ask UI.** Composer, context review list, attachments (`.sql`, `.csv`, `.json`, `.md`,
       `.txt`), streamed activity trace, results and follow-ups.
 - [ ] **8.4 Agent evaluation suite.** Scripted provider fixtures, read-task benchmarks, injection
       cases.

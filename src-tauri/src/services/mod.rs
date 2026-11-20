@@ -13,6 +13,7 @@ pub mod data_changes;
 pub(crate) mod fakes;
 pub mod imports;
 pub mod library;
+pub mod migrations;
 pub mod policy;
 pub mod providers;
 pub mod query;

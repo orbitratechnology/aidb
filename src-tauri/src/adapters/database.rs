@@ -73,6 +73,16 @@ pub trait DatabaseSession: std::fmt::Debug + Send + Sync + 'static {
         schema: &str,
     ) -> impl Future<Output = Result<crate::domain::schema_diff::SchemaModel, DbError>> + Send;
 
+    /// Applies a migration to `schema`: its transactional statements in one transaction (with
+    /// `schema` first on the search path), refused when the catalog fingerprint is no longer
+    /// `fingerprint`; then the others, one by one.
+    fn apply_migration(
+        &self,
+        schema: &str,
+        statements: &[MigrationStatement],
+        fingerprint: &str,
+    ) -> impl Future<Output = MigrationRun> + Send;
+
     /// One page of a table or view, read in a read-only transaction. Column names in the
     /// request are matched against the live table; values are bound, never formatted into SQL.
     /// The read runs as `request.operation_id` when given, so it can be cancelled.
@@ -140,6 +150,33 @@ pub trait DatabaseSession: std::fmt::Debug + Send + Sync + 'static {
         changes: &[DataChange],
         approved: &[DataChangePlan],
     ) -> impl Future<Output = Result<u64, ApplyError>> + Send;
+}
+
+/// One statement of a schema migration, in the order it runs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MigrationStatement {
+    pub sql: String,
+    /// False for statements that cannot run in a transaction (`CONCURRENTLY`): they run after
+    /// it commits, one by one.
+    pub transactional: bool,
+}
+
+/// How applying a migration ended.
+#[derive(Debug)]
+pub enum MigrationRun {
+    /// Every statement ran.
+    Applied,
+    /// Nothing was changed: statement `step` (counted from 0) failed, or with `None`, the schema
+    /// changed before the first one, or the transaction could not start or commit.
+    RolledBack { step: Option<usize>, error: DbError },
+    /// The transaction committed; statement `step` after it failed with `applied` run in all.
+    Partial {
+        applied: usize,
+        step: usize,
+        error: DbError,
+    },
+    /// The connection was lost while committing: it may or may not have been applied.
+    Uncertain(DbError),
 }
 
 /// Why an approved change was not applied.

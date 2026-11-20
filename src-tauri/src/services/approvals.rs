@@ -71,6 +71,8 @@ pub enum Subject {
         changes: Arc<Vec<DataChange>>,
         limits: SetLimits,
     },
+    /// A schema migration aidb generated, its statements in the order they run.
+    Migration { statements: Arc<Vec<String>> },
 }
 
 /// What the execution layer gets for a valid token: the approval to report the outcome to,
@@ -201,7 +203,18 @@ impl Approvals {
             Subject::DataChanges { changes, .. } => {
                 Some((entry.connection_id, Arc::clone(changes), entry.actor))
             }
-            Subject::Sql { .. } => None,
+            Subject::Sql { .. } | Subject::Migration { .. } => None,
+        })
+    }
+
+    /// The statements of an open migration approval and its connection.
+    #[must_use]
+    pub fn migration(&self, id: ApprovalId) -> Option<(ConnectionId, Arc<Vec<String>>)> {
+        self.lock().get(&id).and_then(|entry| match &entry.subject {
+            Subject::Migration { statements } => {
+                Some((entry.connection_id, Arc::clone(statements)))
+            }
+            _ => None,
         })
     }
 
@@ -301,6 +314,16 @@ async fn bind<A: DatabaseAdapter>(
                 .collect();
             (assessment, texts, parameters, plans)
         }
+        Subject::Migration { statements } => {
+            let assessment =
+                policy::assess_migration(store, sessions, connection_id, statements).await?;
+            (
+                assessment,
+                statements.as_ref().clone(),
+                Vec::new(),
+                Vec::new(),
+            )
+        }
     };
     let profile = store
         .connections()
@@ -384,6 +407,32 @@ pub async fn request<A: DatabaseAdapter>(
         subject,
         None,
         actor,
+    )
+    .await
+    .map(|(request, _)| request)
+}
+
+/// Prepares a schema migration for approval on the open connection: its statements, in the
+/// order they run, assessed together.
+///
+/// # Errors
+///
+/// As [`request`].
+pub async fn request_migration<A: DatabaseAdapter>(
+    store: &LocalStore,
+    sessions: &Sessions<A>,
+    approvals: &Approvals,
+    connection_id: ConnectionId,
+    statements: Arc<Vec<String>>,
+) -> AppResult<ApprovalRequest> {
+    request_subject(
+        store,
+        sessions,
+        approvals,
+        connection_id,
+        Subject::Migration { statements },
+        None,
+        Actor::User,
     )
     .await
     .map(|(request, _)| request)

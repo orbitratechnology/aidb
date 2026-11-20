@@ -14,9 +14,10 @@ use crate::adapters::credentials::Credentials;
 use crate::adapters::database::{DatabaseAdapter, DatabaseSession};
 use crate::adapters::local_store::LocalStore;
 use crate::domain::connections::ConnectionId;
+use crate::domain::policy::approval::ApprovalId;
 use crate::domain::schema_diff::generate::plan;
 use crate::domain::schema_diff::{
-    CompareRequest, CompareSource, SchemaDiff, SchemaFile, SchemaModel, parse,
+    CompareRequest, CompareSource, GenerateOptions, SchemaDiff, SchemaFile, SchemaModel, parse,
 };
 use crate::errors::{AppError, AppResult};
 
@@ -39,6 +40,9 @@ struct HeldFile {
 pub struct HeldDiff {
     pub connection_id: ConnectionId,
     pub diff: Arc<SchemaDiff>,
+    /// What the target should come to match, to check after applying.
+    pub source: Arc<SchemaModel>,
+    pub options: GenerateOptions,
     serial: u64,
 }
 
@@ -47,6 +51,8 @@ pub struct HeldDiff {
 pub struct SchemaDiffs {
     files: Mutex<HashMap<uuid::Uuid, HeldFile>>,
     diffs: Mutex<HashMap<uuid::Uuid, HeldDiff>>,
+    /// Comparisons prepared for applying, by their approval.
+    prepared: Mutex<HashMap<ApprovalId, uuid::Uuid>>,
     serial: AtomicU64,
 }
 
@@ -83,6 +89,28 @@ impl SchemaDiffs {
     #[must_use]
     pub fn get(&self, id: uuid::Uuid) -> Option<HeldDiff> {
         lock(&self.diffs).get(&id).cloned()
+    }
+
+    /// Remembers which comparison an approval applies. Approvals that lapsed are pruned with
+    /// their comparisons.
+    pub fn prepare(&self, approval: ApprovalId, diff: uuid::Uuid) {
+        let held = lock(&self.diffs);
+        let mut prepared = lock(&self.prepared);
+        prepared.retain(|_, id| held.contains_key(id));
+        prepared.insert(approval, diff);
+    }
+
+    /// The comparison an approval applies.
+    #[must_use]
+    pub fn prepared(&self, approval: ApprovalId) -> Option<HeldDiff> {
+        let id = *lock(&self.prepared).get(&approval)?;
+        self.get(id)
+    }
+
+    /// Forgets a comparison once it was applied: the schema it describes changed.
+    pub fn forget(&self, id: uuid::Uuid) {
+        lock(&self.diffs).remove(&id);
+        lock(&self.prepared).retain(|_, diff| *diff != id);
     }
 }
 
@@ -247,6 +275,8 @@ pub async fn compare<A: DatabaseAdapter>(
         HeldDiff {
             connection_id,
             diff: Arc::new(diff.clone()),
+            source: Arc::new(source),
+            options: request.options,
             serial: diffs.next(),
         },
     );

@@ -2,6 +2,6 @@
 
 export type GenerateOptions = { 
 /**
- * Create and drop indexes `CONCURRENTLY`: no write lock, but outside the transaction.
+ * Build new indexes `CONCURRENTLY`: no write lock, but outside the transaction.
  */
 concurrentIndexes: boolean, };

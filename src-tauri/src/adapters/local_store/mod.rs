@@ -9,6 +9,7 @@ mod audit;
 mod connections;
 mod library;
 mod maintenance;
+mod migrations;
 mod providers;
 mod schema_cache;
 mod settings;
@@ -29,6 +30,7 @@ pub use audit::AuditLog;
 pub use connections::ConnectionProfiles;
 pub use library::{LIST_LIMIT, QueryHistory, SavedQueries};
 pub use maintenance::{ClearTarget, Maintenance, StorageSummary};
+pub use migrations::{MigrationRecords, NewMigrationRecord};
 pub use providers::ProviderProfiles;
 pub use schema_cache::{SchemaCache, SchemaCacheRecord};
 pub use settings::Settings;
@@ -153,6 +155,11 @@ impl LocalStore {
     #[must_use]
     pub fn audit(&self) -> AuditLog<'_> {
         AuditLog::new(&self.pool)
+    }
+
+    #[must_use]
+    pub fn migrations(&self) -> MigrationRecords<'_> {
+        MigrationRecords::new(&self.pool)
     }
 
     #[must_use]

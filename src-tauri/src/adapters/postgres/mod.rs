@@ -9,6 +9,7 @@
 mod catalog;
 mod data_change;
 mod errors;
+mod migration;
 mod options;
 mod policy;
 mod query;
@@ -245,6 +246,24 @@ impl DatabaseSession for PgSession {
         schema::read(&mut connection, schema)
             .await
             .map_err(|e| self.session_error(e))?
+    }
+
+    async fn apply_migration(
+        &self,
+        schema: &str,
+        statements: &[crate::adapters::database::MigrationStatement],
+        fingerprint: &str,
+    ) -> crate::adapters::database::MigrationRun {
+        let mut connection = match self.begin_operation(OperationId::new()).await {
+            Ok(connection) => connection,
+            Err(error) => {
+                return crate::adapters::database::MigrationRun::RolledBack { step: None, error };
+            }
+        };
+        migration::apply(&mut connection, schema, statements, fingerprint, |e| {
+            self.session_error(e)
+        })
+        .await
     }
 
     async fn read_page(

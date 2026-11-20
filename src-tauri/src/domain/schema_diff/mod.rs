@@ -149,7 +149,7 @@ pub struct CompareRequest {
 #[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct GenerateOptions {
-    /// Create and drop indexes `CONCURRENTLY`: no write lock, but outside the transaction.
+    /// Build new indexes `CONCURRENTLY`: no write lock, but outside the transaction.
     pub concurrent_indexes: bool,
 }
 

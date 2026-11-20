@@ -364,3 +364,58 @@ fn change_sets_are_judged_by_their_rows_in_all() {
     );
     assert_eq!(every.risk, R4);
 }
+
+#[test]
+fn migrations_may_remove_schema_objects_with_the_elevated_approval() {
+    let migration = "ALTER TABLE public.items ADD COLUMN note text;
+        ALTER TABLE public.items DROP COLUMN legacy;
+        DROP INDEX public.items_legacy_idx;
+        DROP TABLE public.old_log";
+    let facts = inspect(migration);
+    let assessment = assess_migration(&facts, &[], development());
+    assert_eq!(assessment.risk, R4);
+    assert_eq!(assessment.required_approval, ApprovalLevel::Elevated);
+    assert!(assessment.blockers.is_empty(), "{:?}", assessment.blockers);
+    assert!(
+        !assessment
+            .reasons
+            .iter()
+            .any(|r| r.code == ReasonCode::Batch),
+        "no batch rule: each step is generated and shown"
+    );
+    // The same SQL from the editor or the assistant stays refused.
+    assert_eq!(
+        assess(&facts, &[], development()).required_approval,
+        ApprovalLevel::Blocked
+    );
+    // Other reasons for R4 are still refused in a migration, and so are read-only connections.
+    for refused in [
+        "DROP TABLE t; TRUNCATE u",
+        "ALTER TABLE t DISABLE TRIGGER ALL",
+        "SELECT pg_terminate_backend(1)",
+        "DROP TABLE t; this is not sql",
+    ] {
+        let assessment = assess_migration(&inspect(refused), &[], development());
+        assert_eq!(
+            assessment.required_approval,
+            ApprovalLevel::Blocked,
+            "{refused}"
+        );
+    }
+    let read_only = PolicyContext {
+        writes_allowed: false,
+        ..development()
+    };
+    assert_eq!(
+        assess_migration(&facts, &[], read_only).required_approval,
+        ApprovalLevel::Blocked
+    );
+    // Without removals a migration is an ordinary elevated schema change.
+    let additive = assess_migration(
+        &inspect("CREATE TABLE t (a int); CREATE INDEX ON t (a)"),
+        &[],
+        development(),
+    );
+    assert_eq!(additive.risk, R3);
+    assert_eq!(additive.required_approval, ApprovalLevel::Elevated);
+}

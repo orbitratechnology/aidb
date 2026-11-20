@@ -1,10 +1,12 @@
 import type { MigrationStep, NoteKind, SchemaDiff, StepAction } from '@aidb/contracts'
+import { useState } from 'react'
 import { useMutation } from '@tanstack/react-query'
 import {
   CircleCheckIcon,
   CopyIcon,
   DownloadIcon,
   InfoIcon,
+  PlayIcon,
   LockIcon,
   MinusIcon,
   PencilIcon,
@@ -23,10 +25,11 @@ import { Button } from '@/components/ui/button'
 import { CodeBlock, CodeBlockContent } from '@/components/ui/code-block'
 import { Item, ItemContent, ItemMedia, ItemTitle } from '@/components/ui/item'
 import { Spinner } from '@/components/ui/spinner'
-import type { EnvironmentKind } from '@/features/connections/types'
+import type { ActiveConnection } from '@/features/connections/types'
 import { copyText } from '@/lib/clipboard'
 import { saveSchemaScript } from '@/lib/commands'
 import { errorMessage } from '@/lib/errors'
+import { ApplyMigrationDialog } from './apply-dialog'
 import { NOTE_LABELS, stepsWith, summaryParts } from './compare'
 
 const ACTION_DISPLAY: Record<StepAction, { icon: LucideIcon; label: string }> = {
@@ -45,11 +48,17 @@ const NOTE_ICONS: Record<NoteKind, LucideIcon> = {
 /** A comparison: what differs, the steps that make the target match, and the whole script. */
 export function DiffView({
   diff,
-  environment,
+  active,
+  onApplied,
 }: {
   diff: SchemaDiff
-  environment: EnvironmentKind
+  active: ActiveConnection
+  /** A migration changed the schema: the comparison no longer describes it. */
+  onApplied: () => void
 }) {
+  const environment = active.environment
+  const [applying, setApplying] = useState(false)
+  const [changed, setChanged] = useState(false)
   const save = useMutation({
     mutationFn: () => saveSchemaScript(diff.diffId),
     onSuccess: (name) => name && toast.success(`Saved ${name}.`),
@@ -144,11 +153,15 @@ export function DiffView({
           </ol>
           <div className="flex flex-col gap-3 rounded-lg border p-4">
             <p className="text-sm text-muted-foreground">
-              The script runs these steps in this order in one transaction, then any that cannot run
-              in one. aidb does not run it here: review it, then run it with your usual tool, such
-              as psql.
+              Apply runs these steps in this order in one transaction, then any that cannot run in
+              one, after you approve it; comparing again afterwards checks the result. You can also
+              copy or save the script to run it with your usual tool.
             </p>
             <div className="flex flex-wrap gap-2">
+              <Button className="min-h-11 sm:min-h-0" onClick={() => setApplying(true)}>
+                <PlayIcon data-icon="inline-start" />
+                Review and apply…
+              </Button>
               <Button
                 variant="outline"
                 className="min-h-11 sm:min-h-0"
@@ -177,6 +190,16 @@ export function DiffView({
               </Button>
             </div>
           </div>
+          <ApplyMigrationDialog
+            open={applying}
+            onOpenChange={(open) => {
+              setApplying(open)
+              if (!open && changed) onApplied()
+            }}
+            active={active}
+            diff={diff}
+            onFinished={(result) => setChanged(result.status !== 'failed')}
+          />
         </>
       )}
     </section>

@@ -254,6 +254,29 @@ impl DatabaseSession for FakeSession {
         })
     }
 
+    async fn apply_migration(
+        &self,
+        _schema: &str,
+        statements: &[crate::adapters::database::MigrationStatement],
+        _fingerprint: &str,
+    ) -> crate::adapters::database::MigrationRun {
+        // A statement containing "fail" fails, as the database would refuse it.
+        match statements.iter().position(|s| s.sql.contains("fail")) {
+            Some(step) if statements[step].transactional => {
+                crate::adapters::database::MigrationRun::RolledBack {
+                    step: Some(step),
+                    error: DbError::new(DbErrorKind::InvalidRequest, "it failed"),
+                }
+            }
+            Some(step) => crate::adapters::database::MigrationRun::Partial {
+                applied: step,
+                step,
+                error: DbError::new(DbErrorKind::InvalidRequest, "it failed"),
+            },
+            None => crate::adapters::database::MigrationRun::Applied,
+        }
+    }
+
     async fn read_schema(
         &self,
         schema: &str,

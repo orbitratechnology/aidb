@@ -34,6 +34,7 @@ import { closeSchemaFile, compareSchemas, openSchemaFile } from '@/lib/commands'
 import { errorMessage } from '@/lib/errors'
 import { compareRequest, defaultSchema, needsPassword, type CompareForm } from './compare'
 import { DiffView } from './diff-view'
+import { MigrationHistory } from './migration-history'
 
 export function MigrationsPage() {
   return (
@@ -41,8 +42,8 @@ export function MigrationsPage() {
       <header className="flex flex-col gap-1">
         <h1 className="text-lg font-semibold">Migrations</h1>
         <p className="text-sm text-muted-foreground">
-          Compare a schema on this connection with another schema or a .sql file, and get the SQL
-          that makes it match, with what each step risks. Nothing runs here.
+          Compare a schema on this connection with another schema or a .sql file, see the SQL that
+          makes it match and what each step risks, and apply it once you approve it.
         </p>
       </header>
       <RequireConnection
@@ -81,6 +82,7 @@ function Compare({ active }: { active: ActiveConnection }) {
   })
   const [password, setPassword] = useState('')
   const [diff, setDiff] = useState<SchemaDiff | null>(null)
+  const [applied, setApplied] = useState(false)
 
   // Defaults once the schemas are known: change public, compare with another one.
   const targetSchema = form.targetSchema || defaultSchema(schemas)
@@ -122,7 +124,10 @@ function Compare({ active }: { active: ActiveConnection }) {
       if (!('request' in built)) throw new Error(built.missing)
       return compareSchemas(active.id, built.request, askPassword ? password : null)
     },
-    onSuccess: setDiff,
+    onSuccess: (next) => {
+      setDiff(next)
+      setApplied(false)
+    },
   })
 
   return (
@@ -326,7 +331,7 @@ function Compare({ active }: { active: ActiveConnection }) {
             />
             <FieldContent>
               <FieldLabel htmlFor={`${formId}-concurrent`}>
-                Create and drop indexes concurrently
+                Build new indexes concurrently
               </FieldLabel>
               <FieldDescription>
                 Writes to the table continue while an index builds, but those steps run after the
@@ -358,7 +363,24 @@ function Compare({ active }: { active: ActiveConnection }) {
           <AlertDescription>{errorMessage(compare.error)}</AlertDescription>
         </Alert>
       )}
-      {diff && <DiffView diff={diff} environment={active.environment} />}
+      {diff && (
+        <DiffView
+          diff={diff}
+          active={active}
+          onApplied={() => {
+            // The core forgot the applied comparison: compare again to see what is left.
+            setDiff(null)
+            setApplied(true)
+          }}
+        />
+      )}
+      {applied && !diff && (
+        <p className="text-sm text-muted-foreground" role="status">
+          The migration ran; its outcome is in the list below. Compare again to see where the
+          schemas stand.
+        </p>
+      )}
+      <MigrationHistory connectionId={active.id} />
     </div>
   )
 }

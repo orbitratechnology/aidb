@@ -368,12 +368,14 @@ fn concurrent_indexes_run_after_the_transaction() {
     assert_eq!(
         sqls(&plan),
         [
-            "DROP INDEX CONCURRENTLY public.customers_legacy_idx",
+            "DROP INDEX public.customers_legacy_idx",
             "CREATE UNIQUE INDEX CONCURRENTLY customers_name_idx ON public.customers USING btree \
              (name)",
         ]
     );
-    assert!(plan.steps.iter().all(|step| !step.transactional));
+    // Drops are quick and stay in the transaction; builds run after it.
+    assert!(plan.steps[0].transactional);
+    assert!(!plan.steps[1].transactional);
     assert!(
         plan.steps[1]
             .notes

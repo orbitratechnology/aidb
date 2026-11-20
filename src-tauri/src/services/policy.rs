@@ -110,6 +110,35 @@ pub async fn assess_change_set<A: DatabaseAdapter>(
     )))
 }
 
+/// Assesses a schema migration aidb generated, its statements in the order they run. See
+/// [`classify::assess_migration`].
+///
+/// # Errors
+///
+/// As [`assess`].
+pub async fn assess_migration<A: DatabaseAdapter>(
+    store: &LocalStore,
+    sessions: &Sessions<A>,
+    id: ConnectionId,
+    statements: &[String],
+) -> AppResult<RiskAssessment> {
+    let mut sql_facts = SqlFacts {
+        statements: Vec::new(),
+        problem: None,
+    };
+    for sql in statements {
+        let facts = facts::inspect(sql);
+        sql_facts.statements.extend(facts.statements);
+        if sql_facts.problem.is_none() {
+            sql_facts.problem = facts.problem;
+        }
+    }
+    let (impacts, context) = gather(store, sessions, id, &sql_facts, &[]).await?;
+    Ok(log(classify::assess_migration(
+        &sql_facts, &impacts, context,
+    )))
+}
+
 fn log(assessment: RiskAssessment) -> RiskAssessment {
     tracing::debug!(
         risk = ?assessment.risk,

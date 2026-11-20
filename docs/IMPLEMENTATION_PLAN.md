@@ -147,7 +147,7 @@ Status legend: `[x]` done · `[~]` in progress · `[ ]` not started
 
 - [x] **11.1 Schema diff.** Schema-to-schema and schema-to-`.sql` comparison, SQL generation, risk
       notes (data loss, locks, non-transactional statements).
-- [ ] **11.2 Migration workflow.** Review, approval, apply and `migration_records`.
+- [x] **11.2 Migration workflow.** Review, approval, apply and `migration_records`.
 - [ ] **11.3 Query advisor.** `EXPLAIN (FORMAT JSON)` plan tree, evidence-based suggestions, agent
       explanation.
 

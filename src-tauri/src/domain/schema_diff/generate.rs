@@ -951,29 +951,18 @@ impl Context<'_> {
         }
     }
 
+    /// Dropping an index is quick, so it always runs in the transaction (`DROP INDEX
+    /// CONCURRENTLY` would also be a statement the policy cannot read, and refuses).
     fn drop_index(&self, table: &str, index: &Index) -> Draft {
         let name = index.name.clone().unwrap_or_default();
-        let concurrent = self.options.concurrent_indexes;
         Draft {
             phase: Phase::DropIndex,
             summary: format!("Drop index {name} on {table}"),
             action: StepAction::Remove,
             object: table.to_owned(),
-            sql: format!(
-                "DROP INDEX {}{}",
-                if concurrent { "CONCURRENTLY " } else { "" },
-                qualified(self.to, &name)
-            ),
-            transactional: !concurrent,
-            notes: if concurrent {
-                vec![note(
-                    NoteKind::NonTransactional,
-                    "Runs after the transaction, without blocking the table; it is not rolled back \
-                     if another step fails.",
-                )]
-            } else {
-                vec![note(NoteKind::Lock, BRIEF_LOCK)]
-            },
+            sql: format!("DROP INDEX {}", qualified(self.to, &name)),
+            transactional: true,
+            notes: vec![note(NoteKind::Lock, BRIEF_LOCK)],
         }
     }
 

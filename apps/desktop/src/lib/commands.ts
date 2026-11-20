@@ -12,6 +12,9 @@ import {
   CredentialBackendSchema,
   CsvImportDraftSchema,
   SchemaDiffSchema,
+  MigrationPreviewSchema,
+  MigrationRecordSchema,
+  MigrationResultSchema,
   SchemaFileSchema,
   CsvImportPreviewSchema,
   DataChangePreviewSchema,
@@ -52,6 +55,9 @@ import {
   type CsvImportDraft,
   type CompareRequest,
   type SchemaDiff,
+  type MigrationPreview,
+  type MigrationRecord,
+  type MigrationResult,
   type SchemaFile,
   type CsvImportPreview,
   type CsvImportRequest,
@@ -512,4 +518,44 @@ export function compareSchemas(
 /** Saves a comparison's script through the save dialog. The file name, or null if cancelled. */
 export function saveSchemaScript(diffId: string): Promise<string | null> {
   return callCommand(COMMANDS.saveSchemaScript, z.string().nullable(), { diffId })
+}
+
+/** Prepares a comparison's migration for approval. Nothing runs. */
+export function prepareMigration(
+  connectionId: ConnectionId,
+  diffId: string,
+): Promise<MigrationPreview> {
+  return callCommand(COMMANDS.prepareMigration, MigrationPreviewSchema, { connectionId, diffId })
+}
+
+/**
+ * The user's approval of a prepared migration, which then runs in one transaction and is
+ * checked by comparing again. `acceptDataLoss` must be set when steps delete data.
+ */
+export function applyMigration(
+  connectionId: ConnectionId,
+  approvalId: string,
+  confirmation: string | null,
+  acceptDataLoss: boolean,
+): Promise<MigrationResult> {
+  return callCommand(COMMANDS.applyMigration, MigrationResultSchema, {
+    connectionId,
+    approvalId,
+    confirmation,
+    acceptDataLoss,
+  })
+}
+
+/** Declines a prepared migration. */
+export function cancelMigration(approvalId: string): Promise<void> {
+  return callCommand(COMMANDS.cancelMigration, z.null(), { approvalId }).then(() => undefined)
+}
+
+/** Applied migrations, newest first, for one connection or all. */
+export function listMigrationRecords(
+  connectionId: ConnectionId | null,
+): Promise<MigrationRecord[]> {
+  return callCommand(COMMANDS.listMigrationRecords, z.array(MigrationRecordSchema), {
+    connectionId,
+  })
 }

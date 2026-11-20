@@ -13,6 +13,7 @@ const OPERATION_LABELS: Record<string, string> = {
   approve: 'Approved a change',
   approval_check: 'Approval check',
   data_change: 'Data change',
+  migration: 'Schema migration',
   assistant_task: 'Assistant answered a question',
   tool_call: 'Assistant request',
   sql_refused: 'Statement in the SQL editor',

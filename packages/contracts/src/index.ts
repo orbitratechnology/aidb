@@ -171,6 +171,20 @@ export {
 } from './catalog'
 export { COMMANDS, type CommandName } from './commands'
 export {
+  FailedStepSchema,
+  MigrationPreviewSchema,
+  MigrationRecordSchema,
+  MigrationResultSchema,
+  MigrationStatusSchema,
+  VerificationSchema,
+} from './migration'
+export type { FailedStep } from './generated/FailedStep'
+export type { MigrationPreview } from './generated/MigrationPreview'
+export type { MigrationRecord } from './generated/MigrationRecord'
+export type { MigrationResult } from './generated/MigrationResult'
+export type { MigrationStatus } from './generated/MigrationStatus'
+export type { Verification } from './generated/Verification'
+export {
   CompareRequestSchema,
   DiffSummarySchema,
   MigrationStepSchema,

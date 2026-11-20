@@ -13,6 +13,7 @@ pub mod data_change;
 pub mod database;
 pub mod export;
 pub mod library;
+pub mod migration;
 pub mod policy;
 pub mod providers;
 pub mod query;

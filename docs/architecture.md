@@ -95,7 +95,7 @@ SQLite through SQLx (`src-tauri/src/adapters/local_store/`), schema in
 | `agent_tasks`           | Task summaries and plans                                                | with task 8.2        |
 | `operation_audit`       | Redacted operation records; append-only (updates rejected by a trigger) | with task 9.3        |
 | `schema_cache_metadata` | Cache freshness per connection; never row data                          | with task 5.1        |
-| `migration_records`     | Applied migration files, hashes and outcomes                            | with task 11.2       |
+| `migration_records`     | Applied migrations: source, script SHA-256, steps run, status, check    | `MigrationRecords`   |
 
 Rules: `STRICT` tables with CHECK constraints mirroring domain limits; WAL journal; foreign keys
 on; deleting a connection removes its cache and query history but keeps saved queries, tasks,
@@ -335,7 +335,11 @@ version they were given under.
 - **Assessment**: the highest statement risk (raised for batches), the approval it needs (none,
   Apply, elevated, blocked), and blockers that stop it here whatever its risk: R4, a read-only
   profile or standby server for anything from R2, a missing privilege. Permissions never lower
-  the risk.
+  the risk. One exception, for schema migrations the user applies (`assess_migration`): when
+  every R4 reason is a destructive schema change (`DROP`, or `ALTER TABLE ... DROP`), it needs
+  the elevated approval instead of being blocked. Every other R4 reason (unreadable statements,
+  server access, disabled safeguards, `TRUNCATE`) still blocks, and migrations skip the batch
+  rule (each step is generated and shown).
 - **Approvals** (`policy::approval`, `services::approvals`): the PRD's lifecycle (draft →
   validated → preview ready → awaiting approval → approved → executing → verifying → succeeded,
   failed, partial or cancelled, plus expired and invalidated); any other transition is refused.
@@ -492,8 +496,9 @@ views and columns it reads). Up to 5,000 tables and views per schema.
   add constraints and indexes; add foreign keys; create views. Views that read a column being
   dropped or retyped, and views reading those, are dropped first and created again (PostgreSQL
   refuses the change otherwise, and `CREATE OR REPLACE VIEW` cannot change a column's type).
-  Names from the source schema are moved to the target's. With "concurrently", index creates and
-  drops use `CONCURRENTLY` and run after the transaction.
+  Names from the source schema are moved to the target's. With "concurrently", index builds use
+  `CONCURRENTLY` and run after the transaction; drops stay in it (they are quick, and the policy
+  cannot read `DROP INDEX CONCURRENTLY`).
 - **Notes per step**: data loss (dropped tables and columns with the row estimate, narrowing type
   changes), locks (`ACCESS EXCLUSIVE` briefly, or with a rewrite or full scan, `SHARE` while an
   index builds, `SHARE ROW EXCLUSIVE` for foreign keys, with `NOT VALID` advice), possible
@@ -504,7 +509,36 @@ views and columns it reads). Up to 5,000 tables and views per schema.
   risk, and the script: `BEGIN; SET LOCAL search_path TO <target>;`, the steps, `COMMIT;`, then
   the non-transactional ones. The core holds each comparison under its id (8 at a time, dropped
   when the connection changes); `save_schema_script` writes a held script through the native
-  save dialog. Nothing is applied here.
+  save dialog.
+
+### Applying a migration
+
+`services::migrations` applies a held comparison on the open connection, as the user approves
+it.
+
+- **Prepare** (`prepare_migration`): the comparison's statements become an approval subject
+  (`Subject::Migration`), assessed together by `assess_migration` and bound like any other
+  approval (statements, schema fingerprint, environment, write setting, session). A read-only
+  connection or a statement the policy refuses stops it here. The preview lists the risk and its
+  reasons, the steps that delete data and those that run after the transaction, and the database
+  name to type: every migration changes structure, so it is at least R3 and elevated.
+- **Apply** (`apply_migration`, the user only): steps that delete data need `accept_data_loss`
+  (checked before anything else; the approval stays open without it). `approve_and_use` checks
+  the typed name and rebuilds the binding, so a schema that changed since preparing refuses it.
+  A `migration_records` row is written as running, then on one pooled connection: a plain
+  `BEGIN` (a read-only session still refuses writes), the catalog fingerprint compared again
+  inside the transaction, `SET LOCAL search_path` to the target schema, each transactional
+  statement (simple protocol), and `COMMIT`. Any failure rolls everything back and names the
+  step. Index builds `CONCURRENTLY` then run one by one; a failure there leaves the migration
+  partial. A commit that loses the connection is uncertain.
+- **Check**: after it ran, the target schema is read again and compared with the held source;
+  the migration passes when nothing is left to do, and otherwise the result says how much still
+  differs.
+- **Record**: the record gets the status (succeeded, failed, partial, uncertain), steps run, the
+  check, and a redacted detail; it keeps the script's SHA-256, not its text. The outcome is also
+  audited (`migration`). An applied comparison is dropped (the schema it describes changed), and
+  so is the connection's cached catalog. `list_migration_records` lists records, newest first.
+  `cancel_migration` declines a prepared migration.
 
 ## Audit log
 
@@ -768,11 +802,17 @@ Ask screen (8.3) drives it. The model proposes; Rust decides.
 - **Migrations** (`features/migrations`, in the sidebar and, below 640px, the app menu): the
   schema to change, then "Another schema" (a connection, this one by default, and a schema; a
   password field when that connection has none saved) or "A .sql file" (the file and which of
-  its schemas), and "Create and drop indexes concurrently". The result shows the environment,
+  its schemas), and "Build new indexes concurrently". The result shows the environment,
   the highest risk and the counts; an alert listing steps that delete data (and that renames
   show as a drop and an add); steps outside the transaction; what was not compared; then each
-  step with its action, risk, notes (icon and label, not color alone) and SQL; and Copy script
-  and Save script.
+  step with its action, risk, notes (icon and label, not color alone) and SQL; and Review and
+  apply, Copy script and Save script. The apply dialog prepares the migration and shows the
+  environment, risk and reasons, the steps that delete data with an "I accept that these steps
+  delete data" checkbox, steps outside the transaction, and the typed database name; Apply
+  migration is styled as destructive when data is lost. The outcome says what ran, which step
+  failed and whether the schemas match afterwards; closing after a change clears the comparison.
+  "Applied here" lists the connection's migration records with status, check, steps, risk and
+  the script digest; partial and uncertain ones are flagged.
 - **AI providers** (Settings › AI providers): "Use the AI assistant" (off by default) with a
   provider picker; the `ai` settings section stores the switch and the chosen profile, the core
   refuses to turn AI on without an existing provider, and deleting that provider turns AI off.

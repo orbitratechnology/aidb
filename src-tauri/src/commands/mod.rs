@@ -20,6 +20,7 @@ mod diagnostics;
 mod export;
 mod external;
 mod library;
+mod migrations;
 mod providers;
 mod query;
 mod schema_diff;
@@ -61,6 +62,10 @@ pub(crate) fn handler<R: Runtime>() -> impl Fn(Invoke<R>) -> bool + Send + Sync 
         schema_diff::close_schema_file,
         schema_diff::compare_schemas,
         schema_diff::save_schema_script,
+        migrations::prepare_migration,
+        migrations::apply_migration,
+        migrations::cancel_migration,
+        migrations::list_migration_records,
         table_data::read_table_page,
         table_data::cancel_operation,
         export::export_table,
@@ -226,9 +231,10 @@ mod tests {
             .iter()
             .filter_map(serde_json::Value::as_str)
             .collect::<Vec<_>>();
-        // The one write path: the user applies a change previewed in the core, which holds the
-        // approval and its token. Nothing else may approve, execute or write.
-        const USER_APPROVED_WRITES: [&str; 1] = ["allow-apply-data-change"];
+        // The write paths: the user applies a data change or a schema migration previewed in
+        // the core, which holds the approval. Nothing else may approve, execute or write.
+        const USER_APPROVED_WRITES: [&str; 2] =
+            ["allow-apply-data-change", "allow-apply-migration"];
         for permission in granted
             .iter()
             .filter(|permission| !USER_APPROVED_WRITES.contains(permission))

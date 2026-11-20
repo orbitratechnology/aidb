@@ -382,6 +382,9 @@ enum Grouping {
     /// Changes aidb wrote itself from a structured request, each counted: judged by the rows
     /// they write in all.
     ChangeSet,
+    /// A schema migration aidb generated, reviewed step by step, applied by the user: its
+    /// destructive schema steps need the elevated approval instead of being refused.
+    Migration,
 }
 
 #[must_use]
@@ -399,6 +402,35 @@ pub fn assess_change_set(
     context: PolicyContext,
 ) -> RiskAssessment {
     assess_grouped(sql, impacts, context, Grouping::ChangeSet)
+}
+
+/// Assesses a schema migration aidb generated, for the user to apply. As [`assess`] without the
+/// batch rule (each step is generated and shown), and with one difference: when every R4
+/// reason is a destructive schema change (`DROP`, or `ALTER TABLE ... DROP`), it needs the
+/// elevated approval instead of being refused. Anything else at R4 (unreadable statements,
+/// server access, disabled safeguards, `TRUNCATE`) is still refused.
+#[must_use]
+pub fn assess_migration(
+    sql: &SqlFacts,
+    impacts: &[ImpactFacts],
+    context: PolicyContext,
+) -> RiskAssessment {
+    assess_grouped(sql, impacts, context, Grouping::Migration)
+}
+
+/// Whether every R4 reason is a destructive schema change a migration may make once approved.
+fn only_schema_removals(statements: &[StatementRisk], reasons: &Reasons) -> bool {
+    reasons.0.iter().all(|reason| reason.risk < RiskLevel::R4)
+        && statements.iter().all(|statement| {
+            statement.reasons.iter().all(|reason| {
+                reason.risk < RiskLevel::R4
+                    || (reason.code == ReasonCode::Destructive
+                        && matches!(
+                            statement.operation,
+                            Operation::DropObject | Operation::AlterObject
+                        ))
+            })
+        })
 }
 
 fn assess_grouped(
@@ -480,7 +512,10 @@ fn assess_grouped(
     if statements.is_empty() && sql.problem.is_none() {
         blockers.push("There is no statement to run.".to_owned());
     }
-    if risk == R4 {
+    let approved_removals = grouping == Grouping::Migration
+        && risk == R4
+        && only_schema_removals(&statements, &reasons);
+    if risk == R4 && !approved_removals {
         blockers.push(
             "aidb does not run destructive, privileged or unreadable statements, nor ones that \
              change every row."
@@ -502,10 +537,12 @@ fn assess_grouped(
         }
     }
 
-    let required_approval = if blockers.is_empty() {
-        risk.required_approval()
-    } else {
+    let required_approval = if !blockers.is_empty() {
         ApprovalLevel::Blocked
+    } else if approved_removals {
+        ApprovalLevel::Elevated
+    } else {
+        risk.required_approval()
     };
     RiskAssessment {
         policy_version: POLICY_VERSION,

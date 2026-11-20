@@ -213,13 +213,13 @@ async fn concurrent_indexes_run_after_the_transaction() {
     assert_eq!(
         sqls(&migration),
         [
-            "DROP INDEX CONCURRENTLY public.t_a",
+            "DROP INDEX public.t_a",
             "CREATE INDEX CONCURRENTLY t_b ON public.t USING btree (b)",
         ]
     );
-    // Each runs on its own, as psql runs a script; none can run in a transaction block.
+    // Each runs on its own, as psql runs a script; the build cannot run in a transaction block.
+    assert!(!migration.steps[1].transactional);
     for step in &migration.steps {
-        assert!(!step.transactional);
         database.execute(&step.sql).await;
     }
     let again = plan(
@@ -286,4 +286,221 @@ async fn another_connection_is_read_once_without_joining_the_open_sessions() {
 
     workspace.close().await;
     database.drop().await;
+}
+
+mod apply {
+    use super::*;
+    use aidb_lib::adapters::credentials::Credentials;
+    use aidb_lib::domain::migration::{MigrationResult, MigrationStatus, Verification};
+    use aidb_lib::domain::schema_diff::{CompareRequest, CompareSource, SchemaDiff};
+    use aidb_lib::errors::ErrorCode;
+    use aidb_lib::services::migrations;
+    use aidb_lib::services::schema_diff::{self, SchemaDiffs};
+
+    async fn writable(database: &ScratchDatabase) -> Workspace {
+        Workspace::connect_with(&database.name, |settings| settings.read_only = false).await
+    }
+
+    async fn compare(
+        workspace: &Workspace,
+        diffs: &SchemaDiffs,
+        source: &str,
+        concurrent: bool,
+    ) -> SchemaDiff {
+        schema_diff::compare(
+            &workspace.store,
+            &Credentials::session_only("tests"),
+            &workspace.sessions,
+            diffs,
+            workspace.connection_id,
+            CompareRequest {
+                target_schema: "public".into(),
+                source: CompareSource::Schema {
+                    schema: source.into(),
+                },
+                options: GenerateOptions {
+                    concurrent_indexes: concurrent,
+                },
+            },
+            None,
+        )
+        .await
+        .expect("compares")
+    }
+
+    async fn run(
+        workspace: &Workspace,
+        diffs: &SchemaDiffs,
+        diff: &SchemaDiff,
+    ) -> aidb_lib::errors::AppResult<MigrationResult> {
+        let preview = migrations::prepare(
+            &workspace.store,
+            &workspace.sessions,
+            &workspace.approvals,
+            diffs,
+            workspace.connection_id,
+            diff.diff_id,
+        )
+        .await?;
+        migrations::apply(
+            &workspace.store,
+            &workspace.sessions,
+            &workspace.approvals,
+            diffs,
+            workspace.connection_id,
+            migrations::Decision {
+                approval_id: preview.approval_id,
+                confirmation: preview.confirmation.as_deref(),
+                accept_data_loss: true,
+            },
+        )
+        .await
+    }
+
+    #[tokio::test]
+    #[ignore = "needs the PostgreSQL fixture"]
+    async fn an_approved_migration_makes_the_schemas_match_and_is_recorded() {
+        let database = ScratchDatabase::create("aidb_migrate", SCHEMAS).await;
+        let workspace = writable(&database).await;
+        let diffs = SchemaDiffs::default();
+        let diff = compare(&workspace, &diffs, "staging", false).await;
+        let result = run(&workspace, &diffs, &diff).await.expect("applies");
+        assert_eq!(
+            result.status,
+            MigrationStatus::Succeeded,
+            "{}",
+            result.message
+        );
+        assert_eq!(result.applied_steps, diff.steps.len());
+        assert_eq!(
+            result.verification,
+            Verification::Passed,
+            "{}",
+            result.message
+        );
+        assert!(
+            compare(&workspace, &diffs, "staging", false)
+                .await
+                .steps
+                .is_empty()
+        );
+        let records = migrations::list(&workspace.store, Some(workspace.connection_id))
+            .await
+            .expect("records");
+        assert_eq!(records[0].status, MigrationStatus::Succeeded);
+        assert_eq!(records[0].verification, Verification::Passed);
+        workspace.close().await;
+        database.drop().await;
+    }
+
+    #[tokio::test]
+    #[ignore = "needs the PostgreSQL fixture"]
+    async fn a_step_the_data_refuses_rolls_everything_back() {
+        // Every row needs a value the new NOT NULL column cannot give.
+        let database = ScratchDatabase::create(
+            "aidb_migrate",
+            r"
+            CREATE TABLE public.items (id int PRIMARY KEY);
+            CREATE TABLE public.old (a int);
+            INSERT INTO public.items VALUES (1), (2);
+            CREATE SCHEMA wanted;
+            CREATE TABLE wanted.items (id int PRIMARY KEY, code text NOT NULL);
+            ",
+        )
+        .await;
+        let workspace = writable(&database).await;
+        let diffs = SchemaDiffs::default();
+        let diff = compare(&workspace, &diffs, "wanted", false).await;
+        let before = database.snapshot().await;
+        let result = run(&workspace, &diffs, &diff).await.expect("ends");
+        assert_eq!(result.status, MigrationStatus::Failed);
+        let failed = result.failed_step.expect("step");
+        assert_eq!(failed.summary, "Add column code to items");
+        assert!(failed.message.contains("code"), "{}", failed.message);
+        assert_eq!(database.snapshot().await, before, "nothing changed");
+        workspace.close().await;
+        database.drop().await;
+    }
+
+    #[tokio::test]
+    #[ignore = "needs the PostgreSQL fixture"]
+    async fn a_schema_changed_after_preparing_is_not_migrated() {
+        let database = ScratchDatabase::create(
+            "aidb_migrate",
+            r"
+            CREATE TABLE public.t (a int);
+            CREATE SCHEMA wanted;
+            CREATE TABLE wanted.t (a int, b int);
+            ",
+        )
+        .await;
+        let workspace = writable(&database).await;
+        let diffs = SchemaDiffs::default();
+        let diff = compare(&workspace, &diffs, "wanted", false).await;
+        let preview = migrations::prepare(
+            &workspace.store,
+            &workspace.sessions,
+            &workspace.approvals,
+            &diffs,
+            workspace.connection_id,
+            diff.diff_id,
+        )
+        .await
+        .expect("prepares");
+        database
+            .execute("ALTER TABLE public.t ADD COLUMN c int")
+            .await;
+        let refused = migrations::apply(
+            &workspace.store,
+            &workspace.sessions,
+            &workspace.approvals,
+            &diffs,
+            workspace.connection_id,
+            migrations::Decision {
+                approval_id: preview.approval_id,
+                confirmation: preview.confirmation.as_deref(),
+                accept_data_loss: false,
+            },
+        )
+        .await
+        .expect_err("changed");
+        assert_eq!(refused.code(), ErrorCode::PermissionDenied, "{refused:?}");
+        workspace.close().await;
+        database.drop().await;
+    }
+
+    #[tokio::test]
+    #[ignore = "needs the PostgreSQL fixture"]
+    async fn concurrent_index_steps_run_after_the_commit() {
+        let database = ScratchDatabase::create(
+            "aidb_migrate",
+            r"
+            CREATE TABLE public.t (a int, b int);
+            CREATE INDEX t_a ON public.t (a);
+            CREATE SCHEMA wanted;
+            CREATE TABLE wanted.t (a int, b int, c text);
+            CREATE INDEX t_b ON wanted.t (b);
+            ",
+        )
+        .await;
+        let workspace = writable(&database).await;
+        let diffs = SchemaDiffs::default();
+        let diff = compare(&workspace, &diffs, "wanted", true).await;
+        assert_eq!(diff.steps.iter().filter(|s| !s.transactional).count(), 1);
+        let result = run(&workspace, &diffs, &diff).await.expect("applies");
+        assert_eq!(
+            result.status,
+            MigrationStatus::Succeeded,
+            "{}",
+            result.message
+        );
+        assert_eq!(
+            result.verification,
+            Verification::Passed,
+            "{}",
+            result.message
+        );
+        workspace.close().await;
+        database.drop().await;
+    }
 }

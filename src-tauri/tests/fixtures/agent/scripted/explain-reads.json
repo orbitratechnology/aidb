@@ -1,5 +1,5 @@
 {
-  "description": "EXPLAIN, with and without ANALYZE, works for reads.",
+  "description": "EXPLAIN, with and without ANALYZE, works for reads and comes with aidb's findings.",
   "question": "Is the orders lookup by customer fast?",
   "model": [
     {
@@ -22,6 +22,6 @@
       ["explain_query", "succeeded"],
       ["explain_query", "succeeded"]
     ],
-    "results_contain": ["Seq Scan on orders", "actual time"]
+    "results_contain": ["Seq Scan on public.orders", "actual rows", "aidb found nothing to suggest"]
   }
 }

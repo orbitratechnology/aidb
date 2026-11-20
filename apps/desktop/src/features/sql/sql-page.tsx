@@ -6,6 +6,7 @@ import type { EditorView } from '@codemirror/view'
 import { useQueryClient } from '@tanstack/react-query'
 import {
   LibraryBigIcon,
+  ListTreeIcon,
   PlayIcon,
   PlusIcon,
   SaveIcon,
@@ -30,6 +31,7 @@ import { HISTORY_KEY, SAVED_KEY } from './library-view'
 import { pageTrail, shiftPosition } from './paging'
 import { QueryResultView } from './query-result-view'
 import { useTabRuns, type DoneRun, type DraftPosition } from './run-store'
+import { PlanSheet } from './plan-sheet'
 import { docPosition, problemRange, statementAt } from './run-target'
 import { SaveQueryDialog } from './save-query-dialog'
 import { SqlEditor } from './sql-editor'
@@ -224,6 +226,34 @@ function SqlWorkspace({ connectionId }: { connectionId: ConnectionId }) {
     [connectionId, setRun],
   )
 
+  // The query shown in the plan sheet: the selection, or the statement at the cursor.
+  const [explaining, setExplaining] = useState<string | null>(null)
+  const explainCurrent = useCallback(async () => {
+    const view = viewRef.current
+    if (!view) return
+    const doc = view.state.doc.toString()
+    const selection = view.state.selection.main
+    if (!selection.empty) {
+      setExplaining(doc.slice(selection.from, selection.to))
+      return
+    }
+    try {
+      const analysis = await analyzeSql(doc)
+      if (analysis.problem) {
+        toast.error('Could not read the SQL', { description: analysis.problem.message })
+        return
+      }
+      const statement = statementAt(analysis, selection.head)
+      if (!statement) {
+        toast('Nothing to explain', { description: 'Write a query first.' })
+        return
+      }
+      setExplaining(doc.slice(statement.span.start.offset, statement.span.end.offset))
+    } catch (error) {
+      toast.error('Could not read the SQL', { description: String(error) })
+    }
+  }, [])
+
   const showProblem = useCallback(() => {
     const current = useTabRuns.getState().runs[shownTab()]
     if (viewRef.current && current?.status === 'done' && current.problemAt) {
@@ -400,6 +430,16 @@ function SqlWorkspace({ connectionId }: { connectionId: ConnectionId }) {
             Run
           </Button>
         )}
+        <Button
+          variant="outline"
+          className="max-sm:min-h-11"
+          disabled={running}
+          title="Show the query's plan and what it suggests"
+          onClick={() => void explainCurrent()}
+        >
+          <ListTreeIcon data-icon="inline-start" />
+          Explain
+        </Button>
         {running ? (
           <span className="flex items-center gap-2 text-sm text-muted-foreground" role="status">
             <Spinner />
@@ -448,6 +488,7 @@ function SqlWorkspace({ connectionId }: { connectionId: ConnectionId }) {
         />
       </div>
 
+      <PlanSheet connectionId={connectionId} sql={explaining} onClose={() => setExplaining(null)} />
       <section aria-label="Result" className="flex min-h-0 flex-1 flex-col">
         {doneRun ? (
           <QueryResultView

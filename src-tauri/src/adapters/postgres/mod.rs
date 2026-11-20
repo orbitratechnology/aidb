@@ -6,6 +6,7 @@
 //! was sent a cancel is closed instead of returned to the pool, so a late signal can never hit
 //! the next operation.
 
+mod advisor;
 mod catalog;
 mod data_change;
 mod errors;
@@ -264,6 +265,16 @@ impl DatabaseSession for PgSession {
             self.session_error(e)
         })
         .await
+    }
+
+    async fn explain_read(
+        &self,
+        sql: &str,
+        analyze: bool,
+        operation: OperationId,
+    ) -> Result<(serde_json::Value, Vec<crate::domain::advisor::TableFacts>), DbError> {
+        let mut connection = self.begin_operation(operation).await?;
+        advisor::explain(&mut connection, sql, analyze, |e| self.session_error(e)).await
     }
 
     async fn read_page(

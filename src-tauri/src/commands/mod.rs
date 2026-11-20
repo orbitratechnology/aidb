@@ -10,6 +10,7 @@
 //! generates its `allow-*` permission), and grant that permission in a capability file. A command
 //! missing from a capability is rejected by Tauri before it runs.
 
+mod advisor;
 mod app;
 mod assistant;
 mod audit;
@@ -58,6 +59,7 @@ pub(crate) fn handler<R: Runtime>() -> impl Fn(Invoke<R>) -> bool + Send + Sync 
         catalog::catalog_overview,
         catalog::refresh_catalog,
         catalog::describe_object,
+        advisor::explain_query,
         schema_diff::open_schema_file,
         schema_diff::close_schema_file,
         schema_diff::compare_schemas,

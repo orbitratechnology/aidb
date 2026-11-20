@@ -25,6 +25,7 @@ const COMMANDS: &[&str] = &[
     "catalog_overview",
     "refresh_catalog",
     "describe_object",
+    "explain_query",
     "open_schema_file",
     "close_schema_file",
     "compare_schemas",

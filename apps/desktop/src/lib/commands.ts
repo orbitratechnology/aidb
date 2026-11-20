@@ -12,6 +12,7 @@ import {
   CredentialBackendSchema,
   CsvImportDraftSchema,
   SchemaDiffSchema,
+  QueryPlanSchema,
   MigrationPreviewSchema,
   MigrationRecordSchema,
   MigrationResultSchema,
@@ -55,6 +56,8 @@ import {
   type CsvImportDraft,
   type CompareRequest,
   type SchemaDiff,
+  type ExplainRequest,
+  type QueryPlan,
   type MigrationPreview,
   type MigrationRecord,
   type MigrationResult,
@@ -558,4 +561,15 @@ export function listMigrationRecords(
   return callCommand(COMMANDS.listMigrationRecords, z.array(MigrationRecordSchema), {
     connectionId,
   })
+}
+
+/**
+ * Plans one query (with `analyze`, also runs it, read-only and rolled back) and returns the
+ * plan tree with suggestions drawn from it. Cancel it with `cancelOperation`.
+ */
+export function explainQuery(
+  connectionId: ConnectionId,
+  request: ExplainRequest,
+): Promise<QueryPlan> {
+  return callCommand(COMMANDS.explainQuery, QueryPlanSchema, { connectionId, request })
 }

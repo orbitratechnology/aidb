@@ -27,6 +27,7 @@ export const COMMANDS = {
   catalogOverview: 'catalog_overview',
   refreshCatalog: 'refresh_catalog',
   describeObject: 'describe_object',
+  explainQuery: 'explain_query',
   openSchemaFile: 'open_schema_file',
   closeSchemaFile: 'close_schema_file',
   compareSchemas: 'compare_schemas',

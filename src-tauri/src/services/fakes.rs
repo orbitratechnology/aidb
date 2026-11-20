@@ -277,6 +277,40 @@ impl DatabaseSession for FakeSession {
         }
     }
 
+    async fn explain_read(
+        &self,
+        sql: &str,
+        analyze: bool,
+        _operation: OperationId,
+    ) -> Result<(serde_json::Value, Vec<crate::domain::advisor::TableFacts>), DbError> {
+        // A whole-table scan of `orders` keeping one row, measured when asked.
+        let mut plan = serde_json::json!({
+            "Node Type": "Seq Scan", "Relation Name": "orders", "Schema": "public",
+            "Alias": "orders", "Total Cost": 1943.0, "Plan Rows": 1,
+            "Filter": "(orders.customer_id = 42)"
+        });
+        if analyze {
+            plan["Actual Rows"] = 1.into();
+            plan["Actual Loops"] = 1.into();
+            plan["Actual Total Time"] = 9.5.into();
+            plan["Rows Removed by Filter"] = 99_999.into();
+        }
+        if sql.contains("fail") {
+            return Err(DbError::new(DbErrorKind::InvalidRequest, "it failed"));
+        }
+        Ok((
+            serde_json::json!([{ "Plan": plan, "Planning Time": 0.1 }]),
+            vec![crate::domain::advisor::TableFacts {
+                schema: "public".into(),
+                name: "orders".into(),
+                rows: Some(100_000.0),
+                last_analyzed: None,
+                columns: vec!["id".into(), "customer_id".into()],
+                indexes: Vec::new(),
+            }],
+        ))
+    }
+
     async fn read_schema(
         &self,
         schema: &str,

@@ -7,6 +7,7 @@ use std::fmt::Write as _;
 use super::{ToolOutput, ToolRunner};
 use crate::adapters::database::DatabaseAdapter;
 use crate::adapters::local_store::LocalStore;
+use crate::domain::advisor::{ExplainRequest, render};
 use crate::domain::agent::context::{describe_object, object_line, render_rows};
 use crate::domain::agent::tools::{
     ChangeProposal, ExplainInput, ListTablesInput, MAX_RESULT_ROWS, ToolInvocation,
@@ -20,7 +21,7 @@ use crate::errors::AppError;
 use crate::services::approvals::Approvals;
 use crate::services::catalog::{self, CatalogCache};
 use crate::services::sessions::Sessions;
-use crate::services::{data_changes, query, table_data};
+use crate::services::{advisor, data_changes, query, table_data};
 
 /// Most tables `list_tables` returns; the model is told when there are more.
 pub const MAX_LISTED_TABLES: usize = 200;
@@ -224,30 +225,40 @@ impl<A: DatabaseAdapter> SessionTools<'_, A> {
         }
     }
 
+    /// The plan through the query advisor: a tree with its figures and aidb's findings, drawn
+    /// from the plan's own numbers, so the model explains from the same evidence the user sees.
     async fn explain(
         &self,
         input: &ExplainInput,
         operation: OperationId,
     ) -> Result<ToolOutput, String> {
-        let options = if input.analyze {
-            "ANALYZE, FORMAT TEXT"
-        } else {
-            "FORMAT TEXT"
+        let request = ExplainRequest {
+            sql: input.sql.clone(),
+            analyze: input.analyze,
+            operation_id: Some(operation),
         };
-        let mut output = self
-            .query(format!("EXPLAIN ({options})\n{}", input.sql), operation)
-            .await?;
-        // A plan's lines are rows of one text column; the header is noise for the model.
-        output.text = output
-            .text
-            .split_once('\n')
-            .map_or(output.text.clone(), |(_, rest)| rest.to_owned());
-        output.outcome = if input.analyze {
-            "Plan with timings".into()
-        } else {
-            "Plan".into()
-        };
-        Ok(output)
+        let plan = advisor::explain(self.sessions, self.connection_id, &request)
+            .await
+            .map_err(|e| error_text(&e))?;
+        let findings = plan.suggestions.len();
+        Ok(ToolOutput {
+            text: render(&plan),
+            outcome: format!(
+                "{}{}",
+                if input.analyze {
+                    "Plan with timings"
+                } else {
+                    "Plan"
+                },
+                match findings {
+                    0 => String::new(),
+                    1 => ", 1 finding".to_owned(),
+                    n => format!(", {n} findings"),
+                }
+            ),
+            incomplete: plan.truncated,
+            proposal: None,
+        })
     }
 }
 

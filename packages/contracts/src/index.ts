@@ -170,6 +170,13 @@ export {
   SchemaSummarySchema,
 } from './catalog'
 export { COMMANDS, type CommandName } from './commands'
+export { PlanNodeSchema, QueryPlanSchema, SuggestionSchema } from './advisor'
+export type { ExplainRequest } from './generated/ExplainRequest'
+export type { PlanNode } from './generated/PlanNode'
+export type { QueryPlan } from './generated/QueryPlan'
+export type { Severity } from './generated/Severity'
+export type { Suggestion } from './generated/Suggestion'
+export type { SuggestionKind } from './generated/SuggestionKind'
 export {
   FailedStepSchema,
   MigrationPreviewSchema,

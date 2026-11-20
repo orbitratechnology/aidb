@@ -540,6 +540,35 @@ it.
   so is the connection's cached catalog. `list_migration_records` lists records, newest first.
   `cancel_migration` declines a prepared migration.
 
+## Query advisor
+
+`domain::advisor`, `adapters::postgres::advisor` and `services::advisor` explain one query and
+suggest what its plan shows. The input must be exactly one query (SELECT, VALUES, TABLE or WITH;
+not EXPLAIN, SHOW or a write), checked with the editor's analysis.
+
+- **Plan**: `EXPLAIN (FORMAT JSON, VERBOSE)`, or with `ANALYZE, BUFFERS` when the user asks to
+  measure, in a `READ ONLY` transaction that is rolled back, under the session's timeouts and
+  with an operation id (cancellable). In the same transaction: each scanned table's row
+  estimate, when it was last analyzed, its columns, and its indexes' key columns (expressions
+  and partial indexes marked).
+- **Tree**: nodes in depth-first order (at most 2,000) with a label in EXPLAIN's words ("Index
+  Scan using orders_pkey on public.orders o"), its conditions and figures as lines (filters,
+  rows removed, sort and hash details, workers, buffers), cost, estimated and actual rows for all
+  loops, time with and without its children. Times in parallel plans overlap, so "time here" is
+  approximate there.
+- **Suggestions**, each with its evidence (the plan's numbers), the node it is about, and, where
+  one fits, a statement for the user to review and run elsewhere (aidb never runs it):
+  - a missing index: a sequential scan that reads at least 10,000 rows (counting every loop of a
+    nested loop) and keeps at most 5% of them, filtering on plain columns of the table (equality
+    columns first, then one range column) that no index starts with; `CREATE INDEX
+CONCURRENTLY`;
+  - far-off estimates (measured): at least 1,000 rows and a factor of 10 either way; `ANALYZE`,
+    with the last analyze time;
+  - a sort or hash that spilled to disk, a lossy bitmap, fewer parallel workers than planned
+    (measured), with work_mem advice;
+  - an index-only scan making many heap fetches (measured); `VACUUM`.
+    Functions of a column, small tables, unselective filters and existing indexes produce none.
+
 ## Audit log
 
 `operation_audit` is append-only (a trigger rejects updates); only Settings › Storage clears it.
@@ -684,10 +713,12 @@ Ask screen (8.3) drives it. The model proposes; Rust decides.
   ran is reminded once to run it. Events (`started`, `round_started`, `text`, `step_started`,
   `step_finished`, `call_rejected`) report progress as it happens.
 - **Tools at run time** (`SessionTools`): catalog tools read the cached catalog of the open
-  session; `run_read_query` and `explain_query` (`EXPLAIN (FORMAT TEXT)`, with `ANALYZE` when
-  asked) go through the editor's read path (`query::run_for_assistant`): the same classification,
-  read-only transaction, timeouts and cell limits, at most 50 rows, and no entry in query
-  history. Each query has an operation id, so cancelling stops it on the server.
+  session; `run_read_query` goes through the editor's read path (`query::run_for_assistant`): the
+  same classification, read-only transaction, timeouts and cell limits, at most 50 rows, and no
+  entry in query history. `explain_query` goes through the query advisor (below): the model gets
+  the plan as an indented tree with its figures and aidb's findings with their evidence, so it
+  explains from the numbers the user sees. Each query has an operation id, so cancelling stops it
+  on the server.
   `preview_data_change` goes through `data_changes::preview` with the assistant as the actor; the
   step's outcome for the user gives the rows and risk, and the plan carries the proposal, which
   is streamed as `change_proposed` and returned in the outcome.
@@ -840,6 +871,12 @@ Ask screen (8.3) drives it. The model proposes; Rust decides.
   was opened from. The Library sheet has History (this connection's runs, with the outcome in
   words and an icon) and Saved tabs, each searchable; Open puts the SQL in a new tab (a saved
   query's tab, if one is open, is selected instead) and never runs it.
+  Explain (beside Run) opens the plan sheet for the selection or the statement at the cursor:
+  the plan as estimated, "Run to measure" (the query runs read-only and is rolled back;
+  Cancel stops it), the suggestions with their evidence, Copy SQL and "Show in the plan" (which
+  marks the node), and the plan tree (indented, the slowest step and estimates off by 10× or
+  more labelled in words). "Ask the assistant" opens Ask with a question about the query, and
+  "Copy plan" copies it as text.
 - **Changes** (Changes): "Waiting for review" lists what the core holds for approval
   (`list_pending_changes`: the assistant's proposals, on every connection, until applied,
   declined, expired or dropped by a connection change), each with what it does, the rows it

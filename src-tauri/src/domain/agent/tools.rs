@@ -164,9 +164,11 @@ pub static TOOLS: LazyLock<Vec<ToolDefinition>> = LazyLock::new(|| {
         },
         ToolDefinition {
             name: ToolName::ExplainQuery,
-            description: "Shows PostgreSQL's plan for one read statement. With analyze, the \
-                statement runs (read-only) and the plan shows real timings and row counts. Call \
-                this when the user asks why a query is slow or how to speed it up.",
+            description: "Shows PostgreSQL's plan for one query as a tree, with aidb's findings \
+                drawn from the plan's own numbers (indexes that may help, stale statistics, \
+                sorts or hashes spilling to disk). With analyze, the query runs (read-only) and \
+                the plan shows real timings and row counts. Call this when the user asks why a \
+                query is slow or how to speed it up; explain the findings with their evidence.",
             input_schema: json!({
                 "type": "object",
                 "properties": {

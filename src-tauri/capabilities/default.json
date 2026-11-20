@@ -29,6 +29,7 @@
     "allow-catalog-overview",
     "allow-refresh-catalog",
     "allow-describe-object",
+    "allow-explain-query",
     "allow-open-schema-file",
     "allow-close-schema-file",
     "allow-compare-schemas",

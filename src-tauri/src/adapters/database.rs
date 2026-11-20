@@ -83,6 +83,17 @@ pub trait DatabaseSession: std::fmt::Debug + Send + Sync + 'static {
         fingerprint: &str,
     ) -> impl Future<Output = MigrationRun> + Send;
 
+    /// Plans one read statement with `EXPLAIN (FORMAT JSON, VERBOSE)` (with `analyze`, also
+    /// runs it, read-only) and reads the statistics, columns and indexes of the tables it reads.
+    fn explain_read(
+        &self,
+        sql: &str,
+        analyze: bool,
+        operation: OperationId,
+    ) -> impl Future<
+        Output = Result<(serde_json::Value, Vec<crate::domain::advisor::TableFacts>), DbError>,
+    > + Send;
+
     /// One page of a table or view, read in a read-only transaction. Column names in the
     /// request are matched against the live table; values are bound, never formatted into SQL.
     /// The read runs as `request.operation_id` when given, so it can be cancelled.

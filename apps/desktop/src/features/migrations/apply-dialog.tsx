@@ -29,6 +29,7 @@ import type { ActiveConnection } from '@/features/connections/types'
 import { applyMigration, cancelMigration, prepareMigration } from '@/lib/commands'
 import { errorMessage } from '@/lib/errors'
 import { MIGRATION_RECORDS_KEY } from './history'
+import { returnFocus } from '@/lib/focus-return'
 
 type ApplyProps = {
   active: ActiveConnection
@@ -48,7 +49,7 @@ export function ApplyMigrationDialog({
 }: ApplyProps & { open: boolean; onOpenChange: (open: boolean) => void }) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="flex max-h-[90dvh] flex-col gap-0 p-0 sm:max-w-xl">
+      <DialogContent {...returnFocus} className="flex max-h-[90dvh] flex-col gap-0 p-0 sm:max-w-xl">
         <DialogHeader className="border-b p-4 sm:p-6">
           <DialogTitle>Apply the migration</DialogTitle>
           <DialogDescription>

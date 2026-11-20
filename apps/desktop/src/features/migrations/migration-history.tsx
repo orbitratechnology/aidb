@@ -82,7 +82,7 @@ function RecordItem({ record }: { record: MigrationRecord }) {
   const Icon = STATUS_ICONS[record.status]
   const attention = needsAttention(record.status)
   return (
-    <Item variant="outline" size="sm" className="items-start">
+    <Item variant="outline" size="sm" role="listitem" className="items-start">
       <ItemMedia variant="icon">
         <Icon className={record.status === 'succeeded' ? undefined : 'text-destructive'} />
       </ItemMedia>

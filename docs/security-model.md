@@ -122,6 +122,10 @@ commands reachable from the webview must also be allowed in the isolation hook.
 **Handling secrets:** never format a secret into a message, log line, error or event. Wrap secret
 values in a type whose `Debug` and `Display` print `[redacted]`.
 
+**Testing the UI:** Tauri's IPC mocks (`@tauri-apps/api/mocks`) belong only to the test harness
+in `apps/desktop/e2e/`; never import them from `src/`, and never add the harness page to the
+build's inputs.
+
 **Rendering untrusted content:** render data as text. Never use `dangerouslySetInnerHTML` for
 database values, model output or file contents. Assistant answers are plain text with fenced
 code shown in code blocks; Markdown is not rendered, links are not made clickable, and nothing in

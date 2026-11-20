@@ -41,6 +41,7 @@ import {
   slowestNode,
   timeShare,
 } from './plan-view'
+import { returnFocus } from '@/lib/focus-return'
 
 type PlanProps = {
   connectionId: ConnectionId
@@ -57,6 +58,7 @@ export function PlanSheet({ connectionId, sql, onClose }: PlanProps) {
   return (
     <Sheet open={sql !== null} onOpenChange={(open) => !open && onClose()}>
       <SheetContent
+        {...returnFocus}
         side="right"
         className="gap-0 data-[side=right]:w-full data-[side=right]:sm:max-w-2xl"
       >

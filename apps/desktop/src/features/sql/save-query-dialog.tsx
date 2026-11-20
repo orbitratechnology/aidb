@@ -14,6 +14,7 @@ import {
 import { Field, FieldError, FieldLabel } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
 import { Spinner } from '@/components/ui/spinner'
+import { returnFocus } from '@/lib/focus-return'
 
 /** The core enforces the same limit. */
 const MAX_NAME_CHARS = 200
@@ -40,7 +41,7 @@ type Props = {
 export function SaveQueryDialog({ open, onOpenChange, ...props }: Props) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent {...returnFocus} className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>Save query</DialogTitle>
           <DialogDescription>
@@ -84,7 +85,6 @@ function SaveForm({
             <Input
               {...field}
               id={id}
-              autoFocus
               autoComplete="off"
               className="min-h-11 sm:min-h-0"
               aria-invalid={fieldState.invalid}

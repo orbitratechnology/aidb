@@ -18,7 +18,8 @@
     "lint": "pnpm -r lint",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "test": "pnpm -r test"
+    "test": "pnpm -r test",
+    "e2e": "pnpm --filter @aidb/desktop e2e"
   },
   "devDependencies": {
     "@tauri-apps/cli": "2.12.4",

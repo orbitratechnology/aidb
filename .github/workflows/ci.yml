@@ -35,6 +35,32 @@ jobs:
       - run: pnpm test
       - run: pnpm build:web
 
+  e2e:
+    name: End to end (responsive, accessibility, keyboard)
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ubuntu-latest
+    # Playwright's own image for the pinned version: the browser and its system libraries
+    # without an apt install. The user matches the runner's, as Playwright's CI guide shows.
+    container:
+      image: mcr.microsoft.com/playwright:v1.63.0-noble
+      options: --user 1001
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm e2e
+      - name: Keep failure screenshots
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-results
+          path: apps/desktop/test-results/
+          retention-days: 7
+
   rust:
     name: Rust (fmt, clippy, tests)
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository

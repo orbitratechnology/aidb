@@ -123,8 +123,12 @@ function History() {
             onValueChange={(value) => value && setChosen(value as Scope)}
             aria-label="Which connections"
           >
-            <ToggleGroupItem value="connection">{active.name}</ToggleGroupItem>
-            <ToggleGroupItem value="all">All connections</ToggleGroupItem>
+            <ToggleGroupItem value="connection" className="max-sm:min-h-11">
+              {active.name}
+            </ToggleGroupItem>
+            <ToggleGroupItem value="all" className="max-sm:min-h-11">
+              All connections
+            </ToggleGroupItem>
           </ToggleGroup>
         )}
       </div>
@@ -189,7 +193,7 @@ function HistoryItem({
   const status = STATUS_DISPLAY[entry.status]
   const occurred = new Date(entry.occurredAt)
   return (
-    <Item variant="outline" size="sm">
+    <Item variant="outline" size="sm" role="listitem">
       <ItemMedia variant="icon">
         <status.icon />
       </ItemMedia>

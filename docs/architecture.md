@@ -921,6 +921,11 @@ Ask screen (8.3) drives it. The model proposes; Rust decides.
   mutations that never retry. Settings saves run one at a time, so the last change wins.
 - **External links**: clicks on `http(s)` and `mailto` links go to `open_external_url`, which
   validates them and opens the system browser.
+- **Accessibility**: the target is WCAG 2.2 AA in both themes. One `main` landmark (the sidebar
+  inset) with a "Skip to content" link first in the Tab order; on phones every control is at
+  least 44px tall. Dialogs opened from state spread `returnFocus` (`src/lib/focus-return.ts`)
+  so closing them puts focus back on the control that opened them. SQL draft tabs follow the
+  WAI-ARIA tabs pattern (arrows, Home, End, Delete); the SQL editor draws a focus outline.
 
 ## Data on disk
 
@@ -937,5 +942,12 @@ platform are documented with release hardening (task 12.3).
 ## Build and CI
 
 - `pnpm build:web` builds the UI; `tauri build` embeds it in the binary.
-- CI (GitHub Actions) runs web checks, Rust fmt/clippy/tests with a contract drift check, and a
-  Linux `.deb` build. Windows and macOS packaging joins in task 12.2.
+- CI (GitHub Actions) runs web checks, end-to-end UI tests, Rust fmt/clippy/tests with a
+  contract drift check, and a Linux `.deb` build. Windows and macOS packaging joins in task 12.2.
+- End-to-end UI tests (`pnpm e2e`, Playwright, `apps/desktop/e2e/`) run the real UI in
+  Chromium. A test-only page, `e2e/app.html`, installs Tauri's official IPC mocks and answers
+  commands from typed fixtures (`e2e/harness/core.ts`); it is not part of the production build.
+  They check every screen at six widths from 320px to 1920px (no sideways scrolling, the right
+  navigation, 44px controls on phones), axe's WCAG 2.2 AA rules in light and dark, and keyboard
+  use (skip link, visible focus, focus in and out of dialogs, running SQL, the SQL tabs). A
+  test fails on an uncaught page error or a command the fixtures do not answer.

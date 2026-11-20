@@ -130,7 +130,7 @@ function AskWorkspace({
         <Button
           variant="ghost"
           size="sm"
-          className="ml-auto"
+          className="ml-auto max-sm:min-h-11"
           disabled={turns.length === 0}
           onClick={() => reset(connection.id)}
         >
@@ -160,6 +160,7 @@ function AskWorkspace({
                           key={suggestion}
                           variant="outline"
                           size="sm"
+                          className="max-sm:min-h-11"
                           disabled={running}
                           onClick={() => {
                             useAsk.getState().setQuestion(suggestion)
@@ -188,7 +189,7 @@ function AskWorkspace({
               )}
             </MessageScrollerContent>
           </MessageScrollerViewport>
-          <MessageScrollerButton />
+          <MessageScrollerButton className="max-sm:size-11" />
         </MessageScroller>
       </MessageScrollerProvider>
 

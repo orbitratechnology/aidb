@@ -65,6 +65,7 @@ import {
   type Mapping,
 } from './csv-import'
 import { Assessment, OutcomeAlert, SampleTable, type Outcome } from './review-changes-dialog'
+import { returnFocus } from '@/lib/focus-return'
 
 /** The select value for a table column no file column fills. */
 const NOT_IMPORTED = 'none'
@@ -98,7 +99,10 @@ export function CsvImportDialog({
   const { draft } = props
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="flex max-h-[90dvh] flex-col gap-0 p-0 sm:max-w-3xl">
+      <DialogContent
+        {...returnFocus}
+        className="flex max-h-[90dvh] flex-col gap-0 p-0 sm:max-w-3xl"
+      >
         <DialogHeader className="border-b p-4 sm:p-6">
           <DialogTitle>
             Import into {props.object.schema}.{props.object.name}

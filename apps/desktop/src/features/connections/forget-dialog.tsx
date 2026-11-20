@@ -17,6 +17,7 @@ import { Field, FieldContent, FieldDescription, FieldLabel } from '@/components/
 import { deleteConnection } from '@/lib/commands'
 import { CONNECTIONS_QUERY_KEY } from './queries'
 import { SESSIONS_QUERY_KEY } from './sessions'
+import { returnFocus } from '@/lib/focus-return'
 
 /**
  * "Forget connection": removes the profile and its cached schema details, and asks whether to
@@ -31,7 +32,7 @@ export function ForgetConnectionDialog({
 }) {
   return (
     <AlertDialog open={connection !== null} onOpenChange={(open) => !open && onClose()}>
-      <AlertDialogContent>
+      <AlertDialogContent {...returnFocus}>
         {connection && (
           <ForgetConfirmation key={connection.id} connection={connection} onClose={onClose} />
         )}

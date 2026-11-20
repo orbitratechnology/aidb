@@ -14,6 +14,7 @@ import {
 import { Field, FieldGroup, FieldLabel } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
 import { Spinner } from '@/components/ui/spinner'
+import { returnFocus } from '@/lib/focus-return'
 
 export type PasswordPrompt = { connection: ConnectionDetails; problem: string | null }
 
@@ -31,7 +32,7 @@ export function PasswordDialog({
 }) {
   return (
     <Dialog open={prompt !== null} onOpenChange={(open) => !open && onCancel()}>
-      <DialogContent>
+      <DialogContent {...returnFocus}>
         {prompt && (
           <PasswordForm
             key={prompt.connection.id}
@@ -88,7 +89,6 @@ function PasswordForm({
             id={passwordId}
             type="password"
             autoComplete="current-password"
-            autoFocus
             className="min-h-11 sm:min-h-0"
             value={password}
             onChange={(event) => setPassword(event.target.value)}

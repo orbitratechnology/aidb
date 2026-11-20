@@ -224,6 +224,7 @@ export function Composer({ connectionId, database, provider }: ComposerProps) {
                 <InputGroupButton
                   variant="ghost"
                   size="sm"
+                  className="max-sm:min-h-11"
                   disabled={filesNeedPermission}
                   onClick={() => fileInput.current?.click()}
                 >
@@ -244,7 +245,7 @@ export function Composer({ connectionId, database, provider }: ComposerProps) {
             <InputGroupButton
               variant="outline"
               size="sm"
-              className="ml-auto"
+              className="ml-auto max-sm:min-h-11"
               onClick={() => void stop()}
             >
               <SquareIcon data-icon="inline-start" />
@@ -255,7 +256,7 @@ export function Composer({ connectionId, database, provider }: ComposerProps) {
               type="submit"
               variant="default"
               size="sm"
-              className="ml-auto"
+              className="ml-auto max-sm:min-h-11"
               disabled={!canSend}
             >
               <ArrowUpIcon data-icon="inline-start" />
@@ -304,7 +305,7 @@ function TablePicker({ connectionId }: { connectionId: ConnectionId }) {
   return (
     <Popover>
       <PopoverTrigger asChild>
-        <InputGroupButton variant="ghost" size="sm">
+        <InputGroupButton variant="ghost" size="sm" className="max-sm:min-h-11">
           <TableIcon data-icon="inline-start" />
           Tables{selected.length > 0 ? ` (${selected.length})` : ''}
         </InputGroupButton>
@@ -362,7 +363,12 @@ function ContextReview({
   return (
     <Popover>
       <PopoverTrigger asChild>
-        <InputGroupButton variant="ghost" size="sm" disabled={!preview && !loading}>
+        <InputGroupButton
+          variant="ghost"
+          size="sm"
+          className="max-sm:min-h-11"
+          disabled={!preview && !loading}
+        >
           {loading ? <Spinner data-icon="inline-start" /> : <LayersIcon data-icon="inline-start" />}
           {preview ? formatTokens(preview.estimatedTokens) : 'Context'}
         </InputGroupButton>

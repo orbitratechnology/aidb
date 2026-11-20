@@ -48,7 +48,7 @@ export function PendingChangeCard({ change }: { change: PendingChange }) {
   }
 
   return (
-    <Item variant="outline" className="items-start">
+    <Item variant="outline" role="listitem" className="items-start">
       <ItemMedia variant="icon">
         <FilePenLineIcon />
       </ItemMedia>

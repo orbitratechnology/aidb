@@ -27,6 +27,7 @@ import { importConnections } from '@/lib/commands'
 import { connectionAddress, pluralize } from './format'
 import { planImport } from './import-plan'
 import { CONNECTIONS_QUERY_KEY } from './queries'
+import { returnFocus } from '@/lib/focus-return'
 
 const STATUS_DISPLAY: Record<
   ImportStatus,
@@ -47,7 +48,7 @@ export function ImportConnectionsDialog({
 }) {
   return (
     <Dialog open={preview !== null} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="flex max-h-[90dvh] flex-col sm:max-w-xl">
+      <DialogContent {...returnFocus} className="flex max-h-[90dvh] flex-col sm:max-w-xl">
         {preview && <ImportReview preview={preview} onClose={onClose} />}
       </DialogContent>
     </Dialog>

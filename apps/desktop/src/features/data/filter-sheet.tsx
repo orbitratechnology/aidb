@@ -44,6 +44,7 @@ import {
   type FilterFormValues,
 } from './filter-form'
 import { canSort, OPERATOR_LABELS, operatorsFor, takesValue } from './table-view'
+import { returnFocus } from '@/lib/focus-return'
 
 type Props = {
   open: boolean
@@ -59,6 +60,7 @@ export function FilterSheet({ open, onOpenChange, ...props }: Props) {
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent
+        {...returnFocus}
         side="right"
         className="gap-0 data-[side=right]:w-full data-[side=right]:sm:max-w-md"
       >

@@ -23,6 +23,7 @@ import {
 import { Textarea } from '@/components/ui/textarea'
 import { CellValue } from './cell-value'
 import type { Values } from './edits'
+import { returnFocus } from '@/lib/focus-return'
 
 /** A column as the editor shows it. */
 export type EditorColumn = {
@@ -88,6 +89,7 @@ export function RowEditorSheet({
   return (
     <Sheet open={target !== null} onOpenChange={(open) => !open && onClose()}>
       <SheetContent
+        {...returnFocus}
         side="right"
         className="gap-0 data-[side=right]:w-full data-[side=right]:sm:max-w-lg"
       >

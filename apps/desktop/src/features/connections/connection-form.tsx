@@ -80,6 +80,7 @@ import {
 import { CONNECTIONS_QUERY_KEY } from './queries'
 import { SESSIONS_QUERY_KEY, useActiveSessions } from './sessions'
 import { ENVIRONMENTS } from './types'
+import { returnFocus } from '@/lib/focus-return'
 
 export type FormMode = { kind: 'create' } | { kind: 'edit'; connection: ConnectionDetails }
 
@@ -111,6 +112,7 @@ export function ConnectionSheet({ mode, onClose }: { mode: FormMode | null; onCl
   return (
     <Sheet open={mode !== null} onOpenChange={(open) => !open && onClose()}>
       <SheetContent
+        {...returnFocus}
         side="right"
         className="gap-0 data-[side=right]:w-full data-[side=right]:sm:max-w-xl"
       >

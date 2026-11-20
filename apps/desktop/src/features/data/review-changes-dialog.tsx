@@ -51,6 +51,7 @@ import { applyDataChange, cancelDataChange, previewDataChange } from '@/lib/comm
 import { errorMessage } from '@/lib/errors'
 import { CellValue } from './cell-value'
 import { failedChange, staleChanges, type ReviewItem } from './edits'
+import { returnFocus } from '@/lib/focus-return'
 
 const APPROVAL_TEXT: Record<string, string> = {
   apply: 'It needs your approval here.',
@@ -90,7 +91,10 @@ export function ReviewChangesDialog({
   const proposal = props.held?.actor === 'agent'
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="flex max-h-[90dvh] flex-col gap-0 p-0 sm:max-w-2xl">
+      <DialogContent
+        {...returnFocus}
+        className="flex max-h-[90dvh] flex-col gap-0 p-0 sm:max-w-2xl"
+      >
         <DialogHeader className="border-b p-4 sm:p-6">
           <DialogTitle>{proposal ? 'Review the assistant’s change' : 'Review changes'}</DialogTitle>
           <DialogDescription>
@@ -461,7 +465,7 @@ function ChangeItem({
 }) {
   const { icon: Icon, badge } = ITEM_DISPLAY[item.kind]
   return (
-    <Item variant="outline" size="sm" className="items-start">
+    <Item variant="outline" size="sm" role="listitem" className="items-start">
       <ItemMedia variant="icon">
         <Icon />
       </ItemMedia>

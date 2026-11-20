@@ -105,6 +105,7 @@ import { ReviewChangesDialog } from './review-changes-dialog'
 import { RowDetailSheet, type RowEditActions } from './row-detail-sheet'
 import { RowEditorSheet, type EditorColumn, type EditorTarget } from './row-editor-sheet'
 import { describeFilter, rowRange, truncatedKeys } from './table-view'
+import { returnFocus } from '@/lib/focus-return'
 
 /** Below this width rows are shown as a record list instead of a grid. */
 const GRID_QUERY = '(min-width: 640px)'
@@ -492,7 +493,7 @@ export function TableDataView({
         />
       )}
       <AlertDialog open={discarding} onOpenChange={setDiscarding}>
-        <AlertDialogContent>
+        <AlertDialogContent {...returnFocus}>
           <AlertDialogHeader>
             <AlertDialogTitle>
               Discard{' '}

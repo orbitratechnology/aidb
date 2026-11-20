@@ -32,17 +32,23 @@ export function ConnectionStatus() {
 
   return (
     <Button variant="ghost" asChild className="h-auto min-h-11 min-w-0 py-1 sm:min-h-9">
-      <Link to={CONNECTIONS_PATH} aria-label={description} title={description}>
+      {/* The name comes from the visible text (WCAG 2.5.3) with the words a screen reader
+          needs around it; the title shows the same sentence on hover. */}
+      <Link to={CONNECTIONS_PATH} title={description}>
         <DatabaseIcon data-icon="inline-start" className="hidden sm:block" />
         <span className="flex min-w-0 flex-col items-start leading-tight">
-          <span className="max-w-32 truncate sm:max-w-48">{active.name}</span>
+          <span className="max-w-32 truncate sm:max-w-48">
+            <span className="sr-only">Connected to </span>
+            {active.name}
+          </span>
           <span className="max-w-32 truncate font-mono text-xs font-normal text-muted-foreground sm:max-w-48">
+            <span className="sr-only">, database </span>
             {active.database}
           </span>
         </span>
         <EnvironmentBadge environment={active.environment} />
         {active.readOnly ? (
-          <Badge variant="outline" className="hidden sm:inline-flex">
+          <Badge variant="outline" className="max-sm:sr-only">
             <LockIcon data-icon="inline-start" />
             Read-only
           </Badge>

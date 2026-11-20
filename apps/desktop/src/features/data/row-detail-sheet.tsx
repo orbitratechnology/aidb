@@ -20,6 +20,7 @@ import { cn } from '@/lib/utils'
 import { copyCell, copyRow } from './copy-actions'
 import type { PendingRow } from './edits'
 import { formatForDetail, type ResultSet } from './table-view'
+import { returnFocus } from '@/lib/focus-return'
 
 const PREFORMATTED = new Set(['json', 'array', 'binary', 'other'])
 
@@ -69,6 +70,7 @@ export function RowDetailSheet({
   return (
     <Sheet open={values !== undefined} onOpenChange={(open) => !open && onClose()}>
       <SheetContent
+        {...returnFocus}
         side="right"
         className="gap-0 data-[side=right]:w-full data-[side=right]:sm:max-w-lg"
       >

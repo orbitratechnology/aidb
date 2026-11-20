@@ -1,4 +1,4 @@
-import type { PlanStep, TaskEvent } from '@aidb/contracts'
+import type { PendingChange, PlanStep, TaskEvent } from '@aidb/contracts'
 import { describe, expect, it } from 'vitest'
 import { applyEvent, emptyActivity, streamingText, traceEntries } from './activity'
 
@@ -53,5 +53,26 @@ describe('assistant activity', () => {
     expect(streamingText(activity)).toBe('')
     // Blank notes are never shown.
     expect(traceEntries(activity, null)).toHaveLength(1)
+  })
+
+  it('keeps the change the assistant prepared', () => {
+    const change: PendingChange = {
+      connectionId: 'c',
+      actor: 'agent',
+      preview: {
+        approvalId: '6f1c2a40-0000-4000-8000-000000000003',
+        changes: [],
+        rows: 1,
+        risk: 'R2',
+        approval: 'apply',
+        reasons: [],
+        confirmation: null,
+        expiresAt: '2026-11-20T10:00:00Z',
+      },
+      changes: [],
+    }
+    const activity = play([{ event: 'change_proposed', index: 1, change }])
+    expect(activity.proposal?.preview.approvalId).toBe(change.preview.approvalId)
+    expect(emptyActivity().proposal).toBeNull()
   })
 })

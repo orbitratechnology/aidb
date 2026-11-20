@@ -288,7 +288,8 @@ async fn calls_registry_tools(endpoint: &Endpoint) {
         model: endpoint.model.clone(),
         system: Some(built.system),
         messages: vec![Message::user(built.message)],
-        tools: tools::specs(),
+        // Every tool, including the one that prepares changes, so providers accept each schema.
+        tools: tools::specs(true),
         output: OutputFormat::Text,
         max_output_tokens: Some(2048),
     };

@@ -51,6 +51,7 @@ export const COMMANDS = {
   previewDataChange: 'preview_data_change',
   applyDataChange: 'apply_data_change',
   cancelDataChange: 'cancel_data_change',
+  listPendingChanges: 'list_pending_changes',
 } as const
 
 export type CommandName = (typeof COMMANDS)[keyof typeof COMMANDS]

@@ -11,7 +11,7 @@ fn call(name: &str, input: Value) -> ToolCall {
 }
 
 #[test]
-fn the_registry_holds_only_read_tools_with_strict_schemas() {
+fn the_registry_holds_read_tools_and_one_that_prepares_changes() {
     let names: Vec<&str> = TOOLS.iter().map(|t| t.name.as_str()).collect();
     assert_eq!(
         names,
@@ -20,7 +20,8 @@ fn the_registry_holds_only_read_tools_with_strict_schemas() {
             "list_tables",
             "describe_table",
             "run_read_query",
-            "explain_query"
+            "explain_query",
+            "preview_data_change"
         ]
     );
     for tool in TOOLS.iter() {
@@ -45,8 +46,11 @@ fn the_registry_holds_only_read_tools_with_strict_schemas() {
             );
         }
     }
-    let specs = specs();
-    assert_eq!(specs.len(), TOOLS.len());
+    assert_eq!(specs(true).len(), TOOLS.len());
+    // Read-only connections are not offered the tool that prepares changes.
+    let read_only: Vec<String> = specs(false).into_iter().map(|spec| spec.name).collect();
+    assert_eq!(read_only.len(), TOOLS.len() - 1);
+    assert!(!read_only.iter().any(|name| name == "preview_data_change"));
     assert!(definition(ToolName::RunReadQuery).returns_data);
     assert!(!definition(ToolName::DescribeTable).returns_data);
 }
@@ -66,6 +70,10 @@ fn schema_properties_match_the_rust_inputs() {
             json!({"sql": "SELECT 1", "purpose": "Check"}),
         ),
         ("explain_query", json!({"sql": "SELECT 1", "analyze": true})),
+        (
+            "preview_data_change",
+            json!({"purpose": "Ship order 7", "changes": [update_change()]}),
+        ),
     ];
     for (name, input) in full {
         let tool = definition(ToolName::parse(name).expect("known"));
@@ -78,6 +86,132 @@ fn schema_properties_match_the_rust_inputs() {
         assert_eq!(declared.len(), used.len(), "{name}");
         assert!(parse(&call(name, input)).is_ok(), "{name}");
     }
+}
+
+fn update_change() -> Value {
+    json!({
+        "kind": "update", "schema": "public", "table": "orders",
+        "set": [{"column": "status", "value": "shipped"}],
+        "filters": [{"column": "id", "operator": "equals", "value": "7"}],
+    })
+}
+
+#[test]
+fn the_change_schema_declares_every_field_of_a_change() {
+    let schema = &definition(ToolName::PreviewDataChange).input_schema;
+    let item = &schema["properties"]["changes"]["items"];
+    let mut fields: Vec<&String> = item["properties"]
+        .as_object()
+        .expect("object")
+        .keys()
+        .collect();
+    fields.sort();
+    assert_eq!(
+        fields,
+        [
+            "columns", "filters", "kind", "rows", "schema", "set", "table"
+        ]
+    );
+    assert_eq!(item["additionalProperties"], false);
+    assert_eq!(
+        schema["properties"]["changes"]["maxItems"],
+        MAX_PROPOSED_CHANGES
+    );
+}
+
+#[test]
+fn proposals_become_checked_change_sets() {
+    let proposal = parse(&call(
+        "preview_data_change",
+        json!({"purpose": " Ship order 7 ", "changes": [
+            update_change(),
+            {"kind": "insert", "schema": "public", "table": "notes",
+             "columns": ["body"], "rows": [["Shipped"], [null]]},
+            {"kind": "delete", "schema": "public", "table": "carts",
+             "filters": [{"column": "order_id", "operator": "equals", "value": "7"}]},
+        ]}),
+    ))
+    .expect("proposal");
+    assert_eq!(proposal.risk(), RiskLevel::R1, "it writes nothing itself");
+    assert_eq!(
+        proposal.summary(),
+        "Prepare a change for your review: Ship order 7"
+    );
+    let ToolInvocation::PreviewDataChange(proposal) = proposal else {
+        panic!("not a proposal");
+    };
+    assert_eq!(proposal.changes.len(), 3);
+    assert_eq!(
+        proposal.changes[0],
+        DataChange::Update {
+            table: ObjectName {
+                schema: "public".into(),
+                name: "orders".into(),
+            },
+            set: vec![ColumnValue {
+                column: "status".into(),
+                value: Some("shipped".into()),
+            }],
+            filters: vec![Filter {
+                column: "id".into(),
+                operator: FilterOperator::Equals,
+                value: Some("7".into()),
+            }],
+        }
+    );
+}
+
+#[test]
+fn proposals_are_held_to_the_grid_rules() {
+    let propose = |change: Value| {
+        parse(&call(
+            "preview_data_change",
+            json!({"purpose": "Change", "changes": [change]}),
+        ))
+    };
+    // An update or delete without filters would change every row.
+    let unfiltered = propose(json!({"kind": "delete", "schema": "public", "table": "orders"}));
+    assert!(
+        matches!(&unfiltered, Err(ToolCallError::NotAllowed(m)) if m.contains("at least one filter")),
+        "{unfiltered:?}"
+    );
+    let empty = propose(
+        json!({"kind": "update", "schema": "public", "table": "orders",
+        "set": [{"column": "status", "value": "x"}], "filters": []}),
+    );
+    assert!(matches!(empty, Err(ToolCallError::NotAllowed(_))));
+    // Fields that do not belong to the kind, unknown fields and kinds.
+    for bad in [
+        json!({"kind": "insert", "schema": "public", "table": "t", "columns": ["a"],
+               "rows": [["1"]], "set": []}),
+        json!({"kind": "delete", "schema": "public", "table": "t", "set": [],
+               "filters": [{"column": "id", "operator": "equals", "value": "1"}]}),
+        json!({"kind": "update", "schema": "public", "table": "t"}),
+        json!({"kind": "truncate", "schema": "public", "table": "t"}),
+        json!({"kind": "delete", "schema": "public", "table": "t", "sql": "DELETE FROM t",
+               "filters": [{"column": "id", "operator": "equals", "value": "1"}]}),
+    ] {
+        assert!(
+            matches!(
+                propose(bad.clone()),
+                Err(ToolCallError::InvalidArguments(_))
+            ),
+            "{bad}"
+        );
+    }
+    let many = parse(&call(
+        "preview_data_change",
+        json!({"purpose": "Many", "changes": vec![update_change(); MAX_PROPOSED_CHANGES + 1]}),
+    ));
+    assert!(matches!(many, Err(ToolCallError::InvalidArguments(_))));
+    let no_purpose = parse(&call(
+        "preview_data_change",
+        json!({"purpose": " ", "changes": [update_change()]}),
+    ));
+    assert!(matches!(
+        no_purpose,
+        Err(ToolCallError::InvalidArguments(_))
+    ));
 }
 
 #[test]

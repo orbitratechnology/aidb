@@ -44,7 +44,7 @@ use aidb_lib::domain::ai::{
     ChatEvent, ChatRequest, ChatResponse, Message, ModelInfo, Part, ProviderCapabilities,
     ProviderKind, Role, StopReason, StructuredOutput, ToolCall, ToolInput, Usage,
 };
-use aidb_lib::domain::audit::{AuditEntry, AuditFilter};
+use aidb_lib::domain::audit::{Actor, AuditEntry, AuditFilter};
 use serde::Deserialize;
 use serde_json::Value;
 use support::{
@@ -70,6 +70,9 @@ struct ScriptedCase {
     question: String,
     #[serde(default = "yes")]
     data_allowed: bool,
+    /// Runs on a connection that allows writes (new connections are read-only).
+    #[serde(default)]
+    writable: bool,
     #[serde(default)]
     attachments: Vec<FileFixture>,
     model: Vec<Turn>,
@@ -140,6 +143,8 @@ struct Expect {
     failed_checks: Vec<String>,
     /// Model calls the task made.
     requests: Option<usize>,
+    /// Whether the task ends with changes held for the user's review.
+    proposal: Option<bool>,
 }
 
 impl Turn {
@@ -467,6 +472,45 @@ fn attachments(files: &[FileFixture]) -> Vec<Attachment> {
         .collect()
 }
 
+/// A proposal is announced, held by the core as the assistant's, waiting for the user; and
+/// nothing else is.
+fn proposal_problems(expect: &Expect, ran: &Ran, workspace: &Workspace) -> Vec<String> {
+    let mut problems = Vec::new();
+    let pending = workspace
+        .approvals
+        .pending_data_changes(Some(workspace.connection_id));
+    let announced = ran
+        .events
+        .iter()
+        .filter(|event| matches!(event, TaskEvent::ChangeProposed { .. }))
+        .count();
+    match (&ran.outcome.proposal, expect.proposal) {
+        (Some(proposal), Some(true)) => {
+            let held = pending
+                .iter()
+                .find(|change| change.preview.approval_id == proposal.preview.approval_id);
+            match held {
+                Some(change) if change.actor == Actor::Agent => {}
+                Some(_) => problems.push("the proposal is not held as the assistant's".into()),
+                None => problems.push("the proposal is not waiting for approval".into()),
+            }
+            if announced != 1 {
+                problems.push(format!("{announced} proposals announced, expected 1"));
+            }
+        }
+        (None, Some(false) | None) => {
+            if !pending.is_empty() {
+                problems.push(format!("{} changes wait for approval", pending.len()));
+            }
+        }
+        (proposal, expected) => problems.push(format!(
+            "proposal {:?}, expected {expected:?}",
+            proposal.as_ref().map(|p| p.preview.approval_id)
+        )),
+    }
+    problems
+}
+
 async fn audit_events(workspace: &Workspace) -> Vec<AuditEntry> {
     workspace
         .store
@@ -536,7 +580,11 @@ async fn scripted_cases_hold_the_line() {
     assert!(!paths.is_empty(), "no scripted cases found");
 
     let database = ScratchDatabase::create("agent_eval", &schema()).await;
-    let workspace = Workspace::connect(&database.name).await;
+    let read_only = Workspace::connect(&database.name).await;
+    let writable = Workspace::connect_with(&database.name, |settings| {
+        settings.read_only = false;
+    })
+    .await;
     let mut failures = String::new();
     for path in &paths {
         let name = path
@@ -546,9 +594,10 @@ async fn scripted_cases_hold_the_line() {
         let case: ScriptedCase =
             serde_json::from_str(&std::fs::read_to_string(path).expect("read the case"))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
+        let workspace = if case.writable { &writable } else { &read_only };
         let model = ScriptedModel::new(&case.model);
         let before = database.snapshot().await;
-        let audited_before = audit_ids(&workspace).await;
+        let audited_before = audit_ids(workspace).await;
         let input = workspace
             .input(
                 &case.question,
@@ -561,8 +610,11 @@ async fn scripted_cases_hold_the_line() {
         let after = database.snapshot().await;
         let requests = model.requests.lock().expect("lock").clone();
         let mut problems = invariants(&ran, &requests, &before, &after);
-        problems.extend(audited(&workspace, &audited_before, &ran).await);
+        problems.extend(audited(workspace, &audited_before, &ran).await);
         problems.extend(compare(&case.expect, &ran, &requests));
+        problems.extend(proposal_problems(&case.expect, &ran, workspace));
+        // Declined between cases, so each starts with nothing waiting.
+        workspace.approvals.invalidate_all();
         if !problems.is_empty() {
             let _ = writeln!(failures, "\n{name}: {}", case.description);
             for problem in problems {
@@ -571,7 +623,8 @@ async fn scripted_cases_hold_the_line() {
             let _ = writeln!(failures, "  outcome: {:?}", ran.outcome);
         }
     }
-    workspace.close().await;
+    read_only.close().await;
+    writable.close().await;
     database.drop().await;
     assert!(failures.is_empty(), "scripted cases failed:{failures}");
 }

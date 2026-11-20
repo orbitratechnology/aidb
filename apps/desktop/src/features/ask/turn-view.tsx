@@ -33,6 +33,7 @@ import {
   TraceLine,
   TraceTitle,
 } from '@/components/ui/trace'
+import { PendingChangeCard } from '@/features/changes/pending-change-card'
 import { streamingText, traceEntries, type ActivityEntry } from './activity'
 import { AnswerText } from './answer-view'
 import { formatSize, objectLabel, type Turn } from './conversation'
@@ -89,6 +90,8 @@ export function ReplyView({ turn, providerName }: { turn: Turn; providerName: st
   const { activity, outcome } = turn
   const running = turn.state === 'running'
   const answer = outcome?.answer ?? null
+  // Changes the assistant prepared, as soon as they are announced.
+  const proposal = outcome?.proposal ?? activity.proposal
   const entries = traceEntries(activity, running ? null : answer)
   const live = running ? streamingText(activity) : ''
   // While the model writes its reply, that text is shown as the answer, not in the trace.
@@ -112,6 +115,7 @@ export function ReplyView({ turn, providerName }: { turn: Turn; providerName: st
         )}
         {live && <AnswerText text={live} streaming />}
         {!running && answer && <AnswerText text={answer} />}
+        {proposal && <PendingChangeCard change={proposal} />}
         {turn.state === 'error' && (
           <Alert variant="destructive">
             <CircleXIcon />

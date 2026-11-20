@@ -30,6 +30,7 @@ use crate::domain::ai::{
     ChatEvent, ChatRequest, Message, OutputFormat, Part, Role, StopReason, ToolResult,
 };
 use crate::domain::audit::{Actor, AuditEvent, AuditStatus};
+use crate::domain::data_change::PendingChange;
 use crate::domain::database::OperationId;
 
 pub use runner::SessionTools;
@@ -51,6 +52,8 @@ pub struct ToolOutput {
     pub outcome: String,
     /// The result was cut (more rows than shown).
     pub incomplete: bool,
+    /// Changes the step prepared and the core now holds for the user's review.
+    pub proposal: Option<PendingChange>,
 }
 
 /// Runs checked tool calls against the open connection.
@@ -189,7 +192,7 @@ pub async fn run<P: AiProvider, R: ToolRunner>(
             model: model.clone(),
             system: Some(context.system.clone()),
             messages: messages.clone(),
-            tools: tools::specs(),
+            tools: tools::specs(!plan.target.read_only),
             output: OutputFormat::Text,
             max_output_tokens: None,
         };
@@ -317,6 +320,7 @@ pub async fn run<P: AiProvider, R: ToolRunner>(
     plan.skip_unstarted();
     let (status, notice) = finish(&mut plan, &state, ending);
     let answer = state.answer;
+    let proposal = state.proposal;
     if let Err(error) = store
         .agent_tasks()
         .update(
@@ -336,6 +340,7 @@ pub async fn run<P: AiProvider, R: ToolRunner>(
         answer,
         notice,
         plan,
+        proposal,
     }
 }
 
@@ -378,6 +383,9 @@ async fn record_audit(
                 && step.status == StepStatus::Succeeded
         })
         .count();
+    let proposed = plan.steps.iter().any(|step| {
+        step.tool == ToolName::PreviewDataChange && step.status == StepStatus::Succeeded
+    });
     audit::record(
         store,
         &AuditEvent {
@@ -398,11 +406,16 @@ async fn record_audit(
             },
             rows_affected: None,
             detail: Some(format!(
-                "Task {}: {}, {} ran, {} refused.",
+                "Task {}: {}, {} ran, {} refused{}.",
                 plan.task_id,
                 counted(plan.steps.len(), "step", "steps"),
                 counted(reads, "query", "queries"),
                 counted(refusals.len(), "request", "requests"),
+                if proposed {
+                    ", a change proposed for review"
+                } else {
+                    ""
+                },
             )),
         },
     )
@@ -424,7 +437,14 @@ struct LoopState {
     nudged: bool,
     /// Refused calls, for the audit log: the tool (if it is one of ours) and why.
     refusals: Vec<(Option<&'static str>, &'static str)>,
+    /// Changes prepared in this task; one proposal per task.
+    proposal: Option<PendingChange>,
 }
+
+/// Sent when the model prepares a second change in one task.
+const ONE_PROPOSAL_MESSAGE: &str = "You already prepared a change in this task, and it is waiting \
+for the user. Do not prepare another: tell the user to review it, and they can ask again after \
+they decide.";
 
 /// Sent when the model ends its turn showing SQL that it has not run.
 const UNRUN_SQL_REMINDER: &str = "You showed SQL but did not run it, so the answer is not based \
@@ -485,6 +505,9 @@ async fn handle_call<R: ToolRunner>(
             return (error.to_string(), true);
         }
     };
+    if matches!(invocation, ToolInvocation::PreviewDataChange(_)) && state.proposal.is_some() {
+        return (ONE_PROPOSAL_MESSAGE.into(), true);
+    }
     let index = match plan.add_step(&invocation, READ_ONLY_AGENT_MAX_RISK) {
         Ok(index) => index,
         Err(PlanError::TooManySteps) => {
@@ -542,6 +565,10 @@ async fn handle_call<R: ToolRunner>(
             step.status = StepStatus::Succeeded;
             step.outcome = Some(output.outcome);
             state.incomplete |= output.incomplete;
+            if let Some(change) = output.proposal {
+                state.proposal = Some(change.clone());
+                on_event(TaskEvent::ChangeProposed { index, change });
+            }
             (
                 context::tool_result(tag, invocation.tool().as_str(), &output.text),
                 false,

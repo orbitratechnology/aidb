@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use super::context::ContextItem;
 use super::plan::{PlanStep, TaskId, TaskPlan};
+use crate::domain::data_change::PendingChange;
 
 /// Longest answer kept with a finished task, in characters.
 pub const MAX_ANSWER_CHARS: usize = 20_000;
@@ -106,6 +107,12 @@ pub enum TaskEvent {
     },
     /// The model asked for something that was not accepted; nothing ran.
     CallRejected { tool: String, reason: String },
+    /// Step `index` prepared changes, now held for the user's review. Nothing was written.
+    ChangeProposed {
+        #[cfg_attr(test, ts(type = "number"))]
+        index: usize,
+        change: PendingChange,
+    },
 }
 
 /// How a task ended. Serialized with its plan as the view, carrying the computed risk and
@@ -120,6 +127,8 @@ pub struct TaskOutcome {
     /// Why the task stopped short, when it did.
     pub notice: Option<String>,
     pub plan: TaskPlan,
+    /// Changes the assistant prepared, held for the user's review.
+    pub proposal: Option<PendingChange>,
 }
 
 impl Serialize for TaskOutcome {
@@ -132,6 +141,7 @@ impl Serialize for TaskOutcome {
             answer: &'a str,
             notice: Option<&'a str>,
             plan: super::plan::PlanView<'a>,
+            proposal: Option<&'a PendingChange>,
         }
         Wire {
             task_id: self.task_id,
@@ -139,6 +149,7 @@ impl Serialize for TaskOutcome {
             answer: &self.answer,
             notice: self.notice.as_deref(),
             plan: self.plan.view(),
+            proposal: self.proposal.as_ref(),
         }
         .serialize(serializer)
     }
@@ -184,6 +195,7 @@ mod tests {
             answer: "12".into(),
             notice: None,
             plan: plan.clone(),
+            proposal: None,
         };
         let json = serde_json::to_value(&outcome).expect("json");
         assert_eq!(json["taskId"], plan.task_id.to_string());

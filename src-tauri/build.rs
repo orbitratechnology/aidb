@@ -49,6 +49,7 @@ const COMMANDS: &[&str] = &[
     "preview_data_change",
     "apply_data_change",
     "cancel_data_change",
+    "list_pending_changes",
 ];
 
 fn main() {

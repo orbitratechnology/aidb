@@ -5,6 +5,7 @@ import {
   CircleCheckIcon,
   CircleStopIcon,
   CircleXIcon,
+  FilePenLineIcon,
   FolderTreeIcon,
   GaugeIcon,
   PlayIcon,
@@ -19,6 +20,7 @@ export const TOOL_ICONS: Record<ToolName, LucideIcon> = {
   describe_table: TablePropertiesIcon,
   run_read_query: PlayIcon,
   explain_query: GaugeIcon,
+  preview_data_change: FilePenLineIcon,
 }
 
 /** Words for a step's state, so it never rests on color or animation alone. */

@@ -11,6 +11,7 @@ import {
   failedChange,
   keyId,
   pendingCounts,
+  proposalItems,
   putNewRow,
   removeNewRow,
   reviewItems,
@@ -285,5 +286,27 @@ describe('the review', () => {
     expect(staleChanges(changes, counted([0, 1]))).toEqual([0])
     expect(failedChange('Change 2 of 3: invalid input syntax for type integer.')).toBe(1)
     expect(failedChange('The connection is read-only.')).toBeNull()
+  })
+})
+
+describe('proposalItems', () => {
+  it('says what each of the assistant’s changes targets and sets', () => {
+    const filters = [{ column: 'id', operator: 'equals' as const, value: '7' }]
+    expect(
+      proposalItems([
+        { kind: 'update', table, set: [{ column: 'status', value: 'sold' }], filters },
+        { kind: 'delete', table, filters },
+        { kind: 'insert', table, columns: ['id'], rows: [['8'], ['9']] },
+      ]),
+    ).toEqual([
+      {
+        kind: 'update',
+        id: '0',
+        label: 'public.items where id equals “7”',
+        cells: [{ column: 'status', after: 'sold' }],
+      },
+      { kind: 'delete', id: '1', label: 'public.items where id equals “7”', values: [] },
+      { kind: 'insert', id: '2', label: 'public.items: 2 new rows', values: [], defaults: [] },
+    ])
   })
 })

@@ -22,7 +22,7 @@ use crate::adapters::database::{DatabaseAdapter, DatabaseSession};
 use crate::adapters::local_store::LocalStore;
 use crate::domain::audit::{Actor, AuditEvent, AuditStatus};
 use crate::domain::connections::{ConnectionId, Environment};
-use crate::domain::data_change::{DataChange, DataChangePlan};
+use crate::domain::data_change::{DataChange, DataChangePlan, DataChangePreview, PendingChange};
 use crate::domain::policy::approval::{
     APPROVAL_TTL, ApprovalError, ApprovalId, ApprovalState, Binding, BindingContext,
     MAX_OPEN_APPROVALS, PENDING_TTL, hex, needs_typed_confirmation, sha256_hex,
@@ -95,6 +95,8 @@ struct Entry {
     expires: Instant,
     /// SHA-256 of the token, once approved and until used.
     token_digest: Option<String>,
+    /// What the review of data changes shows, kept to list them while they wait.
+    preview: Option<DataChangePreview>,
 }
 
 /// Open approvals, in memory only: they never outlive the app.
@@ -143,11 +145,53 @@ impl Approvals {
         self.lock().get(&id).map(|entry| entry.state)
     }
 
-    /// The data changes an open approval is for, and its connection.
+    /// Keeps the preview of data changes waiting for approval, so they can be listed.
+    pub fn keep_preview(&self, preview: &DataChangePreview) {
+        if let Some(entry) = self.lock().get_mut(&preview.approval_id) {
+            entry.preview = Some(preview.clone());
+        }
+    }
+
+    /// Data changes waiting for the user's decision, oldest first, on one connection or all.
     #[must_use]
-    pub fn data_changes(&self, id: ApprovalId) -> Option<(ConnectionId, Vec<DataChange>)> {
+    pub fn pending_data_changes(&self, connection_id: Option<ConnectionId>) -> Vec<PendingChange> {
+        let now = Instant::now();
+        let entries = self.lock();
+        let mut pending: Vec<(Instant, PendingChange)> = entries
+            .values()
+            .filter(|entry| {
+                entry.state == ApprovalState::AwaitingApproval
+                    && !entry.checking
+                    && entry.expires > now
+                    && connection_id.is_none_or(|id| id == entry.connection_id)
+            })
+            .filter_map(|entry| {
+                let Subject::DataChanges(changes) = &entry.subject else {
+                    return None;
+                };
+                let preview = entry.preview.clone()?;
+                Some((
+                    entry.expires,
+                    PendingChange {
+                        connection_id: entry.connection_id,
+                        actor: entry.actor,
+                        preview,
+                        changes: changes.clone(),
+                    },
+                ))
+            })
+            .collect();
+        pending.sort_by_key(|(expires, _)| *expires);
+        pending.into_iter().map(|(_, change)| change).collect()
+    }
+
+    /// The data changes an open approval is for, its connection, and who asked for it.
+    #[must_use]
+    pub fn data_changes(&self, id: ApprovalId) -> Option<(ConnectionId, Vec<DataChange>, Actor)> {
         self.lock().get(&id).and_then(|entry| match &entry.subject {
-            Subject::DataChanges(changes) => Some((entry.connection_id, changes.clone())),
+            Subject::DataChanges(changes) => {
+                Some((entry.connection_id, changes.clone(), entry.actor))
+            }
             Subject::Sql { .. } => None,
         })
     }
@@ -413,6 +457,7 @@ async fn request_subject<A: DatabaseAdapter>(
                 assessment: assessment.clone(),
                 expires: Instant::now() + PENDING_TTL,
                 token_digest: None,
+                preview: None,
             },
         );
     }

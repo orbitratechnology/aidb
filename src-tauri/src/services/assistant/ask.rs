@@ -12,6 +12,7 @@ use crate::domain::agent::task::{TaskEvent, TaskOutcome};
 use crate::domain::connections::ConnectionId;
 use crate::domain::providers::{ProviderProfile, is_loopback_url};
 use crate::errors::{AppError, AppResult};
+use crate::services::approvals::Approvals;
 use crate::services::catalog::{self, CatalogCache};
 use crate::services::sessions::{Sessions, not_connected};
 use crate::services::{providers, settings};
@@ -94,7 +95,7 @@ async fn prepare<A: DatabaseAdapter>(
         database: active.server.database.clone(),
         environment: connection.settings.environment,
         server_version: active.server.version.clone(),
-        read_only: active.server.read_only,
+        read_only: active.server.read_only || active.server.in_recovery,
     };
     let built = context::build(&ContextRequest {
         question: &ask.question,
@@ -112,7 +113,7 @@ async fn prepare<A: DatabaseAdapter>(
         connection_id: id,
         database: active.server.database,
         environment: connection.settings.environment,
-        read_only: active.server.read_only,
+        read_only: active.server.read_only || active.server.in_recovery,
     };
     Ok(Prepared {
         profile,
@@ -179,6 +180,8 @@ pub struct Workspace<'a, A: DatabaseAdapter> {
     pub sessions: &'a Sessions<A>,
     pub cache: &'a CatalogCache,
     pub running: &'a RunningTasks,
+    /// Where changes the assistant prepares wait for the user.
+    pub approvals: &'a Approvals,
 }
 
 /// Answers a question on the open connection, reporting progress to `on_event`. The task's id
@@ -201,6 +204,7 @@ pub async fn ask<A: DatabaseAdapter>(
         sessions,
         cache,
         running,
+        approvals,
     } = workspace;
     let prepared = prepare(store, sessions, cache, id, request).await?;
     let (_, client) = providers::client(store, credentials, prepared.profile.id).await?;
@@ -218,6 +222,7 @@ pub async fn ask<A: DatabaseAdapter>(
         store,
         sessions,
         cache,
+        approvals,
         connection_id: id,
     };
     tracing::info!(
@@ -268,6 +273,7 @@ mod tests {
         sessions: Sessions<Arc<FakeAdapter>>,
         cache: CatalogCache,
         running: RunningTasks,
+        approvals: Approvals,
         connection: ConnectionId,
     }
 
@@ -279,6 +285,7 @@ mod tests {
                 sessions: &self.sessions,
                 cache: &self.cache,
                 running: &self.running,
+                approvals: &self.approvals,
             }
         }
 
@@ -338,6 +345,7 @@ mod tests {
             sessions,
             cache: CatalogCache::default(),
             running: RunningTasks::default(),
+            approvals: Approvals::default(),
             connection: profile.id,
         }
     }

@@ -8,14 +8,19 @@ use super::{ToolOutput, ToolRunner};
 use crate::adapters::database::DatabaseAdapter;
 use crate::adapters::local_store::LocalStore;
 use crate::domain::agent::context::{describe_object, object_line, render_rows};
-use crate::domain::agent::tools::{ExplainInput, ListTablesInput, MAX_RESULT_ROWS, ToolInvocation};
+use crate::domain::agent::tools::{
+    ChangeProposal, ExplainInput, ListTablesInput, MAX_RESULT_ROWS, ToolInvocation,
+};
+use crate::domain::audit::Actor;
 use crate::domain::connections::ConnectionId;
+use crate::domain::data_change::PendingChange;
 use crate::domain::database::OperationId;
 use crate::domain::query::{QueryRequest, QueryRun};
 use crate::errors::AppError;
+use crate::services::approvals::Approvals;
 use crate::services::catalog::{self, CatalogCache};
 use crate::services::sessions::Sessions;
-use crate::services::{query, table_data};
+use crate::services::{data_changes, query, table_data};
 
 /// Most tables `list_tables` returns; the model is told when there are more.
 pub const MAX_LISTED_TABLES: usize = 200;
@@ -25,6 +30,8 @@ pub struct SessionTools<'a, A: DatabaseAdapter> {
     pub store: &'a LocalStore,
     pub sessions: &'a Sessions<A>,
     pub cache: &'a CatalogCache,
+    /// Where prepared changes wait for the user.
+    pub approvals: &'a Approvals,
     pub connection_id: ConnectionId,
 }
 
@@ -77,6 +84,7 @@ impl<A: DatabaseAdapter> SessionTools<'_, A> {
             text,
             outcome: format!("{} schemas", overview.schemas.len()),
             incomplete: false,
+            proposal: None,
         })
     }
 
@@ -137,6 +145,7 @@ impl<A: DatabaseAdapter> SessionTools<'_, A> {
             outcome: format!("{} tables and views", matching.len()),
             // A cut list is still exact about what it shows; the model is told to narrow it.
             incomplete: false,
+            proposal: None,
         })
     }
 
@@ -157,6 +166,7 @@ impl<A: DatabaseAdapter> SessionTools<'_, A> {
             text: describe_object(&details),
             outcome: format!("{} columns", details.columns.len()),
             incomplete: false,
+            proposal: None,
         })
     }
 
@@ -198,6 +208,7 @@ impl<A: DatabaseAdapter> SessionTools<'_, A> {
                         format!("{rows} rows")
                     },
                     incomplete,
+                    proposal: None,
                 })
             }
             QueryRun::Refused(refusal) => {
@@ -240,6 +251,68 @@ impl<A: DatabaseAdapter> SessionTools<'_, A> {
     }
 }
 
+impl<A: DatabaseAdapter> SessionTools<'_, A> {
+    /// Plans the changes through the same engine as the grid and holds them for the user. The
+    /// model is told what was prepared and that nothing was written; values, counts and the
+    /// rows they match stay in the app.
+    async fn propose(&self, proposal: &ChangeProposal) -> Result<ToolOutput, String> {
+        let preview = data_changes::preview(
+            self.store,
+            self.sessions,
+            self.approvals,
+            self.connection_id,
+            proposal.changes.clone(),
+            Actor::Agent,
+        )
+        .await
+        .map_err(|e| error_text(&e))?;
+        let what: Vec<String> = proposal
+            .changes
+            .iter()
+            .map(|change| {
+                let table = change.table();
+                format!(
+                    "{} of {}.{}",
+                    change.kind().as_str(),
+                    table.schema,
+                    table.name
+                )
+            })
+            .collect();
+        let text = format!(
+            "Prepared {} for the user's review: {}. Nothing has been written. The user reviews \
+             it in the app, then applies or declines it; you cannot apply it. Tell the user it \
+             is waiting for their review, and do not say that it was applied.",
+            if what.len() == 1 {
+                "1 change".to_owned()
+            } else {
+                format!("{} changes", what.len())
+            },
+            what.join(", ")
+        );
+        let outcome = format!(
+            "Prepared for your review: {}, risk {}",
+            if preview.rows == 1 {
+                "1 row".to_owned()
+            } else {
+                format!("{} rows", preview.rows)
+            },
+            preview.risk.as_str()
+        );
+        Ok(ToolOutput {
+            text,
+            outcome,
+            incomplete: false,
+            proposal: Some(PendingChange {
+                connection_id: self.connection_id,
+                actor: Actor::Agent,
+                preview,
+                changes: proposal.changes.clone(),
+            }),
+        })
+    }
+}
+
 impl<A: DatabaseAdapter> ToolRunner for SessionTools<'_, A> {
     async fn run(
         &self,
@@ -252,6 +325,7 @@ impl<A: DatabaseAdapter> ToolRunner for SessionTools<'_, A> {
             ToolInvocation::DescribeTable(object) => self.describe(object).await,
             ToolInvocation::RunReadQuery(input) => self.query(input.sql.clone(), operation).await,
             ToolInvocation::ExplainQuery(input) => self.explain(input, operation).await,
+            ToolInvocation::PreviewDataChange(proposal) => self.propose(proposal).await,
         }
     }
 

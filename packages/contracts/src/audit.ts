@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { RiskLevelSchema } from './assistant'
+import { RiskLevelSchema } from './policy'
 import { EnvironmentSchema } from './connections'
 import type { Actor } from './generated/Actor'
 import type { AuditEntry } from './generated/AuditEntry'

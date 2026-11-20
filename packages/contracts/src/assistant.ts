@@ -1,13 +1,12 @@
 import { z } from 'zod'
 import { EnvironmentSchema } from './connections'
-import type { ApprovalLevel } from './generated/ApprovalLevel'
+import { PendingChangeSchema } from './data-change'
 import type { AssistantProvider } from './generated/AssistantProvider'
 import type { ContextItem } from './generated/ContextItem'
 import type { ContextItemKind } from './generated/ContextItemKind'
 import type { ContextPreview } from './generated/ContextPreview'
 import type { PlanStep } from './generated/PlanStep'
 import type { PlanTarget } from './generated/PlanTarget'
-import type { RiskLevel } from './generated/RiskLevel'
 import type { StepStatus } from './generated/StepStatus'
 import type { TaskEvent } from './generated/TaskEvent'
 import type { TaskOutcome } from './generated/TaskOutcome'
@@ -16,15 +15,10 @@ import type { TaskStatus } from './generated/TaskStatus'
 import type { ToolName } from './generated/ToolName'
 import type { VerificationStatus } from './generated/VerificationStatus'
 import type { VerificationStep } from './generated/VerificationStep'
+import { ApprovalLevelSchema, RiskLevelSchema } from './policy'
 
-export const RiskLevelSchema = z.enum(['R0', 'R1', 'R2', 'R3', 'R4']) satisfies z.ZodType<RiskLevel>
-
-export const ApprovalLevelSchema = z.enum([
-  'none',
-  'apply',
-  'elevated',
-  'blocked',
-]) satisfies z.ZodType<ApprovalLevel>
+// Kept here for existing imports; they live with the policy types.
+export { ApprovalLevelSchema, RiskLevelSchema }
 
 export const ToolNameSchema = z.enum([
   'list_schemas',
@@ -32,6 +26,7 @@ export const ToolNameSchema = z.enum([
   'describe_table',
   'run_read_query',
   'explain_query',
+  'preview_data_change',
 ]) satisfies z.ZodType<ToolName>
 
 export const StepStatusSchema = z.enum([
@@ -133,6 +128,11 @@ export const TaskEventSchema = z.discriminatedUnion('event', [
   z.object({ event: z.literal('step_started'), index, step: PlanStepSchema }),
   z.object({ event: z.literal('step_finished'), index, step: PlanStepSchema }),
   z.object({ event: z.literal('call_rejected'), tool: z.string(), reason: z.string() }),
+  z.object({
+    event: z.literal('change_proposed'),
+    index: z.number().int().nonnegative(),
+    change: PendingChangeSchema,
+  }),
 ]) satisfies z.ZodType<TaskEvent>
 
 export const TaskOutcomeSchema = z.object({
@@ -141,4 +141,5 @@ export const TaskOutcomeSchema = z.object({
   answer: z.string(),
   notice: z.string().nullable(),
   plan: TaskPlanSchema,
+  proposal: PendingChangeSchema.nullable(),
 }) satisfies z.ZodType<TaskOutcome>

@@ -138,7 +138,7 @@ Status legend: `[x]` done · `[~]` in progress · `[ ]` not started
       estimate, transactional apply with an approval token, verification.
 - [x] **10.2 Grid editing.** Pending-change buffer, before/after diff, Save/Discard, delete
       confirmation.
-- [ ] **10.3 Agent writes.** `preview_data_change` / `apply_approved_data_change` wired to the
+- [x] **10.3 Agent writes.** `preview_data_change` / `apply_approved_data_change` wired to the
       approval UI.
 - [ ] **10.4 CSV import.** Encoding/delimiter/header detection, column mapping, validation preview,
       insert-only default, explicit upsert, transactional apply.

@@ -68,11 +68,12 @@ export type { ObjectKind } from './generated/ObjectKind'
 export type { ObjectName } from './generated/ObjectName'
 export type { ObjectSummary } from './generated/ObjectSummary'
 export type { OperationId } from './generated/OperationId'
-export type { PlannedChange } from './generated/PlannedChange'
 export type { PageColumn } from './generated/PageColumn'
 export type { PageRequest } from './generated/PageRequest'
 export type { ParsedConnectionUri } from './generated/ParsedConnectionUri'
 export type { PasswordStorage } from './generated/PasswordStorage'
+export type { PendingChange } from './generated/PendingChange'
+export type { PlannedChange } from './generated/PlannedChange'
 export type { PlanStep } from './generated/PlanStep'
 export type { PlanTarget } from './generated/PlanTarget'
 export type { ProviderCheck } from './generated/ProviderCheck'
@@ -170,6 +171,7 @@ export {
   DataChangeResultSchema,
   DataChangeSchema,
   DataChangeSetSchema,
+  PendingChangeSchema,
   PlannedChangeSchema,
   ValueSampleSchema,
 } from './data-change'

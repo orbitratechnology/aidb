@@ -404,9 +404,11 @@ matching rows per UPDATE or DELETE and across the set. Errors name the change th
   written. A commit that loses the connection is reported as uncertain, never retried.
 - **Outcome**: applied (rows written), rolled back (with the database's reason), or uncertain;
   the approval finishes as succeeded or failed and the outcome is audited.
-- `cancel_data_change` declines a preview. The grid edits through this engine (see Frontend);
-  the assistant cannot reach it yet; 10.3 lets it propose changes that wait for the same
-  approval.
+- `cancel_data_change` declines a preview. The grid edits through this engine (see Frontend),
+  and the assistant proposes changes through it (`preview_data_change`, see Assistant), which
+  wait for the user like any other. The approvals registry keeps each data-change preview, so
+  `list_pending_changes` can list what waits; the record of who proposed it (the assistant) is
+  kept with the approval and in the audit detail of its outcome.
 
 ## Audit log
 
@@ -503,7 +505,8 @@ Ask screen (8.3) drives it. The model proposes; Rust decides.
 
 - **Risk** (`risk`): R0 introspection, R1 bounded read, R2 scoped reversible write, R3 sensitive
   or production change, R4 destructive or privileged, each with its default approval (none,
-  Apply, elevated, blocked). The read-only assistant may plan at most R1.
+  Apply, elevated, blocked). The assistant may plan at most R1: it reads, and it can prepare a
+  change that writes nothing until the user applies it.
 - **Tools** (`tools`, version 1): `list_schemas`, `list_tables` (schema, search) and
   `describe_table` (R0); `run_read_query` (SQL and a stated purpose; at most 50 rows reach the
   model) and `explain_query` (optionally `analyze`) (R1). Each has a JSON Schema with
@@ -512,6 +515,14 @@ Ask screen (8.3) drives it. The model proposes; Rust decides.
   or extra arguments, identifiers over 63 bytes, control characters). SQL is accepted only when
   the classifier finds exactly one read statement. Tools whose results carry data values are
   marked, so hosted providers get them only with consent. There is no generic SQL tool.
+  `preview_data_change` (R1; offered only on connections that allow writes) takes a purpose and
+  1 to 20 changes in a flat shape (kind, schema, table, and columns and rows, set, or filters),
+  turned into the grid's `DataChange` and checked by the same `validate_set` (filters required
+  for UPDATE and DELETE). It never writes: the core plans the changes and holds them for the
+  user, as the assistant's. The model learns which changes were prepared and that nothing was
+  written; never the matching rows, their count or the values as stored. One proposal per
+  task; a second is turned away with a message. There is no tool that applies, approves or
+  declines.
 - **Task plan** (`plan`, version 1): the target (connection, database, environment, read-only)
   comes from the open session; each step records the tool, a one-line summary, the checked
   arguments, its risk from the registry, its status and outcome; assumptions and verification
@@ -547,6 +558,9 @@ Ask screen (8.3) drives it. The model proposes; Rust decides.
   asked) go through the editor's read path (`query::run_for_assistant`): the same classification,
   read-only transaction, timeouts and cell limits, at most 50 rows, and no entry in query
   history. Each query has an operation id, so cancelling stops it on the server.
+  `preview_data_change` goes through `data_changes::preview` with the assistant as the actor; the
+  step's outcome for the user gives the rows and risk, and the plan carries the proposal, which
+  is streamed as `change_proposed` and returned in the outcome.
 - **Verification**: after the loop, fixed checks are recorded with the plan: the assistant gave
   an answer; the last query it relied on ran; every result it saw was complete; SQL its answer
   shows was run. The task is `succeeded` only when it ended normally and all checks passed,
@@ -673,21 +687,30 @@ Ask screen (8.3) drives it. The model proposes; Rust decides.
   was opened from. The Library sheet has History (this connection's runs, with the outcome in
   words and an icon) and Saved tabs, each searchable; Open puts the SQL in a new tab (a saved
   query's tab, if one is open, is selected instead) and never runs it.
-- **Changes** (Changes): "Waiting for review", empty until controlled writes exist (10.x), and
+- **Changes** (Changes): "Waiting for review" lists what the core holds for approval
+  (`list_pending_changes`: the assistant's proposals, on every connection, until applied,
+  declined, expired or dropped by a connection change), each with what it does, the rows it
+  writes and its risk, and a Review that opens the same dialog as on the Ask screen. Then
   History: audit events newest first, 50 at a time with "Show older", for the open connection or
   all connections. Each shows what happened in words, the status with an icon and a word (Done,
   Partly done, Failed, Stopped, Refused), the risk class, who did it (You, Assistant, aidb), the
   connection and its environment, the time, and the first 12 characters of its fingerprint.
 - **Ask** (Ask): shown once the assistant is on with a usable provider; otherwise a link to
   Settings › AI. The header names the provider and model and says, in words, whether it runs on
-  this computer or is hosted, and that access is read-only. The conversation (shadcn
+  this computer or is hosted, and whether the assistant only reads or also proposes changes for
+  review (on a connection that allows writes). The conversation (shadcn
   `MessageScroller`, `Message`, `Bubble`) shows each question with its tables and files, then
   the reply: the context that was sent, a `Trace` of steps (summary, outcome in words; failed or
   skipped steps open to show why and the SQL), refused tool requests, and the model's notes
   between steps. The answer is plain text; fenced code becomes a `CodeBlock` (SQL highlighted by
   shiki's JavaScript engine) with Copy and, for SQL, "Open in SQL editor", which opens a new tab
   and runs nothing. The outcome is a badge with an icon and a word (Checked, Partly checked,
-  Failed, Stopped), any notice, and the checks. The composer has Attach (the webview reads the
+  Failed, Stopped), any notice, and the checks. A change the assistant prepared shows as a card
+  ("Change proposed by the assistant": each change in words with its rows, the risk and its
+  state: waiting, applied, declined, or no longer waiting). Review opens the review dialog with
+  the core's plan: the rows each change matches as they are now, what it sets or adds as it
+  will be stored, the risk, reasons and SQL, and Later (keeps it waiting), Decline, and Apply
+  (`apply_data_change`, with the database name typed when elevated). The composer has Attach (the webview reads the
   picked file; disabled for a hosted provider until sharing is allowed), Tables (a searchable
   picker), the context review (items, sizes, what was cut, what carries data, the token estimate,
   refreshed 400 ms after typing stops), Ask or Stop, and, for hosted providers, the

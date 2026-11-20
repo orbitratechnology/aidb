@@ -12,6 +12,7 @@ import {
   CredentialBackendSchema,
   DataChangePreviewSchema,
   DataChangeResultSchema,
+  PendingChangeSchema,
   ProviderDetailsSchema,
   ProviderTestReportSchema,
   DiagnosticsInfoSchema,
@@ -47,6 +48,7 @@ import {
   type DataChange,
   type DataChangePreview,
   type DataChangeResult,
+  type PendingChange,
   type ProviderDetails,
   type ProviderDraft,
   type ProviderId,
@@ -422,4 +424,9 @@ export function applyDataChange(
 /** Declines previewed changes. */
 export function cancelDataChange(approvalId: string): Promise<void> {
   return callCommand(COMMANDS.cancelDataChange, z.null(), { approvalId }).then(() => undefined)
+}
+
+/** Data changes waiting for the user's decision (the assistant's proposals among them). */
+export function listPendingChanges(connectionId: ConnectionId | null): Promise<PendingChange[]> {
+  return callCommand(COMMANDS.listPendingChanges, z.array(PendingChangeSchema), { connectionId })
 }

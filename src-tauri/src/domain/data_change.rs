@@ -8,7 +8,9 @@
 
 use serde::{Deserialize, Serialize};
 
+use super::audit::Actor;
 use super::catalog::ObjectName;
+use super::connections::ConnectionId;
 use super::policy::approval::ApprovalId;
 use super::policy::risk::{ApprovalLevel, RiskLevel};
 use super::table_data::{
@@ -404,6 +406,19 @@ pub struct DataChangePreview {
     pub confirmation: Option<String>,
     /// When the preview lapses, RFC 3339.
     pub expires_at: String,
+}
+
+/// Changes held for the user's approval: what the review shows, who proposed them and where.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
+#[serde(rename_all = "camelCase")]
+pub struct PendingChange {
+    pub connection_id: ConnectionId,
+    /// The user (grid edits) or the assistant (a proposal).
+    pub actor: Actor,
+    pub preview: DataChangePreview,
+    /// The changes as requested, in the order they run.
+    pub changes: Vec<DataChange>,
 }
 
 /// How an approved change ended.

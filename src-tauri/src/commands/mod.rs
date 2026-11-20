@@ -79,7 +79,8 @@ pub(crate) fn handler<R: Runtime>() -> impl Fn(Invoke<R>) -> bool + Send + Sync 
         audit::list_audit_events,
         data_changes::preview_data_change,
         data_changes::apply_data_change,
-        data_changes::cancel_data_change
+        data_changes::cancel_data_change,
+        data_changes::list_pending_changes
     ]
 }
 

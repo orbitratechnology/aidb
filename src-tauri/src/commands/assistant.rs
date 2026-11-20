@@ -42,6 +42,7 @@ pub async fn ask_assistant(
         sessions: state.sessions(),
         cache: state.catalog(),
         running: state.assistant(),
+        approvals: state.approvals(),
     };
     ask::ask(workspace, connection_id, request, &mut |event| {
         // The window may have reloaded meanwhile; the task still finishes and is saved.

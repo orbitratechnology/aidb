@@ -24,6 +24,7 @@ use aidb_lib::domain::agent::task::{TaskEvent, TaskOutcome};
 use aidb_lib::domain::connection_uri;
 use aidb_lib::domain::connections::{ConnectionDraft, ConnectionId, Environment, SslMode};
 use aidb_lib::domain::database::{OperationId, SessionLimits};
+use aidb_lib::services::approvals::Approvals;
 use aidb_lib::services::assistant::{self, RunningTasks, SessionTools, TaskInput};
 use aidb_lib::services::catalog::{self, CatalogCache};
 use aidb_lib::services::sessions::{self, Sessions};
@@ -203,9 +204,13 @@ pub struct Workspace {
     pub store: LocalStore,
     pub sessions: Sessions<PostgresAdapter>,
     pub cache: CatalogCache,
+    /// Where changes the assistant prepares wait for approval.
+    pub approvals: Approvals,
     pub connection_id: ConnectionId,
     pub database: String,
     server_version: String,
+    /// The session refuses writes.
+    read_only: bool,
 }
 
 impl Workspace {
@@ -245,9 +250,11 @@ impl Workspace {
             store,
             sessions,
             cache: CatalogCache::default(),
+            approvals: Approvals::default(),
             connection_id: profile.id,
             database: database.to_owned(),
             server_version: active.server.version,
+            read_only,
         }
     }
 
@@ -272,7 +279,7 @@ impl Workspace {
             database: self.database.clone(),
             environment: Environment::Development,
             server_version: self.server_version.clone(),
-            read_only: true,
+            read_only: self.read_only,
         };
         let built = context::build(&ContextRequest {
             question,
@@ -294,7 +301,7 @@ impl Workspace {
                 connection_id: self.connection_id,
                 database: self.database.clone(),
                 environment: Environment::Development,
-                read_only: true,
+                read_only: self.read_only,
             },
             question,
         )
@@ -317,6 +324,7 @@ impl Workspace {
             store: &self.store,
             sessions: &self.sessions,
             cache: &self.cache,
+            approvals: &self.approvals,
             connection_id: self.connection_id,
         };
         let mut events = Vec::new();

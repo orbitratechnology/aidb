@@ -52,6 +52,7 @@
     "allow-list-audit-events",
     "allow-preview-data-change",
     "allow-apply-data-change",
-    "allow-cancel-data-change"
+    "allow-cancel-data-change",
+    "allow-list-pending-changes"
   ]
 }

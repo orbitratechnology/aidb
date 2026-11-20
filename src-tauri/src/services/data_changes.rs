@@ -13,7 +13,7 @@ use crate::domain::audit::{Actor, AuditEvent, AuditStatus};
 use crate::domain::connections::ConnectionId;
 use crate::domain::data_change::{
     ApplyStatus, ChangeKind, DataChange, DataChangePreview, DataChangeResult, PREVIEW_BYTES,
-    PREVIEW_ROWS, PlannedChange, ValueSample, validate_set,
+    PREVIEW_ROWS, PendingChange, PlannedChange, ValueSample, validate_set,
 };
 use crate::domain::policy::approval::{ApprovalError, ApprovalId, ApprovalState, sha256_hex};
 use crate::domain::policy::classify::RiskAssessment;
@@ -62,6 +62,14 @@ fn describe(changes: &[DataChange]) -> String {
         tables.join(", "),
         parts.join(", ")
     )
+}
+
+/// ", proposed by the assistant", for changes the user did not write.
+fn proposed_by(actor: Actor) -> &'static str {
+    match actor {
+        Actor::Agent => ", proposed by the assistant",
+        Actor::User | Actor::System => "",
+    }
 }
 
 fn reasons(assessment: &RiskAssessment) -> Vec<String> {
@@ -153,7 +161,7 @@ pub async fn preview<A: DatabaseAdapter>(
             before: plan.before,
         })
         .collect();
-    Ok(DataChangePreview {
+    let preview = DataChangePreview {
         approval_id: request.id,
         rows: planned.iter().map(|change| change.rows).sum(),
         changes: planned,
@@ -162,7 +170,15 @@ pub async fn preview<A: DatabaseAdapter>(
         reasons: reasons(&request.assessment),
         confirmation: request.confirmation,
         expires_at: request.expires_at,
-    })
+    };
+    approvals.keep_preview(&preview);
+    Ok(preview)
+}
+
+/// Data changes waiting for the user's decision, on one connection or all.
+#[must_use]
+pub fn pending(approvals: &Approvals, connection_id: Option<ConnectionId>) -> Vec<PendingChange> {
+    approvals.pending_data_changes(connection_id)
 }
 
 fn no_such_change() -> AppError {
@@ -192,7 +208,7 @@ pub async fn apply<A: DatabaseAdapter>(
     approval_id: ApprovalId,
     confirmation: Option<&str>,
 ) -> AppResult<DataChangeResult> {
-    let Some((_, changes)) = approvals.data_changes(approval_id) else {
+    let Some((_, changes, proposer)) = approvals.data_changes(approval_id) else {
         return Err(no_such_change());
     };
     let operation = approvals::approve_and_use(
@@ -269,7 +285,11 @@ pub async fn apply<A: DatabaseAdapter>(
         approval_state: Some(state.as_str()),
         status,
         rows_affected: result.rows_affected,
-        detail: Some(format!("{}: {outcome_text}.", describe(&changes))),
+        detail: Some(format!(
+            "{}{}: {outcome_text}.",
+            describe(&changes),
+            proposed_by(proposer)
+        )),
     };
     audit::record(store, &event).await;
     Ok(result)
@@ -286,7 +306,7 @@ pub async fn cancel(
     approvals: &Approvals,
     approval_id: ApprovalId,
 ) -> AppResult<()> {
-    let Some((connection_id, changes)) = approvals.data_changes(approval_id) else {
+    let Some((connection_id, changes, proposer)) = approvals.data_changes(approval_id) else {
         return Err(no_such_change());
     };
     approvals::cancel(approvals, approval_id)?;
@@ -307,7 +327,11 @@ pub async fn cancel(
         approval_state: Some(ApprovalState::Cancelled.as_str()),
         status: AuditStatus::Cancelled,
         rows_affected: None,
-        detail: Some(format!("{}: declined.", describe(&changes))),
+        detail: Some(format!(
+            "{}{}: declined.",
+            describe(&changes),
+            proposed_by(proposer)
+        )),
     };
     audit::record(store, &event).await;
     Ok(())

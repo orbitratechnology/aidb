@@ -442,3 +442,48 @@ async fn approving_for_another_connection_invalidates_the_approval() {
     assert_eq!(setup.approvals.state(preview.approval_id), None);
     assert!(setup.applied().is_empty());
 }
+
+#[tokio::test]
+async fn proposals_wait_in_a_list_until_decided() {
+    let setup = setup(Environment::Development, false).await;
+    let proposal = preview(
+        &setup.store,
+        &setup.sessions,
+        &setup.approvals,
+        setup.id,
+        vec![ship()],
+        Actor::Agent,
+    )
+    .await
+    .expect("proposal");
+    let waiting = pending(&setup.approvals, Some(setup.id));
+    assert_eq!(waiting.len(), 1);
+    assert_eq!(waiting[0].actor, Actor::Agent);
+    assert_eq!(waiting[0].preview, proposal);
+    assert_eq!(waiting[0].changes, vec![ship()]);
+    assert!(pending(&setup.approvals, Some(ConnectionId::new())).is_empty());
+    assert_eq!(pending(&setup.approvals, None).len(), 1);
+
+    // The user applies it; it no longer waits.
+    let result = setup
+        .apply(proposal.approval_id, None)
+        .await
+        .expect("applies");
+    assert_eq!(result.status, ApplyStatus::Applied);
+    assert!(pending(&setup.approvals, None).is_empty());
+    let audit = setup.audit().await;
+    assert_eq!(
+        audit.last().and_then(|event| event.4.clone()),
+        Some("Update of public.orders, proposed by the assistant: applied.".to_owned())
+    );
+
+    // Declined proposals leave the list too, and so do those whose connection changed.
+    let declined = setup.preview(ship()).await.expect("preview");
+    cancel(&setup.store, &setup.approvals, declined.approval_id)
+        .await
+        .expect("cancel");
+    assert!(pending(&setup.approvals, None).is_empty());
+    setup.preview(ship()).await.expect("preview");
+    setup.approvals.invalidate_connection(setup.id);
+    assert!(pending(&setup.approvals, None).is_empty());
+}

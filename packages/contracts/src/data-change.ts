@@ -1,5 +1,6 @@
 import { z } from 'zod'
-import { ApprovalLevelSchema, RiskLevelSchema } from './assistant'
+import { ActorSchema } from './audit'
+import { ApprovalLevelSchema, RiskLevelSchema } from './policy'
 import { ObjectNameSchema } from './catalog'
 import type { ApplyStatus } from './generated/ApplyStatus'
 import type { ChangeKind } from './generated/ChangeKind'
@@ -8,6 +9,7 @@ import type { DataChange } from './generated/DataChange'
 import { DATA_CHANGE_LIMITS } from './generated/DataChangeLimits'
 import type { DataChangePreview } from './generated/DataChangePreview'
 import type { DataChangeResult } from './generated/DataChangeResult'
+import type { PendingChange } from './generated/PendingChange'
 import type { PlannedChange } from './generated/PlannedChange'
 import type { ValueSample } from './generated/ValueSample'
 import { CellRefSchema, FilterSchema, TablePageSchema } from './table-data'
@@ -93,3 +95,10 @@ export const DataChangeResultSchema = z.object({
   rowsAffected: z.number().int().nonnegative().nullable(),
   message: z.string().nullable(),
 }) satisfies z.ZodType<DataChangeResult>
+
+export const PendingChangeSchema = z.object({
+  connectionId: z.string(),
+  actor: ActorSchema,
+  preview: DataChangePreviewSchema,
+  changes: z.array(DataChangeSchema),
+}) satisfies z.ZodType<PendingChange>

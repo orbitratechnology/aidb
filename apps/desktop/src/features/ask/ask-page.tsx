@@ -124,7 +124,9 @@ function AskWorkspace({
           {provider.name} · {provider.model}
         </Badge>
         <Badge variant="secondary">{hosted ? 'Hosted provider' : 'On this computer'}</Badge>
-        <Badge variant="secondary">Read-only</Badge>
+        <Badge variant="secondary">
+          {connection.readOnly ? 'Reads only' : 'Proposes changes for your review'}
+        </Badge>
         <Button
           variant="ghost"
           size="sm"
@@ -146,7 +148,11 @@ function AskWorkspace({
                   <EmptyState
                     icon={SparklesIcon}
                     title={`Ask about ${connection.database}`}
-                    description="The assistant looks up the structure and runs read-only queries to answer. Every step it takes is listed with its result."
+                    description={
+                      connection.readOnly
+                        ? 'The assistant looks up the structure and runs read-only queries to answer. Every step it takes is listed with its result.'
+                        : 'The assistant looks up the structure and runs read-only queries to answer. It can also prepare changes, which wait for you to review and apply. Every step it takes is listed with its result.'
+                    }
                   >
                     <div className="flex flex-wrap justify-center gap-2">
                       {SUGGESTIONS.map((suggestion) => (

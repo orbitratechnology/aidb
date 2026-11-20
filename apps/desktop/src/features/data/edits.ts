@@ -8,6 +8,7 @@ import type {
   ValueKind,
 } from '@aidb/contracts'
 import { DATA_CHANGE_LIMITS, TABLE_DATA_LIMITS } from '@aidb/contracts'
+import { describeFilter } from './table-view'
 
 /** A value as text; `null` is SQL NULL. */
 export type Value = string | null
@@ -323,7 +324,8 @@ export type ReviewItem =
       kind: 'update'
       id: string
       label: string
-      cells: Array<{ column: string; before: Value | undefined; after: Value }>
+      /** `before` is absent when the old value is not known (a change the assistant wrote). */
+      cells: Array<{ column: string; before?: Value; after: Value }>
     }
   | {
       kind: 'insert'
@@ -379,4 +381,44 @@ export function staleChanges(changes: DataChange[], preview: DataChangePreview):
 export function failedChange(message: string): number | null {
   const match = /^Change (\d+) of \d+: /.exec(message)
   return match ? Number(match[1]) - 1 : null
+}
+
+/** "public.orders where id is “7”". */
+function describeTarget(change: DataChange): string {
+  const table = `${change.table.schema}.${change.table.name}`
+  if (change.kind === 'insert') return table
+  return `${table} where ${change.filters.map(describeFilter).join(' and ')}`
+}
+
+/**
+ * Changes written by the assistant, for the review: what each targets and sets. The rows they
+ * match and the values as stored come from the core's preview, shown next to these.
+ */
+export function proposalItems(changes: DataChange[]): ReviewItem[] {
+  return changes.map((change, index): ReviewItem => {
+    const id = String(index)
+    const label = describeTarget(change)
+    switch (change.kind) {
+      case 'update':
+        return {
+          kind: 'update',
+          id,
+          label,
+          cells: change.set.map(({ column, value }) => ({ column, after: value })),
+        }
+      case 'delete':
+        return { kind: 'delete', id, label, values: [] }
+      case 'insert':
+        return {
+          kind: 'insert',
+          id,
+          label:
+            change.rows.length === 1
+              ? `${label}: 1 new row`
+              : `${label}: ${change.rows.length} new rows`,
+          values: [],
+          defaults: [],
+        }
+    }
+  })
 }

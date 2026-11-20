@@ -23,6 +23,8 @@ import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { useConnections } from '@/features/connections/queries'
 import { useActiveConnection } from '@/features/connections/sessions'
 import { listAuditEvents } from '@/lib/commands'
+import { PendingChangeCard } from './pending-change-card'
+import { usePendingChanges } from './pending'
 import {
   ACTOR_LABELS,
   nextBefore,
@@ -48,14 +50,42 @@ export function ChangesPage() {
         <h2 id="pending-heading" className="text-base font-medium">
           Waiting for review
         </h2>
-        <EmptyState
-          icon={ClipboardCheckIcon}
-          title="Nothing waits for review"
-          description="Data edits, imports and migrations will wait here with a preview until you approve them. Nothing is written before that."
-        />
+        <Pending />
       </section>
       <History />
     </PageContainer>
+  )
+}
+
+/** Changes the core holds for approval, on every connection: the assistant's proposals. */
+function Pending() {
+  const pending = usePendingChanges(null)
+  if (pending.isPending) return <Skeleton className="h-16 w-full" />
+  if (pending.isError) {
+    return (
+      <LoadError
+        title="What waits for review could not be loaded"
+        error={pending.error}
+        retrying={pending.isFetching}
+        onRetry={() => void pending.refetch()}
+      />
+    )
+  }
+  if (pending.data.length === 0) {
+    return (
+      <EmptyState
+        icon={ClipboardCheckIcon}
+        title="Nothing waits for review"
+        description="Changes the assistant proposes wait here with a preview until you apply or decline them. Nothing is written before that."
+      />
+    )
+  }
+  return (
+    <ItemGroup className="gap-2">
+      {pending.data.map((change) => (
+        <PendingChangeCard key={change.preview.approvalId} change={change} />
+      ))}
+    </ItemGroup>
   )
 }
 

@@ -1,4 +1,4 @@
-import type { ContextItem, PlanStep, TaskEvent, TaskId } from '@aidb/contracts'
+import type { ContextItem, PendingChange, PlanStep, TaskEvent, TaskId } from '@aidb/contracts'
 
 /** One line of what the assistant did, in the order it happened. */
 export type ActivityEntry =
@@ -14,10 +14,12 @@ export type Activity = {
   /** The model call in progress, from 0. */
   round: number
   entries: ActivityEntry[]
+  /** Changes the assistant prepared, waiting for the user. */
+  proposal: PendingChange | null
 }
 
 export function emptyActivity(): Activity {
-  return { taskId: null, items: [], round: 0, entries: [] }
+  return { taskId: null, items: [], round: 0, entries: [], proposal: null }
 }
 
 /** Adds one event. Text of one model call is one note; a step is updated in place. */
@@ -58,6 +60,8 @@ export function applyEvent(activity: Activity, event: TaskEvent): Activity {
           { kind: 'rejected', tool: event.tool, reason: event.reason },
         ],
       }
+    case 'change_proposed':
+      return { ...activity, proposal: event.change }
   }
 }
 

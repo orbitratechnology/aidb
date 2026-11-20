@@ -131,6 +131,7 @@ impl ToolRunner for ScriptedTools {
                 text: text.into(),
                 outcome: "done".into(),
                 incomplete,
+                proposal: None,
             }),
             Script::Fail(message) => Err(message.into()),
             Script::Hang => std::future::pending().await,
@@ -301,7 +302,9 @@ async fn answers_after_running_tools_and_saves_the_task() {
     assert_eq!(first.messages.len(), MAX_HISTORY * 2 + 1);
     assert_eq!(first.messages[0].text(), "q2");
     assert_eq!(first.messages[11].text(), "a7");
-    assert!(first.tools.len() == tools::specs().len());
+    // The connection is read-only: the tool that prepares changes is not offered.
+    assert_eq!(first.tools.len(), tools::specs(false).len());
+    assert!(!first.tools.iter().any(|t| t.name == "preview_data_change"));
     // Results come back framed as untrusted, matched to their calls.
     let results = tool_results(&requests[1]);
     assert_eq!(results.len(), 2);

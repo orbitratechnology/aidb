@@ -68,7 +68,31 @@ const COMMANDS: &[&str] = &[
 fn main() {
     // Migrations are embedded by `sqlx::migrate!`; rebuild when they change.
     println!("cargo:rerun-if-changed=migrations");
-    let attributes = tauri_build::Attributes::new()
+    let mut attributes = tauri_build::Attributes::new()
         .app_manifest(tauri_build::AppManifest::new().commands(COMMANDS));
+    if is_windows_msvc() {
+        // Windows: the application manifest (Common Controls v6, which the dialog and menu code
+        // need) is embedded by the linker for every binary, tests included. tauri-build would
+        // add it to the app binary only, and the test binaries would then fail to start
+        // (STATUS_ENTRYPOINT_NOT_FOUND). This is the setup tauri-build documents for tests.
+        attributes = attributes
+            .windows_attributes(tauri_build::WindowsAttributes::new_without_app_manifest());
+        embed_windows_manifest();
+    }
     tauri_build::try_build(attributes).expect("failed to run tauri-build");
+}
+
+fn is_windows_msvc() -> bool {
+    std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows")
+        && std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc")
+}
+
+/// The same manifest tauri-build embeds by default (`windows-app-manifest.xml`).
+fn embed_windows_manifest() {
+    let manifest =
+        std::path::Path::new(&std::env::var("CARGO_MANIFEST_DIR").expect("set by Cargo"))
+            .join("windows-app-manifest.xml");
+    println!("cargo:rerun-if-changed={}", manifest.display());
+    println!("cargo:rustc-link-arg=/MANIFEST:EMBED");
+    println!("cargo:rustc-link-arg=/MANIFESTINPUT:{}", manifest.display());
 }

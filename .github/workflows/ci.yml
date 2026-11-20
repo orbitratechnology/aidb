@@ -371,6 +371,9 @@ jobs:
   smoke-ubuntu:
     name: ${{ matrix.runner }} smoke test
     needs: bundle
+    # The Linux packages are tested even if another platform's packaging failed; a missing
+    # artifact still fails the job.
+    if: ${{ !cancelled() }}
     strategy:
       fail-fast: false
       matrix:
@@ -414,6 +417,7 @@ jobs:
   smoke-fedora:
     name: Fedora smoke test
     needs: bundle
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     container:
       image: fedora:45

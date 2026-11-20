@@ -88,21 +88,30 @@ function appDirs() {
 
 /** Versions of aidb that Windows lists as installed (Apps & features). */
 function windowsInstalledVersions() {
+  // Some of these keys may not exist; that is not a failure.
   const script =
+    "$ErrorActionPreference = 'SilentlyContinue'; " +
     "Get-ItemProperty 'HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*'," +
     "'HKLM:\\Software\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*'," +
-    "'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*' -ErrorAction SilentlyContinue" +
-    ` | Where-Object { $_.DisplayName -eq '${PRODUCT}' } | ForEach-Object { $_.DisplayVersion }`
+    "'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*'" +
+    ` | Where-Object { $_.DisplayName -eq '${PRODUCT}' } | ForEach-Object { $_.DisplayVersion }; exit 0`
   const output = run('powershell', ['-NoProfile', '-Command', script])
   return output.split(/\r?\n/).filter(Boolean)
 }
 
+/** Runs msiexec and waits for the installation itself to finish (msiexec can return first). */
 function msiexec(args) {
-  try {
-    run('msiexec', args)
-  } catch (error) {
+  const log = path.join(os.tmpdir(), `aidb-msiexec-${Date.now()}.log`)
+  const list = [...args, '/l*v', log].map((arg) => `'${arg}'`).join(',')
+  const script =
+    `$p = Start-Process msiexec.exe -ArgumentList ${list} -Wait -PassThru; ` +
     // 3010: success, a restart is required to finish.
-    if (error.status !== 3010) throw error
+    `if ($p.ExitCode -ne 0 -and $p.ExitCode -ne 3010) { exit $p.ExitCode }`
+  try {
+    run('powershell', ['-NoProfile', '-Command', script])
+  } catch (error) {
+    if (fs.existsSync(log)) console.error(fs.readFileSync(log, 'utf16le').slice(-6000))
+    throw error
   }
 }
 

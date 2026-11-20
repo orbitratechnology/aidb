@@ -268,13 +268,21 @@ async fn read_only_sessions_reject_writes_even_with_pgoptions() {
 async fn closed_ports_are_unreachable() {
     let mut target = target(&fixture(), true);
     target.settings.port = 1;
+    // A refused connection must fail as such, without waiting out the connect timeout. Linux
+    // and macOS report it at once; Windows retries a refused connection for about two seconds
+    // per address (`localhost` has two), hence the margin.
+    target.limits.connect_timeout = Duration::from_secs(30);
     let started = Instant::now();
 
     let error = connect_error(target).await;
 
     assert_eq!(error.kind(), DbErrorKind::Unreachable);
     assert!(error.message().contains(":1"));
-    assert!(started.elapsed() < Duration::from_secs(3));
+    assert!(
+        started.elapsed() < Duration::from_secs(10),
+        "{:?}",
+        started.elapsed()
+    );
 }
 
 #[tokio::test]

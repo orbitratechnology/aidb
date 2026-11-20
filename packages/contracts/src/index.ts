@@ -25,6 +25,7 @@ export type { CheckOutcome } from './generated/CheckOutcome'
 export type { ClearResult } from './generated/ClearResult'
 export type { ClearTarget } from './generated/ClearTarget'
 export type { Column } from './generated/Column'
+export type { ColumnMapping } from './generated/ColumnMapping'
 export type { ColumnValue } from './generated/ColumnValue'
 export type { ConnectionDetails } from './generated/ConnectionDetails'
 export type { ConnectionDraft } from './generated/ConnectionDraft'
@@ -35,6 +36,11 @@ export type { ContextItemKind } from './generated/ContextItemKind'
 export type { ContextPreview } from './generated/ContextPreview'
 export type { CredentialBackend } from './generated/CredentialBackend'
 export type { CredentialStoreStatus } from './generated/CredentialStoreStatus'
+export type { CsvImportDraft } from './generated/CsvImportDraft'
+export type { CsvImportPreview } from './generated/CsvImportPreview'
+export type { CsvImportReady } from './generated/CsvImportReady'
+export type { CsvImportRequest } from './generated/CsvImportRequest'
+export type { CsvOptions } from './generated/CsvOptions'
 export type { DataChange } from './generated/DataChange'
 export type { DataChangePreview } from './generated/DataChangePreview'
 export type { DataChangeResult } from './generated/DataChangeResult'
@@ -127,6 +133,7 @@ export { CONNECTION_LIMITS } from './generated/ConnectionLimits'
 export { TABLE_DATA_LIMITS } from './generated/TableDataLimits'
 export { EXPORT_LIMITS } from './generated/ExportLimits'
 export { DATA_CHANGE_LIMITS } from './generated/DataChangeLimits'
+export { CSV_IMPORT_LIMITS } from './generated/CsvImportLimits'
 
 export { AppInfoSchema } from './app'
 export { ActorSchema, AuditEntrySchema, AuditStatusSchema } from './audit'
@@ -163,6 +170,14 @@ export {
   SchemaSummarySchema,
 } from './catalog'
 export { COMMANDS, type CommandName } from './commands'
+export {
+  ColumnMappingSchema,
+  CsvImportDraftSchema,
+  CsvImportPreviewSchema,
+  CsvImportReadySchema,
+  CsvImportRequestSchema,
+  CsvOptionsSchema,
+} from './csv-import'
 export {
   ApplyStatusSchema,
   ChangeKindSchema,

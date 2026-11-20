@@ -12,6 +12,7 @@ use crate::errors::{AppError, AppResult, ErrorCode};
 use crate::services::approvals::Approvals;
 use crate::services::assistant::RunningTasks;
 use crate::services::catalog::CatalogCache;
+use crate::services::imports::Imports;
 use crate::services::sessions::Sessions;
 
 /// Directories the app owns on this device.
@@ -84,6 +85,7 @@ pub struct AppState {
     catalog: CatalogCache,
     assistant: RunningTasks,
     approvals: Approvals,
+    imports: Imports,
 }
 
 impl AppState {
@@ -97,6 +99,7 @@ impl AppState {
             catalog: CatalogCache::default(),
             assistant: RunningTasks::default(),
             approvals: Approvals::default(),
+            imports: Imports::default(),
         }
     }
 
@@ -110,6 +113,12 @@ impl AppState {
     #[must_use]
     pub fn approvals(&self) -> &Approvals {
         &self.approvals
+    }
+
+    /// Files read for import, held while they are mapped and reviewed.
+    #[must_use]
+    pub fn imports(&self) -> &Imports {
+        &self.imports
     }
 
     /// Assistant questions being answered, by task id.

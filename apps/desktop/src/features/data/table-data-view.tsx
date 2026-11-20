@@ -1,6 +1,7 @@
 import { useMemo, useState, type ReactNode } from 'react'
 import type {
   ConnectionId,
+  CsvImportDraft,
   Filter,
   ObjectName,
   ObjectSummary,
@@ -9,7 +10,7 @@ import type {
   TablePage,
 } from '@aidb/contracts'
 import { TABLE_DATA_LIMITS } from '@aidb/contracts'
-import { useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   useTable,
   type ColumnVisibilityState,
@@ -22,6 +23,7 @@ import {
   ChevronsLeftIcon,
   Columns3Icon,
   EyeOffIcon,
+  FileUpIcon,
   FilterIcon,
   InfoIcon,
   PencilLineIcon,
@@ -59,8 +61,10 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Spinner } from '@/components/ui/spinner'
 import { useMediaQuery } from '@/hooks/use-media-query'
 import { useActiveConnection } from '@/features/connections/sessions'
+import { closeCsvImport, openCsvImport } from '@/lib/commands'
 import { NativeError } from '@/lib/native'
 import { approximateCount } from './catalog-view'
+import { CsvImportDialog } from './csv-import-dialog'
 import { DataGrid } from './data-grid'
 import { editScope, useEditBuffer } from './edit-store'
 import {
@@ -206,6 +210,17 @@ export function TableDataView({
     items: ReviewItem[]
   } | null>(null)
   const [discarding, setDiscarding] = useState(false)
+  const [importing, setImporting] = useState<CsvImportDraft | null>(null)
+  // The core holds the file until the dialog closes (or the connection changes).
+  const closeImport = () => {
+    if (importing) closeCsvImport(importing.importId).catch(() => undefined)
+    setImporting(null)
+  }
+  const chooseFile = useMutation({
+    mutationFn: () => openCsvImport(connectionId, object),
+    onSuccess: (draft) => draft && setImporting(draft),
+    onError: (error) => toast.error(error instanceof Error ? error.message : String(error)),
+  })
   const counts = pendingCounts(buffer)
 
   const editorColumns = (row: number | null): EditorColumn[] =>
@@ -312,6 +327,22 @@ export function TableDataView({
           >
             <PlusIcon data-icon="inline-start" />
             Add row
+          </Button>
+        )}
+        {edit && !edit.blocked && (
+          <Button
+            variant="outline"
+            size="sm"
+            className="max-sm:min-h-11"
+            disabled={chooseFile.isPending}
+            onClick={() => chooseFile.mutate()}
+          >
+            {chooseFile.isPending ? (
+              <Spinner data-icon="inline-start" />
+            ) : (
+              <FileUpIcon data-icon="inline-start" />
+            )}
+            Import CSV
           </Button>
         )}
         {fetching && (
@@ -433,6 +464,26 @@ export function TableDataView({
             setReviewing(null)
             const rows = outcome.rowsAffected ?? 0
             toast.success(`Saved. ${rows === 1 ? '1 row' : `${rows} rows`} written.`)
+            void queryClient.invalidateQueries({
+              queryKey: ['tablePage', connectionId, object.schema, object.name],
+            })
+          }}
+          onReload={() => void result.refetch()}
+        />
+      )}
+      {active && details.data && (
+        <CsvImportDialog
+          open={importing !== null}
+          onOpenChange={(open) => !open && closeImport()}
+          connectionId={connectionId}
+          environment={active.environment}
+          object={object}
+          details={details.data}
+          draft={importing}
+          onImported={(_result, rows) => {
+            closeImport()
+            toast.success(`Imported ${rows === 1 ? '1 row' : `${rows.toLocaleString()} rows`}.`)
+            void queryClient.invalidateQueries({ queryKey: ['audit'] })
             void queryClient.invalidateQueries({
               queryKey: ['tablePage', connectionId, object.schema, object.name],
             })

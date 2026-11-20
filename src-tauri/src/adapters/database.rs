@@ -111,7 +111,8 @@ pub trait DatabaseSession: std::fmt::Debug + Send + Sync + 'static {
 
     /// Makes `changes` ready to run against the live tables, in one read-only transaction:
     /// writes each statement, counts the rows each UPDATE or DELETE matches (refusing more than
-    /// [`MAX_CHANGED_ROWS`](crate::domain::data_change::MAX_CHANGED_ROWS), alone or in all),
+    /// [`MAX_CHANGED_ROWS`](crate::domain::data_change::MAX_CHANGED_ROWS) for one change, or more
+    /// than `max_rows` written by all of them),
     /// and has the database convert every value to its column's type. With `preview`, also
     /// reads some of the rows the first changes match, as they are now. Nothing is written.
     /// Errors name the change they come from.
@@ -119,6 +120,7 @@ pub trait DatabaseSession: std::fmt::Debug + Send + Sync + 'static {
         &self,
         changes: &[DataChange],
         preview: Option<PageLimits>,
+        max_rows: u64,
     ) -> impl Future<Output = Result<Vec<DataChangePlan>, DbError>> + Send;
 
     /// Applies `changes` in one transaction, in order, only if each still plans to exactly its

@@ -6,4 +6,4 @@ import type { ObjectName } from "./ObjectName";
 /**
  * A change to a table's rows.
  */
-export type DataChange = { "kind": "insert", table: ObjectName, columns: Array<string>, rows: Array<Array<string | null>>, } | { "kind": "update", table: ObjectName, set: Array<ColumnValue>, filters: Array<Filter>, } | { "kind": "delete", table: ObjectName, filters: Array<Filter>, };
+export type DataChange = { "kind": "insert", table: ObjectName, columns: Array<string>, rows: Array<Array<string | null>>, upsertKey?: Array<string>, } | { "kind": "update", table: ObjectName, set: Array<ColumnValue>, filters: Array<Filter>, } | { "kind": "delete", table: ObjectName, filters: Array<Filter>, };

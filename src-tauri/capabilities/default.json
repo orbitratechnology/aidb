@@ -53,6 +53,10 @@
     "allow-preview-data-change",
     "allow-apply-data-change",
     "allow-cancel-data-change",
-    "allow-list-pending-changes"
+    "allow-list-pending-changes",
+    "allow-open-csv-import",
+    "allow-reread-csv-import",
+    "allow-preview-csv-import",
+    "allow-close-csv-import"
   ]
 }

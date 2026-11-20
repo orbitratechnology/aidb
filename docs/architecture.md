@@ -370,7 +370,8 @@ version they were given under.
 set of structured INSERT, UPDATE and DELETE changes into one checked write. A change is data,
 not SQL: a table, column names and values as text, and for UPDATE and DELETE the grid's filters
 (at least one, so a change never addresses a whole table by omission). A set holds 1 to 200
-changes, applied together, in order, under one approval and in one transaction. Limits: 1,000
+changes (a CSV import up to 2,000; see below), applied together, in order, under one approval
+and in one transaction. Limits: 1,000
 rows per INSERT, 200 columns, 10,000 values and 8 MB in all, 1 MB per value, and 10,000
 matching rows per UPDATE or DELETE and across the set. Errors name the change they come from
 ("Change 2 of 3: …").
@@ -409,6 +410,45 @@ matching rows per UPDATE or DELETE and across the set. Errors name the change th
   wait for the user like any other. The approvals registry keeps each data-change preview, so
   `list_pending_changes` can list what waits; the record of who proposed it (the assistant) is
   kept with the approval and in the audit detail of its outcome.
+
+### CSV import
+
+`domain::csv_import` and `services::imports` import a CSV file into one table through the same
+engine. `open_csv_import` shows the native dialog; the core reads the file (at most 64 MB,
+100,000 rows, 200 columns) and holds it in memory (`Imports`, at most 4 files, dropped when the
+dialog closes or the connection changes). The webview gets the file name, the column names, the
+first 10 rows (values cut at 2,000 characters), the row count and warnings, never the file.
+
+- **Detection**: a UTF-8 or UTF-16 byte-order mark decides the encoding; otherwise valid UTF-8
+  is UTF-8 and anything else is read as Windows-1252. Bytes the chosen encoding cannot decode
+  show as U+FFFD with a warning. The delimiter is the one of `,` `;` tab `|` that most often
+  splits the first 100 records into the same number of fields as the first (more than one); a
+  comma when none does. The first record is a header when its values are all filled in and
+  different and either one of them names a table column, or a column holds text there and
+  numbers in at least four of five records below. Each guess can be changed
+  (`reread_csv_import`); the offered encodings are a fixed list `encoding_rs` decodes. Blank
+  lines are skipped; shorter rows are padded with empty values, with a warning naming the first.
+- **Mapping**: each table column is filled from one file column or left out (it then gets its
+  default). File columns are suggested by name (ignoring case, spaces, underscores and dashes),
+  or by position when the file has no header and as many columns as the table. An empty value is
+  NULL, never the default.
+- **Check** (`preview_csv_import`): first the mapping is checked against the table without the
+  database: unknown or doubly filled columns, generated and `GENERATED ALWAYS` identity columns,
+  NOT NULL columns left out without a default or empty in some rows (named by row), and for an
+  upsert a key that is not the primary key or a unique constraint, is not mapped, is empty, or
+  leaves nothing to update. Then the rows become batches of INSERT changes (up to 1,000 rows,
+  10,000 values and 4 MB each) planned as one set with the import limits (2,000 changes,
+  5,000,000 values, 64 MB, 100,000 rows). A value the database refuses is traced to its row by
+  planning halves of the failing batch (planning only reads): "Row 1503: invalid input syntax
+  for type numeric". The preview shows the rows, batches, risk and reasons, the first rows as
+  they will be stored, and the first statement (cut at 2,000 characters). It is not listed with
+  pending changes; closing the dialog declines it.
+- **Upsert**: rows are only added unless the user picks a key to update by. The INSERT then gets
+  `ON CONFLICT (key) DO UPDATE SET c = EXCLUDED.c` for every other mapped column, and the core
+  checks again, from `pg_index` at planning time, that the key is the columns of a unique index
+  without a predicate or expressions.
+- **Apply**: `apply_data_change`, as for any other set: one transaction, every row or none. The
+  audit describes it as "Insert of 2,500 rows into public.items" (or "Insert or update of …").
 
 ## Audit log
 
@@ -660,6 +700,15 @@ Ask screen (8.3) drives it. The model proposes; Rust decides.
   database name typed. Closing without saving declines the approval. Applied: the buffer is
   cleared and the rows reload. Rolled back: the reason is shown and the changes stay pending.
   Uncertain: the user is told to reload and check.
+- **CSV import** (`csv-import-dialog.tsx`, `csv-import.ts`): "Import CSV" (beside "Add row")
+  opens the native file dialog, then a dialog with the file's encoding, separator and header
+  choice (each change re-reads the file in the core), the first rows, one select per table
+  column (generated and identity columns disabled with the reason, NOT NULL columns without a
+  default marked "Required"), and "Rows already in the table": "Add rows only" (default) or
+  "Add, or update rows with the same <key>" for the primary key and each unique constraint.
+  "Check the import" shows what to fix, or the check: environment, risk and reasons, rows and
+  statements, the first rows as stored, the SQL on request, and the typed database name when
+  elevated. Any change after a check declines it. Applied: a toast, the rows reload.
 - **AI providers** (Settings › AI providers): "Use the AI assistant" (off by default) with a
   provider picker; the `ai` settings section stores the switch and the chosen profile, the core
   refuses to turn AI on without an existing provider, and deleting that provider turns AI off.

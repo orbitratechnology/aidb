@@ -405,6 +405,7 @@ impl DatabaseSession for FakeSession {
         &self,
         changes: &[DataChange],
         preview: Option<PageLimits>,
+        _max_rows: u64,
     ) -> Result<Vec<DataChangePlan>, DbError> {
         let mut plans = Vec::with_capacity(changes.len());
         for change in changes {

@@ -8,7 +8,7 @@
 //! invalidates it. Tokens are random, kept only as a digest, single-use and short-lived.
 
 use std::collections::HashMap;
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use ring::rand::{SecureRandom, SystemRandom};
 use secrecy::{ExposeSecret, SecretString};
@@ -22,7 +22,9 @@ use crate::adapters::database::{DatabaseAdapter, DatabaseSession};
 use crate::adapters::local_store::LocalStore;
 use crate::domain::audit::{Actor, AuditEvent, AuditStatus};
 use crate::domain::connections::{ConnectionId, Environment};
-use crate::domain::data_change::{DataChange, DataChangePlan, DataChangePreview, PendingChange};
+use crate::domain::data_change::{
+    DataChange, DataChangePlan, DataChangePreview, PendingChange, SetLimits,
+};
 use crate::domain::policy::approval::{
     APPROVAL_TTL, ApprovalError, ApprovalId, ApprovalState, Binding, BindingContext,
     MAX_OPEN_APPROVALS, PENDING_TTL, hex, needs_typed_confirmation, sha256_hex,
@@ -64,7 +66,11 @@ pub enum Subject {
     },
     /// Changes to tables' rows, applied together; their statements are written from the live
     /// tables.
-    DataChanges(Vec<DataChange>),
+    DataChanges {
+        /// Shared, not copied: an import holds many rows.
+        changes: Arc<Vec<DataChange>>,
+        limits: SetLimits,
+    },
 }
 
 /// What the execution layer gets for a valid token: the approval to report the outcome to,
@@ -166,7 +172,7 @@ impl Approvals {
                     && connection_id.is_none_or(|id| id == entry.connection_id)
             })
             .filter_map(|entry| {
-                let Subject::DataChanges(changes) = &entry.subject else {
+                let Subject::DataChanges { changes, .. } = &entry.subject else {
                     return None;
                 };
                 let preview = entry.preview.clone()?;
@@ -176,7 +182,7 @@ impl Approvals {
                         connection_id: entry.connection_id,
                         actor: entry.actor,
                         preview,
-                        changes: changes.clone(),
+                        changes: changes.as_ref().clone(),
                     },
                 ))
             })
@@ -187,10 +193,13 @@ impl Approvals {
 
     /// The data changes an open approval is for, its connection, and who asked for it.
     #[must_use]
-    pub fn data_changes(&self, id: ApprovalId) -> Option<(ConnectionId, Vec<DataChange>, Actor)> {
+    pub fn data_changes(
+        &self,
+        id: ApprovalId,
+    ) -> Option<(ConnectionId, Arc<Vec<DataChange>>, Actor)> {
         self.lock().get(&id).and_then(|entry| match &entry.subject {
-            Subject::DataChanges(changes) => {
-                Some((entry.connection_id, changes.clone(), entry.actor))
+            Subject::DataChanges { changes, .. } => {
+                Some((entry.connection_id, Arc::clone(changes), entry.actor))
             }
             Subject::Sql { .. } => None,
         })
@@ -274,9 +283,9 @@ async fn bind<A: DatabaseAdapter>(
                 Vec::new(),
             )
         }
-        Subject::DataChanges(changes) => {
+        Subject::DataChanges { changes, limits } => {
             let plans = session
-                .plan_data_changes(changes, preview)
+                .plan_data_changes(changes, preview, limits.max_rows)
                 .await
                 .map_err(AppError::from)?;
             let statements: Vec<(&str, u64)> = plans
@@ -380,6 +389,13 @@ pub async fn request<A: DatabaseAdapter>(
     .map(|(request, _)| request)
 }
 
+/// Data changes applied together, and the limits the set is held to.
+#[derive(Debug, Clone)]
+pub struct ChangeSet {
+    pub changes: Arc<Vec<DataChange>>,
+    pub limits: SetLimits,
+}
+
 /// Prepares data changes, applied together, for approval on the open connection, and returns
 /// their plans with some of the rows the first ones match (read with `preview`), for the user to
 /// review.
@@ -393,7 +409,7 @@ pub async fn request_data_changes<A: DatabaseAdapter>(
     sessions: &Sessions<A>,
     approvals: &Approvals,
     connection_id: ConnectionId,
-    changes: Vec<DataChange>,
+    set: ChangeSet,
     preview: PageLimits,
     actor: Actor,
 ) -> AppResult<(ApprovalRequest, Vec<DataChangePlan>)> {
@@ -402,7 +418,10 @@ pub async fn request_data_changes<A: DatabaseAdapter>(
         sessions,
         approvals,
         connection_id,
-        Subject::DataChanges(changes),
+        Subject::DataChanges {
+            changes: set.changes,
+            limits: set.limits,
+        },
         Some(preview),
         actor,
     )

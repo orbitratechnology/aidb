@@ -359,6 +359,7 @@ async fn inserts_count_their_rows_and_show_their_values() {
         table: orders(),
         columns: vec!["id".into(), "note".into()],
         rows,
+        upsert_key: None,
     };
     let preview = setup.preview(insert).await.expect("preview");
     assert_eq!(preview.rows, 150);
@@ -486,4 +487,27 @@ async fn proposals_wait_in_a_list_until_decided() {
     setup.preview(ship()).await.expect("preview");
     setup.approvals.invalidate_connection(setup.id);
     assert!(pending(&setup.approvals, None).is_empty());
+}
+
+#[test]
+fn rows_added_to_one_table_are_described_by_count() {
+    let insert = |rows: usize, upsert_key: Option<Vec<String>>| DataChange::Insert {
+        table: orders(),
+        columns: vec!["id".into()],
+        rows: vec![vec![Some("1".into())]; rows],
+        upsert_key,
+    };
+    assert_eq!(
+        describe(&[insert(1, None)]),
+        "Insert of 1 row into public.orders"
+    );
+    assert_eq!(
+        describe(&[insert(2, None), insert(3, None)]),
+        "Insert of 5 rows into public.orders"
+    );
+    assert_eq!(
+        describe(&[insert(2, Some(vec!["id".into()]))]),
+        "Insert or update of 2 rows into public.orders"
+    );
+    assert_eq!(describe(&[ship()]), "Update of public.orders");
 }

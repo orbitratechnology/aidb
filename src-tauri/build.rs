@@ -50,6 +50,10 @@ const COMMANDS: &[&str] = &[
     "apply_data_change",
     "cancel_data_change",
     "list_pending_changes",
+    "open_csv_import",
+    "reread_csv_import",
+    "preview_csv_import",
+    "close_csv_import",
 ];
 
 fn main() {

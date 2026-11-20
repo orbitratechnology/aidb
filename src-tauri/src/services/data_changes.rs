@@ -2,6 +2,8 @@
 //! held for approval; applying it approves and uses that approval inside the core (no token is
 //! ever issued), then runs the changes in one checked transaction and records the outcome.
 
+use std::sync::Arc;
+
 use super::approvals::{self, Approvals};
 use super::audit;
 use super::sessions::{Sessions, not_connected};
@@ -12,8 +14,9 @@ use crate::adapters::local_store::LocalStore;
 use crate::domain::audit::{Actor, AuditEvent, AuditStatus};
 use crate::domain::connections::ConnectionId;
 use crate::domain::data_change::{
-    ApplyStatus, ChangeKind, DataChange, DataChangePreview, DataChangeResult, PREVIEW_BYTES,
-    PREVIEW_ROWS, PendingChange, PlannedChange, ValueSample, validate_set,
+    ApplyStatus, ChangeKind, DataChange, DataChangePreview, DataChangeResult, EDIT_LIMITS,
+    PREVIEW_BYTES, PREVIEW_ROWS, PendingChange, PlannedChange, SetLimits, ValueSample,
+    validate_set,
 };
 use crate::domain::policy::approval::{ApprovalError, ApprovalId, ApprovalState, sha256_hex};
 use crate::domain::policy::classify::RiskAssessment;
@@ -25,19 +28,45 @@ const PREVIEW_LIMITS: PageLimits = PageLimits {
     max_bytes: PREVIEW_BYTES,
 };
 
-/// What a set of changes does, for the audit log: "Update of public.orders", or "3 changes to
-/// public.orders: 2 updates, 1 delete".
+/// What a set of changes does, for the audit log: "Update of public.orders", "Insert of 3 rows
+/// into public.orders", or "3 changes to public.orders: 2 updates, 1 delete".
 fn describe(changes: &[DataChange]) -> String {
     let name = |change: &DataChange| {
         let table = change.table();
         format!("{}.{}", table.schema, table.name)
     };
-    if let [change] = changes {
-        return format!("{} of {}", change.kind().label(), name(change));
-    }
     let mut tables: Vec<String> = changes.iter().map(name).collect();
     tables.sort();
     tables.dedup();
+    // Rows added to one table (an import is batches of them), counted; an upsert says so.
+    if let [table] = tables.as_slice() {
+        let mut rows = 0;
+        let mut upsert = false;
+        let inserts = changes.iter().all(|change| match change {
+            DataChange::Insert {
+                rows: values,
+                upsert_key,
+                ..
+            } => {
+                rows += values.len();
+                upsert |= upsert_key.is_some();
+                true
+            }
+            _ => false,
+        });
+        if inserts {
+            let verb = if upsert { "Insert or update" } else { "Insert" };
+            let rows = if rows == 1 {
+                "1 row".to_owned()
+            } else {
+                format!("{rows} rows")
+            };
+            return format!("{verb} of {rows} into {table}");
+        }
+    }
+    if let [change] = changes {
+        return format!("{} of {}", change.kind().label(), name(change));
+    }
     let parts: Vec<String> = [
         (ChangeKind::Update, "update", "updates"),
         (ChangeKind::Delete, "delete", "deletes"),
@@ -105,7 +134,47 @@ pub async fn preview<A: DatabaseAdapter>(
     changes: Vec<DataChange>,
     actor: Actor,
 ) -> AppResult<DataChangePreview> {
-    validate_set(&changes)?;
+    let options = PreviewOptions {
+        limits: EDIT_LIMITS,
+        listed: true,
+    };
+    preview_with(
+        store,
+        sessions,
+        approvals,
+        connection_id,
+        changes,
+        actor,
+        options,
+    )
+    .await
+}
+
+/// How a set of changes is held for approval.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct PreviewOptions {
+    pub limits: SetLimits,
+    /// Listed among the changes waiting for review (not for a review dialog's own changes,
+    /// such as an import's batches).
+    pub listed: bool,
+}
+
+/// As [`preview`], with the limits and listing given.
+///
+/// # Errors
+///
+/// As [`preview`].
+pub(crate) async fn preview_with<A: DatabaseAdapter>(
+    store: &LocalStore,
+    sessions: &Sessions<A>,
+    approvals: &Approvals,
+    connection_id: ConnectionId,
+    changes: Vec<DataChange>,
+    actor: Actor,
+    options: PreviewOptions,
+) -> AppResult<DataChangePreview> {
+    validate_set(&changes, options.limits)?;
+    let changes = Arc::new(changes);
     let fingerprint = serde_json::to_vec(&changes)
         .map(|json| sha256_hex(&json))
         .ok();
@@ -115,7 +184,10 @@ pub async fn preview<A: DatabaseAdapter>(
         sessions,
         approvals,
         connection_id,
-        changes.clone(),
+        approvals::ChangeSet {
+            changes: Arc::clone(&changes),
+            limits: options.limits,
+        },
         PREVIEW_LIMITS,
         actor,
     )
@@ -171,7 +243,9 @@ pub async fn preview<A: DatabaseAdapter>(
         confirmation: request.confirmation,
         expires_at: request.expires_at,
     };
-    approvals.keep_preview(&preview);
+    if options.listed {
+        approvals.keep_preview(&preview);
+    }
     Ok(preview)
 }
 

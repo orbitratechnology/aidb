@@ -16,7 +16,7 @@ use serde_json::{Value, json};
 use super::risk::RiskLevel;
 use crate::domain::ai::{ToolCall, ToolInput, ToolSpec};
 use crate::domain::catalog::ObjectName;
-use crate::domain::data_change::{ColumnValue, DataChange, validate_set};
+use crate::domain::data_change::{ColumnValue, DataChange, EDIT_LIMITS, validate_set};
 use crate::domain::sql::{self, StatementKind};
 use crate::domain::table_data::{Filter, FilterOperator};
 
@@ -385,6 +385,7 @@ impl ProposedChangeInput {
                     table,
                     columns: self.columns.ok_or_else(|| missing("columns", "insert"))?,
                     rows: self.rows.ok_or_else(|| missing("rows", "insert"))?,
+                    upsert_key: None,
                 })
             }
             ProposedKind::Update => {
@@ -676,7 +677,8 @@ pub fn parse(call: &ToolCall) -> Result<ToolInvocation, ToolCallError> {
                 .map(|(index, change)| change.into_change(index + 1))
                 .collect::<Result<Vec<_>, _>>()?;
             // The same checks as the grid's: filters for updates and deletes, sizes, NULs.
-            validate_set(&changes).map_err(|error| ToolCallError::NotAllowed(error.to_string()))?;
+            validate_set(&changes, EDIT_LIMITS)
+                .map_err(|error| ToolCallError::NotAllowed(error.to_string()))?;
             Ok(ToolInvocation::PreviewDataChange(ChangeProposal {
                 purpose,
                 changes,

@@ -35,6 +35,32 @@ pub const MAX_CHANGED_ROWS: u64 = 10_000;
 pub const MAX_SET_CHANGES: usize = 200;
 /// Changes whose matching rows a preview reads as they are now; later ones show counts only.
 pub const PREVIEW_CHANGES: usize = 20;
+/// Limits on a set of changes applied together.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SetLimits {
+    pub max_changes: usize,
+    pub max_values: usize,
+    pub max_bytes: usize,
+    /// Rows written by all the changes together.
+    pub max_rows: u64,
+}
+
+/// Limits for edits made in the grid or proposed by the assistant.
+pub const EDIT_LIMITS: SetLimits = SetLimits {
+    max_changes: MAX_SET_CHANGES,
+    max_values: MAX_CHANGE_VALUES,
+    max_bytes: MAX_CHANGE_BYTES,
+    max_rows: MAX_CHANGED_ROWS,
+};
+
+/// Limits for a file imported in batches of inserts.
+pub const IMPORT_LIMITS: SetLimits = SetLimits {
+    max_changes: 2_000,
+    max_values: 5_000_000,
+    max_bytes: 64 * 1024 * 1024,
+    max_rows: 100_000,
+};
+
 /// Rows shown in a preview, before and after.
 pub const PREVIEW_ROWS: u32 = 20;
 /// Size limit of the "before" rows read for a preview.
@@ -87,11 +113,15 @@ pub struct ColumnValue {
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum DataChange {
     /// Adds `rows`, each with one value per entry of `columns`. Columns left out get their
-    /// defaults.
+    /// defaults. With `upsert_key`, a row whose key (a primary key or unique constraint) already
+    /// exists updates that row's other given columns instead.
     Insert {
         table: ObjectName,
         columns: Vec<String>,
         rows: Vec<Vec<Option<String>>>,
+        #[serde(default, rename = "upsertKey", skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(test, ts(optional))]
+        upsert_key: Option<Vec<String>>,
     },
     /// Sets columns in every row matching all `filters`.
     Update {
@@ -130,7 +160,7 @@ pub enum ChangeError {
     TooManyValues,
     #[error("A value can be at most {} MB.", MAX_VALUE_BYTES / (1024 * 1024))]
     ValueTooLarge,
-    #[error("A change can hold at most {} MB of values.", MAX_CHANGE_BYTES / (1024 * 1024))]
+    #[error("The values are too large to change at once.")]
     ChangeTooLarge,
     #[error("Values cannot contain NUL characters.")]
     NulInValue,
@@ -138,8 +168,12 @@ pub enum ChangeError {
     Filter(#[from] RequestError),
     #[error("Add at least one change.")]
     NoChanges,
-    #[error("Apply at most {MAX_SET_CHANGES} changes at once.")]
-    TooManyChanges,
+    #[error("Apply at most {0} changes at once.")]
+    TooManyChanges(usize),
+    #[error("The key to update by must be a list of the inserted columns, each once.")]
+    BadUpsertKey,
+    #[error("An update by key needs at least one inserted column that is not part of the key.")]
+    UpsertUpdatesNothing,
     #[error("Change {0} of {1}: {2}")]
     InChange(usize, usize, Box<ChangeError>),
 }
@@ -195,8 +229,27 @@ impl DataChange {
     /// The first problem found.
     pub fn validate(&self) -> Result<(), ChangeError> {
         match self {
-            Self::Insert { columns, rows, .. } => {
+            Self::Insert {
+                columns,
+                rows,
+                upsert_key,
+                ..
+            } => {
                 check_columns(columns.iter().map(String::as_str), "insert")?;
+                if let Some(key) = upsert_key {
+                    let mut unique = key.clone();
+                    unique.sort();
+                    unique.dedup();
+                    if key.is_empty()
+                        || unique.len() != key.len()
+                        || key.iter().any(|column| !columns.contains(column))
+                    {
+                        return Err(ChangeError::BadUpsertKey);
+                    }
+                    if columns.iter().all(|column| key.contains(column)) {
+                        return Err(ChangeError::UpsertUpdatesNothing);
+                    }
+                }
                 if rows.is_empty() {
                     return Err(ChangeError::NoRows);
                 }
@@ -213,11 +266,11 @@ impl DataChange {
                 if rows.len() * columns.len() > MAX_CHANGE_VALUES {
                     return Err(ChangeError::TooManyValues);
                 }
-                check_values(rows.iter().flatten())
+                check_values(rows.iter().flatten(), MAX_CHANGE_BYTES)
             }
             Self::Update { set, filters, .. } => {
                 check_columns(set.iter().map(|value| value.column.as_str()), "update")?;
-                check_values(set.iter().map(|value| &value.value))?;
+                check_values(set.iter().map(|value| &value.value), MAX_CHANGE_BYTES)?;
                 check_filters(filters, "An UPDATE")
             }
             Self::Delete { filters, .. } => check_filters(filters, "A DELETE"),
@@ -230,12 +283,12 @@ impl DataChange {
 /// # Errors
 ///
 /// The first problem found, naming the change when there are several.
-pub fn validate_set(changes: &[DataChange]) -> Result<(), ChangeError> {
+pub fn validate_set(changes: &[DataChange], limits: SetLimits) -> Result<(), ChangeError> {
     if changes.is_empty() {
         return Err(ChangeError::NoChanges);
     }
-    if changes.len() > MAX_SET_CHANGES {
-        return Err(ChangeError::TooManyChanges);
+    if changes.len() > limits.max_changes {
+        return Err(ChangeError::TooManyChanges(limits.max_changes));
     }
     let total = changes.len();
     for (index, change) in changes.iter().enumerate() {
@@ -248,10 +301,10 @@ pub fn validate_set(changes: &[DataChange]) -> Result<(), ChangeError> {
         })?;
     }
     let values = || changes.iter().flat_map(DataChange::values);
-    if values().count() > MAX_CHANGE_VALUES {
+    if values().count() > limits.max_values {
         return Err(ChangeError::TooManyValues);
     }
-    check_values(values())
+    check_values(values(), limits.max_bytes)
 }
 
 fn check_columns<'a>(
@@ -272,7 +325,10 @@ fn check_columns<'a>(
     Ok(())
 }
 
-fn check_values<'a>(values: impl Iterator<Item = &'a Option<String>>) -> Result<(), ChangeError> {
+fn check_values<'a>(
+    values: impl Iterator<Item = &'a Option<String>>,
+    max_bytes: usize,
+) -> Result<(), ChangeError> {
     let mut total = 0_usize;
     for value in values.flatten() {
         if value.len() > MAX_VALUE_BYTES {
@@ -282,7 +338,7 @@ fn check_values<'a>(values: impl Iterator<Item = &'a Option<String>>) -> Result<
             return Err(ChangeError::NulInValue);
         }
         total += value.len();
-        if total > MAX_CHANGE_BYTES {
+        if total > max_bytes {
             return Err(ChangeError::ChangeTooLarge);
         }
     }
@@ -513,6 +569,7 @@ mod tests {
             table: table(),
             columns: columns.iter().map(|c| (*c).to_owned()).collect(),
             rows,
+            upsert_key: None,
         };
         let row = |values: &[&str]| values.iter().map(|v| Some((*v).to_owned())).collect();
         assert_eq!(
@@ -574,8 +631,64 @@ mod tests {
             table: table(),
             columns: vec!["note".into()],
             rows: vec![vec![big]; 9],
+            upsert_key: None,
         };
         assert_eq!(insert.validate(), Err(ChangeError::ChangeTooLarge));
+    }
+
+    #[test]
+    fn upserts_name_a_key_among_the_inserted_columns() {
+        let upsert = |key: Vec<&str>| DataChange::Insert {
+            table: table(),
+            columns: vec!["id".into(), "name".into()],
+            rows: vec![vec![Some("1".into()), Some("a".into())]],
+            upsert_key: Some(key.into_iter().map(Into::into).collect()),
+        };
+        assert_eq!(upsert(vec!["id"]).validate(), Ok(()));
+        assert_eq!(upsert(vec![]).validate(), Err(ChangeError::BadUpsertKey));
+        assert_eq!(
+            upsert(vec!["sku"]).validate(),
+            Err(ChangeError::BadUpsertKey)
+        );
+        assert_eq!(
+            upsert(vec!["id", "id"]).validate(),
+            Err(ChangeError::BadUpsertKey)
+        );
+        assert_eq!(
+            upsert(vec!["id", "name"]).validate(),
+            Err(ChangeError::UpsertUpdatesNothing)
+        );
+        // Sent only when set.
+        let json = serde_json::to_value(upsert(vec!["id"])).expect("json");
+        assert_eq!(json["upsertKey"], serde_json::json!(["id"]));
+        let plain: DataChange = serde_json::from_value(serde_json::json!({
+            "kind": "insert", "table": {"schema": "public", "name": "orders"},
+            "columns": ["id"], "rows": [["1"]]
+        }))
+        .expect("parses");
+        assert!(
+            serde_json::to_value(plain)
+                .expect("json")
+                .get("upsertKey")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn imports_get_larger_limits() {
+        let rows: Vec<Vec<Option<String>>> = vec![vec![Some("1".into())]; MAX_INSERT_ROWS];
+        let batch = DataChange::Insert {
+            table: table(),
+            columns: vec!["id".into()],
+            rows,
+            upsert_key: None,
+        };
+        let batches = vec![batch; 50];
+        assert_eq!(
+            validate_set(&batches, EDIT_LIMITS),
+            Err(ChangeError::TooManyValues)
+        );
+        assert_eq!(validate_set(&batches, IMPORT_LIMITS), Ok(()));
     }
 
     #[test]
@@ -606,13 +719,19 @@ mod tests {
             table: table(),
             filters,
         };
-        assert_eq!(validate_set(&[]), Err(ChangeError::NoChanges));
+        assert_eq!(validate_set(&[], EDIT_LIMITS), Err(ChangeError::NoChanges));
         assert_eq!(
-            validate_set(&vec![delete(vec![equals("id", "1")]); MAX_SET_CHANGES + 1]),
-            Err(ChangeError::TooManyChanges)
+            validate_set(
+                &vec![delete(vec![equals("id", "1")]); MAX_SET_CHANGES + 1],
+                EDIT_LIMITS
+            ),
+            Err(ChangeError::TooManyChanges(MAX_SET_CHANGES))
         );
         assert_eq!(
-            validate_set(&[delete(vec![equals("id", "1")]), delete(Vec::new())]),
+            validate_set(
+                &[delete(vec![equals("id", "1")]), delete(Vec::new())],
+                EDIT_LIMITS
+            ),
             Err(ChangeError::InChange(
                 2,
                 2,
@@ -620,7 +739,7 @@ mod tests {
             ))
         );
         assert_eq!(
-            validate_set(&[delete(Vec::new())]),
+            validate_set(&[delete(Vec::new())], EDIT_LIMITS),
             Err(ChangeError::NoFilter("A DELETE")),
             "a single change needs no number"
         );
@@ -636,7 +755,7 @@ mod tests {
             filters: vec![equals("id", "1")],
         };
         assert_eq!(
-            validate_set(&vec![update; 9]),
+            validate_set(&vec![update; 9], EDIT_LIMITS),
             Err(ChangeError::ChangeTooLarge)
         );
     }

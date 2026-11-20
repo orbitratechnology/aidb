@@ -98,7 +98,7 @@ fn updates_bind_values_then_filter_values_with_server_quoted_names() {
     // The test helper quotes the odd name as the server would.
     let mut columns = columns();
     columns[1].quoted = r#""Note ""x""""#.into();
-    let built = build(&change, &target(columns)).expect("builds");
+    let built = build(&change, &target(columns), &[]).expect("builds");
     assert_eq!(
         built.statement,
         r#"UPDATE public."Order Items" SET "Note ""x""" = CAST($1 AS character varying), qty = CAST($2 AS integer) WHERE id = CAST($3 AS pg_catalog.int4) AND ("Note ""x""")::text ILIKE $4 RETURNING ("Note ""x""")::text, (qty)::text"#
@@ -141,8 +141,9 @@ fn inserts_cast_every_value_and_return_what_was_stored() {
             vec![Some("1".into()), Some("2".into())],
             vec![Some("3".into()), None],
         ],
+        upsert_key: None,
     };
-    let built = build(&change, &target(columns())).expect("builds");
+    let built = build(&change, &target(columns()), &[]).expect("builds");
     assert_eq!(
         built.statement,
         r#"INSERT INTO public."Order Items" (id, qty) VALUES (CAST($1 AS integer), CAST($2 AS integer)), (CAST($3 AS integer), CAST($4 AS integer)) RETURNING (id)::text, (qty)::text"#
@@ -169,7 +170,7 @@ fn deletes_need_only_the_filter() {
             value: None,
         }],
     };
-    let built = build(&change, &target(columns())).expect("builds");
+    let built = build(&change, &target(columns()), &[]).expect("builds");
     assert_eq!(
         built.statement,
         r#"DELETE FROM public."Order Items" WHERE qty IS NULL"#
@@ -211,7 +212,7 @@ fn columns_the_database_fills_or_the_role_cannot_write_are_refused() {
         ("missing", DbErrorKind::InvalidRequest, "has no column"),
     ];
     for (name, kind, text) in cases {
-        let error = build(&update(name), &target).expect_err(name);
+        let error = build(&update(name), &target, &[]).expect_err(name);
         assert_eq!(error.kind(), kind, "{name}");
         assert!(
             error.message().contains(text),
@@ -229,7 +230,7 @@ fn views_are_not_written() {
         table: table(),
         filters: vec![equals("id", "1")],
     };
-    let error = build(&change, &view).expect_err("a view");
+    let error = build(&change, &view, &[]).expect_err("a view");
     assert!(error.message().contains("not a table"));
 }
 
@@ -250,4 +251,27 @@ fn only_string_and_bit_modifiers_are_checked() {
         Some("(v.c0 IS NULL OR CAST(v.c0 AS \"bit\")::text = CAST(v.c0 AS bit(3))::text)::text")
     );
     assert_eq!(modifier_check(&column("id", "id"), "v.c0"), None);
+}
+
+#[test]
+fn upserts_update_the_other_columns_on_a_real_key() {
+    let change = DataChange::Insert {
+        table: table(),
+        columns: vec!["qty".into(), "id".into()],
+        rows: vec![vec![Some("2".into()), Some("1".into())]],
+        upsert_key: Some(vec!["id".into()]),
+    };
+    let built = build(&change, &target(columns()), &[vec!["id".to_owned()]]).expect("builds");
+    assert_eq!(
+        built.statement,
+        r#"INSERT INTO public."Order Items" (qty, id) VALUES (CAST($1 AS integer), CAST($2 AS integer)) ON CONFLICT (id) DO UPDATE SET qty = EXCLUDED.qty RETURNING (qty)::text, (id)::text"#
+    );
+    // A key the table does not have is refused before anything runs.
+    let error =
+        build(&change, &target(columns()), &[vec!["qty".to_owned()]]).expect_err("not a key");
+    assert!(
+        error
+            .message()
+            .contains("not a primary key or unique constraint")
+    );
 }

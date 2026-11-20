@@ -52,6 +52,10 @@ export const COMMANDS = {
   applyDataChange: 'apply_data_change',
   cancelDataChange: 'cancel_data_change',
   listPendingChanges: 'list_pending_changes',
+  openCsvImport: 'open_csv_import',
+  rereadCsvImport: 'reread_csv_import',
+  previewCsvImport: 'preview_csv_import',
+  closeCsvImport: 'close_csv_import',
 } as const
 
 export type CommandName = (typeof COMMANDS)[keyof typeof COMMANDS]

@@ -10,6 +10,8 @@ import {
   ConnectionTestReportSchema,
   ContextPreviewSchema,
   CredentialBackendSchema,
+  CsvImportDraftSchema,
+  CsvImportPreviewSchema,
   DataChangePreviewSchema,
   DataChangeResultSchema,
   PendingChangeSchema,
@@ -45,6 +47,10 @@ import {
   type ConnectionTestReport,
   type ContextPreview,
   type CredentialBackend,
+  type CsvImportDraft,
+  type CsvImportPreview,
+  type CsvImportRequest,
+  type CsvOptions,
   type DataChange,
   type DataChangePreview,
   type DataChangeResult,
@@ -424,6 +430,46 @@ export function applyDataChange(
 /** Declines previewed changes. */
 export function cancelDataChange(approvalId: string): Promise<void> {
   return callCommand(COMMANDS.cancelDataChange, z.null(), { approvalId }).then(() => undefined)
+}
+
+/**
+ * Asks for a CSV file to import into `table`. The core reads it, detects how it is written and
+ * holds it; the webview gets a sample. Null when the user closes the file dialog.
+ */
+export function openCsvImport(
+  connectionId: ConnectionId,
+  table: ObjectName,
+): Promise<CsvImportDraft | null> {
+  return callCommand(COMMANDS.openCsvImport, CsvImportDraftSchema.nullable(), {
+    connectionId,
+    table,
+  })
+}
+
+/** Reads an open import's file again with another encoding, delimiter or header choice. */
+export function rereadCsvImport(importId: string, options: CsvOptions): Promise<CsvImportDraft> {
+  return callCommand(COMMANDS.rereadCsvImport, CsvImportDraftSchema, { importId, options })
+}
+
+/**
+ * Checks the mapping and plans the import against the live table. Either lists what to fix or
+ * holds the import for approval; apply it with `applyDataChange`.
+ */
+export function previewCsvImport(
+  connectionId: ConnectionId,
+  importId: string,
+  request: CsvImportRequest,
+): Promise<CsvImportPreview> {
+  return callCommand(COMMANDS.previewCsvImport, CsvImportPreviewSchema, {
+    connectionId,
+    importId,
+    request,
+  })
+}
+
+/** Forgets an open import's file. */
+export function closeCsvImport(importId: string): Promise<void> {
+  return callCommand(COMMANDS.closeCsvImport, z.null(), { importId }).then(() => undefined)
 }
 
 /** Data changes waiting for the user's decision (the assistant's proposals among them). */

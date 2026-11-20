@@ -80,7 +80,11 @@ pub(crate) fn handler<R: Runtime>() -> impl Fn(Invoke<R>) -> bool + Send + Sync 
         data_changes::preview_data_change,
         data_changes::apply_data_change,
         data_changes::cancel_data_change,
-        data_changes::list_pending_changes
+        data_changes::list_pending_changes,
+        data_changes::open_csv_import,
+        data_changes::reread_csv_import,
+        data_changes::preview_csv_import,
+        data_changes::close_csv_import
     ]
 }
 

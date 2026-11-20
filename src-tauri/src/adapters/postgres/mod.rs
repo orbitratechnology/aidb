@@ -294,10 +294,13 @@ impl DatabaseSession for PgSession {
         &self,
         changes: &[DataChange],
         preview: Option<PageLimits>,
+        max_rows: u64,
     ) -> Result<Vec<DataChangePlan>, DbError> {
         let mut connection = self.begin_operation(OperationId::new()).await?;
-        let mut plans =
-            data_change::plan(&mut connection, changes, |e| self.session_error(e)).await?;
+        let mut plans = data_change::plan(&mut connection, changes, max_rows, |e| {
+            self.session_error(e)
+        })
+        .await?;
         let Some(limits) = preview else {
             return Ok(plans);
         };

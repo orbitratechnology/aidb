@@ -37,6 +37,7 @@ export const DataChangeSchema = z.discriminatedUnion('kind', [
     table: ObjectNameSchema,
     columns: z.array(z.string()).min(1).max(DATA_CHANGE_LIMITS.maxChangeColumns),
     rows: z.array(z.array(ValueSchema)).min(1).max(DATA_CHANGE_LIMITS.maxInsertRows),
+    upsertKey: z.array(z.string()).min(1).optional(),
   }),
   z.object({
     kind: z.literal('update'),

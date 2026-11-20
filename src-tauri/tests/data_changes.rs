@@ -12,10 +12,11 @@ use aidb_lib::domain::audit::{Actor, AuditFilter};
 use aidb_lib::domain::catalog::ObjectName;
 use aidb_lib::domain::connections::Environment;
 use aidb_lib::domain::data_change::{
-    ApplyStatus, ColumnValue, DataChange, DataChangePreview, DataChangeResult, PREVIEW_BYTES,
-    PREVIEW_ROWS,
+    ApplyStatus, ColumnValue, DataChange, DataChangePreview, DataChangeResult, EDIT_LIMITS,
+    PREVIEW_BYTES, PREVIEW_ROWS,
 };
 use aidb_lib::domain::database::OperationId;
+use aidb_lib::domain::policy::approval::ApprovalId;
 use aidb_lib::domain::policy::risk::{ApprovalLevel, RiskLevel};
 use aidb_lib::domain::table_data::{Filter, FilterOperator, PageLimits};
 use aidb_lib::errors::{AppResult, ErrorCode};
@@ -221,6 +222,7 @@ async fn changes_are_previewed_applied_and_verified() {
                 ]),
                 row(&[Some("5"), Some("C2"), None, None, None, None, None]),
             ],
+            upsert_key: None,
         })
         .await
         .expect("preview");
@@ -404,7 +406,7 @@ async fn changes_since_the_preview_are_never_applied() {
         .get(changes.workspace.connection_id)
         .expect("open");
     let plans = session
-        .plan_data_changes(std::slice::from_ref(&retire), None)
+        .plan_data_changes(std::slice::from_ref(&retire), None, EDIT_LIMITS.max_rows)
         .await
         .expect("plan");
     database
@@ -474,6 +476,7 @@ async fn read_only_and_production_connections_are_guarded() {
                 max_rows: PREVIEW_ROWS,
                 max_bytes: PREVIEW_BYTES,
             }),
+            EDIT_LIMITS.max_rows,
         )
         .await
         .expect("planning only reads");
@@ -537,6 +540,7 @@ async fn sets_apply_together_or_not_at_all() {
                 table: table("items"),
                 columns: vec!["id".into(), "code".into()],
                 rows: vec![row(&[Some("7"), Some("G7")])],
+                upsert_key: None,
             },
         ])
         .await
@@ -573,6 +577,7 @@ async fn sets_apply_together_or_not_at_all() {
                 table: table("items"),
                 columns: vec!["id".into(), "code".into()],
                 rows: vec![row(&[Some("8"), Some("A2")])],
+                upsert_key: None,
             },
         ])
         .await
@@ -632,4 +637,301 @@ async fn sets_apply_together_or_not_at_all() {
 
     changes.workspace.close().await;
     database.drop().await;
+}
+
+mod imports {
+    use aidb_lib::domain::csv_import::{ColumnMapping, CsvImportRequest};
+    use aidb_lib::services::data_changes;
+    use aidb_lib::services::imports::{self, Imports};
+
+    use super::*;
+
+    const ITEMS: &str = "CREATE TABLE items (
+        id int PRIMARY KEY,
+        sku text NOT NULL UNIQUE,
+        name text NOT NULL,
+        price numeric(10, 2),
+        status text NOT NULL DEFAULT 'new'
+    );
+    INSERT INTO items VALUES (1, 'A1', 'Keyboard', 50, 'old');";
+
+    fn mapping(pairs: &[(usize, &str)]) -> Vec<ColumnMapping> {
+        pairs
+            .iter()
+            .map(|(file_column, column)| ColumnMapping {
+                file_column: *file_column,
+                column: (*column).into(),
+            })
+            .collect()
+    }
+
+    async fn apply(
+        changes: &Changes,
+        approval_id: ApprovalId,
+        confirmation: Option<&str>,
+    ) -> DataChangeResult {
+        data_changes::apply(
+            &changes.workspace.store,
+            &changes.workspace.sessions,
+            &changes.approvals,
+            changes.workspace.connection_id,
+            approval_id,
+            confirmation,
+        )
+        .await
+        .expect("ran")
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PostgreSQL: run scripts/postgres-fixture.sh start"]
+    async fn files_are_detected_checked_and_imported_in_one_transaction() {
+        let database = ScratchDatabase::create("aidb_import", ITEMS).await;
+        let changes = Changes::open(&database, Environment::Development, true).await;
+        let held = Imports::default();
+        let workspace = &changes.workspace;
+        let open = |bytes: Vec<u8>| {
+            imports::open(
+                &workspace.sessions,
+                &held,
+                workspace.connection_id,
+                table("items"),
+                "items.csv".into(),
+                bytes,
+            )
+        };
+
+        // A spreadsheet export: semicolons, decimal commas in quotes, Windows-1252.
+        let file = b"SKU;Name;Price\r\nB2;Caf\xe9 mug;\"12.5\"\r\nC3;Lamp;\r\n".to_vec();
+        let draft = open(file).await.expect("opens");
+        assert_eq!(draft.options.encoding, "windows-1252");
+        assert_eq!(draft.options.delimiter, ";");
+        assert!(draft.options.has_header);
+        assert_eq!(
+            draft.suggested,
+            vec![
+                Some("sku".into()),
+                Some("name".into()),
+                Some("price".into())
+            ]
+        );
+        assert_eq!(draft.sample[0][1], "Café mug");
+
+        // id is required and not in the file.
+        let request = CsvImportRequest {
+            mapping: mapping(&[(0, "sku"), (1, "name"), (2, "price")]),
+            upsert_key: None,
+        };
+        let preview = |request: CsvImportRequest, id| {
+            imports::preview(
+                &workspace.store,
+                &workspace.sessions,
+                &changes.approvals,
+                &held,
+                workspace.connection_id,
+                id,
+                request,
+            )
+        };
+        let checked = preview(request, draft.import_id).await.expect("checked");
+        assert!(
+            checked.problems[0].starts_with("id needs a value"),
+            "{checked:?}"
+        );
+
+        let draft = open(b"id,sku,name,price\n2,B2,Caf\xc3\xa9 mug,12.5\n3,C3,Lamp,\n".to_vec())
+            .await
+            .expect("opens");
+        let request = CsvImportRequest {
+            mapping: mapping(&[(0, "id"), (1, "sku"), (2, "name"), (3, "price")]),
+            upsert_key: None,
+        };
+        let before = database.snapshot().await;
+        let ready = preview(request, draft.import_id)
+            .await
+            .expect("planned")
+            .ready
+            .expect("ready");
+        assert_eq!(database.snapshot().await, before, "previews write nothing");
+        assert_eq!((ready.rows, ready.batches), (2, 1));
+        assert_eq!(ready.risk, RiskLevel::R2);
+        assert_eq!(ready.after.rows[0][3].as_deref(), Some("12.50"));
+        assert!(ready.statement.starts_with("INSERT INTO public.items"));
+        // Imports wait in their own dialog, not in the list of proposals.
+        assert!(changes.approvals.pending_data_changes(None).is_empty());
+
+        let result = apply(&changes, ready.approval_id, None).await;
+        assert_eq!(result.status, ApplyStatus::Applied);
+        assert_eq!(result.rows_affected, Some(2));
+        assert_eq!(
+            changes
+                .read("SELECT string_agg(id || ':' || name || ':' || coalesce(price::text, '-') || ':' || status, ',' ORDER BY id) FROM items")
+                .await,
+            "1:Keyboard:50.00:old,2:Café mug:12.50:new,3:Lamp:-:new"
+        );
+
+        changes.workspace.close().await;
+        database.drop().await;
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PostgreSQL: run scripts/postgres-fixture.sh start"]
+    async fn bad_values_are_traced_to_their_row_and_nothing_is_written() {
+        let database = ScratchDatabase::create("aidb_import", ITEMS).await;
+        let changes = Changes::open(&database, Environment::Development, true).await;
+        let held = Imports::default();
+        let workspace = &changes.workspace;
+        let mut file = String::from("id,sku,name,price\n");
+        for id in 10..2_510 {
+            let price = if id == 1_512 {
+                "cheap".to_owned()
+            } else {
+                format!("{id}.5")
+            };
+            file.push_str(&format!("{id},S{id},Item {id},{price}\n"));
+        }
+        let draft = imports::open(
+            &workspace.sessions,
+            &held,
+            workspace.connection_id,
+            table("items"),
+            "many.csv".into(),
+            file.into_bytes(),
+        )
+        .await
+        .expect("opens");
+        assert_eq!(draft.total_rows, 2_500);
+        let request = CsvImportRequest {
+            mapping: mapping(&[(0, "id"), (1, "sku"), (2, "name"), (3, "price")]),
+            upsert_key: None,
+        };
+        let before = database.snapshot().await;
+        let checked = imports::preview(
+            &workspace.store,
+            &workspace.sessions,
+            &changes.approvals,
+            &held,
+            workspace.connection_id,
+            draft.import_id,
+            request.clone(),
+        )
+        .await
+        .expect("checked");
+        // Row 1,503 of the file holds id 1,512.
+        assert_eq!(checked.problems.len(), 1);
+        assert!(
+            checked.problems[0].starts_with("Row 1503: invalid input syntax for type numeric"),
+            "{:?}",
+            checked.problems
+        );
+        assert!(checked.ready.is_none());
+
+        // The same rows without the bad value: a bulk insert in batches, elevated by size.
+        let fixed = imports::reread(&held, draft.import_id, draft.options.clone()).expect("reads");
+        assert_eq!(fixed.total_rows, 2_500);
+        let mut clean = String::from("id,sku,name,price\n");
+        for id in 10..2_510 {
+            // A duplicate sku in the last row: the database refuses it when writing.
+            let sku = if id == 2_509 {
+                "S10".to_owned()
+            } else {
+                format!("S{id}")
+            };
+            clean.push_str(&format!("{id},{sku},Item {id},{id}.5\n"));
+        }
+        let draft = imports::open(
+            &workspace.sessions,
+            &held,
+            workspace.connection_id,
+            table("items"),
+            "clean.csv".into(),
+            clean.into_bytes(),
+        )
+        .await
+        .expect("opens");
+        let ready = imports::preview(
+            &workspace.store,
+            &workspace.sessions,
+            &changes.approvals,
+            &held,
+            workspace.connection_id,
+            draft.import_id,
+            request,
+        )
+        .await
+        .expect("planned")
+        .ready
+        .expect("ready");
+        assert_eq!((ready.rows, ready.batches), (2_500, 3));
+        assert_eq!(ready.risk, RiskLevel::R3);
+        assert_eq!(ready.approval, ApprovalLevel::Elevated);
+        let result = apply(&changes, ready.approval_id, ready.confirmation.as_deref()).await;
+        assert_eq!(result.status, ApplyStatus::RolledBack);
+        assert!(
+            result
+                .message
+                .as_deref()
+                .is_some_and(|m| m.contains("unique constraint")),
+            "{result:?}"
+        );
+        assert_eq!(database.snapshot().await, before, "all rows or none");
+
+        changes.workspace.close().await;
+        database.drop().await;
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PostgreSQL: run scripts/postgres-fixture.sh start"]
+    async fn upserts_update_by_a_real_key_and_add_the_rest() {
+        let database = ScratchDatabase::create("aidb_import", ITEMS).await;
+        let changes = Changes::open(&database, Environment::Development, true).await;
+        let held = Imports::default();
+        let workspace = &changes.workspace;
+        let draft = imports::open(
+            &workspace.sessions,
+            &held,
+            workspace.connection_id,
+            table("items"),
+            "prices.csv".into(),
+            b"id,sku,name,price\n1,A1,Keyboard,55\n4,D4,Cable,5\n".to_vec(),
+        )
+        .await
+        .expect("opens");
+        let request = |key: &str| CsvImportRequest {
+            mapping: mapping(&[(0, "id"), (1, "sku"), (2, "name"), (3, "price")]),
+            upsert_key: Some(vec![key.into()]),
+        };
+        let checked = |request| {
+            imports::preview(
+                &workspace.store,
+                &workspace.sessions,
+                &changes.approvals,
+                &held,
+                workspace.connection_id,
+                draft.import_id,
+                request,
+            )
+        };
+        let not_a_key = checked(request("name")).await.expect("checked");
+        assert!(not_a_key.problems[0].contains("not the primary key"));
+
+        let ready = checked(request("sku"))
+            .await
+            .expect("planned")
+            .ready
+            .expect("ready");
+        assert!(ready.statement.contains("ON CONFLICT (sku) DO UPDATE SET"));
+        let result = apply(&changes, ready.approval_id, None).await;
+        assert_eq!(result.status, ApplyStatus::Applied);
+        assert_eq!(result.rows_affected, Some(2));
+        assert_eq!(
+            changes
+                .read("SELECT string_agg(id || ':' || price || ':' || status, ',' ORDER BY id) FROM items")
+                .await,
+            "1:55.00:old,4:5.00:new",
+            "one row updated in place, one added"
+        );
+
+        changes.workspace.close().await;
+        database.drop().await;
+    }
 }

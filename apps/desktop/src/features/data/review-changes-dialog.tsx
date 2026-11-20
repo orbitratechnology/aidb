@@ -48,12 +48,9 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { applyDataChange, cancelDataChange, previewDataChange } from '@/lib/commands'
+import { errorMessage } from '@/lib/errors'
 import { CellValue } from './cell-value'
 import { failedChange, staleChanges, type ReviewItem } from './edits'
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
-}
 
 const APPROVAL_TEXT: Record<string, string> = {
   apply: 'It needs your approval here.',
@@ -109,7 +106,7 @@ export function ReviewChangesDialog({
   )
 }
 
-type Outcome = { result: DataChangeResult } | { error: unknown }
+export type Outcome = { result: DataChangeResult } | { error: unknown }
 
 function Review({
   connectionId,
@@ -367,11 +364,12 @@ function Planning() {
   )
 }
 
-function Assessment({
+/** The environment, risk, rows written and why, for changes planned and held for approval. */
+export function Assessment({
   preview,
   environment,
 }: {
-  preview: DataChangePreview
+  preview: Pick<DataChangePreview, 'risk' | 'approval' | 'reasons' | 'rows'>
   environment: Environment
 }) {
   return (
@@ -397,7 +395,14 @@ function Assessment({
   )
 }
 
-function OutcomeAlert({ outcome }: { outcome: Outcome }) {
+export function OutcomeAlert({
+  outcome,
+  rolledBack = 'The transaction was rolled back; your changes are still pending.',
+}: {
+  outcome: Outcome
+  /** What a refused apply leaves behind. */
+  rolledBack?: string
+}) {
   if ('error' in outcome) {
     return (
       <Alert variant="destructive">
@@ -419,7 +424,7 @@ function OutcomeAlert({ outcome }: { outcome: Outcome }) {
       <CircleAlertIcon />
       <AlertTitle>Nothing was saved</AlertTitle>
       <AlertDescription>
-        {result.message} The transaction was rolled back; your changes are still pending.
+        {result.message} {rolledBack}
       </AlertDescription>
     </Alert>
   )
@@ -506,7 +511,7 @@ function ChangeItem({
 }
 
 /** A few rows, scrolling sideways when wide. */
-function SampleTable({
+export function SampleTable({
   caption,
   columns,
   rows,

@@ -177,7 +177,13 @@ fn normalize(columns: &[&ColumnRow], rows: &[Vec<Option<String>>], raw_bytes: bo
     }
 }
 
-fn build(change: &DataChange, target: &Target) -> Result<Built, DbError> {
+/// Writes the statements for `change`. `unique_keys` are the table's primary and unique keys,
+/// each sorted, which an upsert's key must be one of.
+fn build(
+    change: &DataChange,
+    target: &Target,
+    unique_keys: &[Vec<String>],
+) -> Result<Built, DbError> {
     let object = change.table();
     let relation = &target.relation;
     if !relation.table {
@@ -210,11 +216,48 @@ fn build(change: &DataChange, target: &Target) -> Result<Built, DbError> {
     };
 
     match change {
-        DataChange::Insert { columns, rows, .. } => {
+        DataChange::Insert {
+            columns,
+            rows,
+            upsert_key,
+            ..
+        } => {
             let columns = columns
                 .iter()
                 .map(|name| writable_column(target, object, name, kind))
                 .collect::<Result<Vec<_>, _>>()?;
+            let conflict = match upsert_key {
+                None => String::new(),
+                Some(key) => {
+                    let mut sorted = key.clone();
+                    sorted.sort();
+                    if !unique_keys.contains(&sorted) {
+                        return Err(invalid(format!(
+                            "{} is not a primary key or unique constraint of {}.{}, so rows \
+                             cannot be updated by it.",
+                            key.join(", "),
+                            object.schema,
+                            object.name
+                        )));
+                    }
+                    let quoted = |name: &String| {
+                        columns
+                            .iter()
+                            .find(|column| &column.name == name)
+                            .map_or_else(String::new, |column| column.quoted.clone())
+                    };
+                    let updates: Vec<String> = columns
+                        .iter()
+                        .filter(|column| !key.contains(&column.name))
+                        .map(|column| format!("{0} = EXCLUDED.{0}", column.quoted))
+                        .collect();
+                    format!(
+                        " ON CONFLICT ({}) DO UPDATE SET {}",
+                        key.iter().map(quoted).collect::<Vec<_>>().join(", "),
+                        updates.join(", ")
+                    )
+                }
+            };
             let width = columns.len();
             let tuples: Vec<String> = (0..rows.len())
                 .map(|row| {
@@ -233,7 +276,7 @@ fn build(change: &DataChange, target: &Target) -> Result<Built, DbError> {
                 })
                 .collect();
             let statement = format!(
-                "INSERT INTO {} ({}) VALUES {} RETURNING {}",
+                "INSERT INTO {} ({}) VALUES {}{conflict} RETURNING {}",
                 relation.quoted,
                 columns
                     .iter()
@@ -403,21 +446,59 @@ fn tables(changes: &[DataChange]) -> Vec<&ObjectName> {
     tables
 }
 
+/// A table written, as checked: its columns and, when an upsert needs them, its unique keys.
+struct Table {
+    target: Target,
+    unique_keys: Vec<Vec<String>>,
+}
+
+/// The table's primary key and unique constraints (and other plain unique indexes), each as its
+/// sorted column names: what `ON CONFLICT` can infer.
+const UNIQUE_KEYS_SQL: &str = "
+SELECT array_agg(a.attname::text ORDER BY a.attname::text) AS columns
+FROM pg_index i
+JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY (i.indkey)
+WHERE i.indrelid = $1 AND i.indisunique AND i.indpred IS NULL AND i.indexprs IS NULL
+GROUP BY i.indexrelid";
+
 /// Reads each table written, once.
 async fn targets(
     connection: &mut PgConnection,
     changes: &[DataChange],
-) -> Result<Result<HashMap<ObjectName, Target>, DbError>, sqlx::Error> {
-    let mut targets = HashMap::new();
+) -> Result<Result<HashMap<ObjectName, Table>, DbError>, sqlx::Error> {
+    let mut tables_read = HashMap::new();
     for table in tables(changes) {
-        match table_data::target(&mut *connection, table).await? {
-            Ok(target) => {
-                targets.insert(table.clone(), target);
-            }
+        let target = match table_data::target(&mut *connection, table).await? {
+            Ok(target) => target,
             Err(error) => return Ok(Err(error)),
-        }
+        };
+        let upserts = changes.iter().any(|change| {
+            change.table() == table
+                && matches!(
+                    change,
+                    DataChange::Insert {
+                        upsert_key: Some(_),
+                        ..
+                    }
+                )
+        });
+        let unique_keys = if upserts {
+            sqlx::query_scalar::<_, Vec<String>>(UNIQUE_KEYS_SQL)
+                .bind(target.relation.oid)
+                .fetch_all(&mut *connection)
+                .await?
+        } else {
+            Vec::new()
+        };
+        tables_read.insert(
+            table.clone(),
+            Table {
+                target,
+                unique_keys,
+            },
+        );
     }
-    Ok(Ok(targets))
+    Ok(Ok(tables_read))
 }
 
 /// Plans `changes` in one read-only transaction that is rolled back. Errors name the change
@@ -425,6 +506,7 @@ async fn targets(
 pub(super) async fn plan(
     connection: &mut PgConnection,
     changes: &[DataChange],
+    max_rows: u64,
     classify: impl Fn(sqlx::Error) -> DbError,
 ) -> Result<Vec<DataChangePlan>, DbError> {
     let total = changes.len();
@@ -439,8 +521,8 @@ pub(super) async fn plan(
     let mut rows_in_all = 0_u64;
     for (index, change) in changes.iter().enumerate() {
         let label = |error| label(error, index, total);
-        let target = &targets[change.table()];
-        let built = build(change, target).map_err(label)?;
+        let table = &targets[change.table()];
+        let built = build(change, &table.target, &table.unique_keys).map_err(label)?;
         let rows = match &built.count {
             Some(count) => count_rows(&mut transaction, count, false)
                 .await
@@ -451,10 +533,9 @@ pub(super) async fn plan(
             return Err(label(too_many_rows()));
         }
         rows_in_all += rows;
-        if rows_in_all > MAX_CHANGED_ROWS {
+        if rows_in_all > max_rows {
             return Err(invalid(format!(
-                "These changes write more than {MAX_CHANGED_ROWS} rows in all. Apply fewer at \
-                 once."
+                "These changes write more than {max_rows} rows in all. Apply fewer at once."
             )));
         }
         let values = stored_values(&mut transaction, &built)
@@ -505,7 +586,7 @@ pub(super) async fn apply(
     for table in tables(changes) {
         sqlx::query(AssertSqlSafe(format!(
             "LOCK TABLE ONLY {} IN ROW EXCLUSIVE MODE",
-            unlocked[table].relation.quoted
+            unlocked[table].target.relation.quoted
         )))
         .execute(&mut *transaction)
         .await
@@ -555,13 +636,13 @@ pub(super) async fn apply(
 async fn apply_one(
     connection: &mut PgConnection,
     change: &DataChange,
-    target: &Target,
+    table: &Table,
     approved: &DataChangePlan,
     classify: &impl Fn(sqlx::Error) -> DbError,
 ) -> Result<u64, ApplyError> {
     let failed = |error| ApplyError::RolledBack(classify(error));
     let refused = |message: String| ApplyError::RolledBack(invalid(message));
-    let built = build(change, target).map_err(ApplyError::RolledBack)?;
+    let built = build(change, &table.target, &table.unique_keys).map_err(ApplyError::RolledBack)?;
     if built.statement != approved.statement || built.parameters != approved.parameters {
         return Err(refused(
             "The table's structure changed since the change was approved. Nothing was changed."

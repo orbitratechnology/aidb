@@ -114,11 +114,17 @@ mod tests {
 
     use super::handler;
 
+    /// The app's context, built once: on macOS it embeds the Info.plist under a fixed symbol, so
+    /// each expansion of `generate_context!` outside this function would clash.
+    pub(super) fn context() -> tauri::Context<MockRuntime> {
+        tauri::generate_context!()
+    }
+
     fn app() -> App<MockRuntime> {
         mock_builder()
             .plugin(tauri_plugin_dialog::init())
             .invoke_handler(handler())
-            .build(tauri::generate_context!())
+            .build(context())
             .expect("mock app builds")
     }
 
@@ -310,7 +316,7 @@ mod tests {
         let app = mock_builder()
             .manage(state)
             .invoke_handler(handler())
-            .build(tauri::generate_context!())
+            .build(context())
             .expect("mock app builds");
         let main = window(&app, "main");
         let connection = serde_json::to_value(&settings).expect("draft serializes");
@@ -546,7 +552,7 @@ mod tests {
         let app = mock_builder()
             .manage(state)
             .invoke_handler(handler())
-            .build(tauri::generate_context!())
+            .build(context())
             .expect("mock app builds");
         let main = window(&app, "main");
 
@@ -604,7 +610,7 @@ mod tests {
         let app = mock_builder()
             .manage(state)
             .invoke_handler(handler())
-            .build(tauri::generate_context!())
+            .build(context())
             .expect("mock app builds");
         let main = window(&app, "main");
         let draft = json!({

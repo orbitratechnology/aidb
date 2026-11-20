@@ -26,7 +26,7 @@ use tauri::Manager;
 use tauri::test::mock_builder;
 
 use super::handler;
-use super::tests::{invoke, window};
+use super::tests::{context, invoke, window};
 use crate::adapters::ai_providers::test_server::{Reply, TestServer};
 use crate::adapters::credentials::Credentials;
 use crate::adapters::local_store::LocalStore;
@@ -80,7 +80,7 @@ fn secrets_never_reach_files_logs_or_the_webview() {
             Credentials::session_only("secret-scan"),
         ))
         .invoke_handler(handler())
-        .build(tauri::generate_context!())
+        .build(context())
         .expect("mock app builds");
     let main = window(&app, "main");
     // Responses the webview gets; none of them may carry a secret.

@@ -101,6 +101,9 @@ pub(crate) fn handler<R: Runtime>() -> impl Fn(Invoke<R>) -> bool + Send + Sync 
 }
 
 #[cfg(test)]
+mod secret_scan;
+
+#[cfg(test)]
 mod tests {
     use serde_json::{Value, json};
     use tauri::Manager;
@@ -119,7 +122,7 @@ mod tests {
             .expect("mock app builds")
     }
 
-    fn window(app: &App<MockRuntime>, label: &str) -> WebviewWindow<MockRuntime> {
+    pub(super) fn window(app: &App<MockRuntime>, label: &str) -> WebviewWindow<MockRuntime> {
         app.get_webview_window(label).unwrap_or_else(|| {
             WebviewWindowBuilder::new(app, label, WebviewUrl::default())
                 .build()
@@ -127,7 +130,11 @@ mod tests {
         })
     }
 
-    fn invoke(window: &WebviewWindow<MockRuntime>, cmd: &str, body: Value) -> Result<Value, Value> {
+    pub(super) fn invoke(
+        window: &WebviewWindow<MockRuntime>,
+        cmd: &str,
+        body: Value,
+    ) -> Result<Value, Value> {
         let request = InvokeRequest {
             cmd: cmd.into(),
             callback: CallbackFn(0),

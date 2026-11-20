@@ -5,22 +5,47 @@
 #   scripts/postgres-fixture.sh start [major-version]   # default 17
 #   scripts/postgres-fixture.sh stop
 #
-# Uses Docker when a daemon is available (any supported major version), otherwise the PostgreSQL
-# binaries installed under /usr/lib/postgresql. TLS is on, with a throwaway CA whose server
-# certificate names only `localhost`, so connecting to 127.0.0.1 exercises hostname checks.
+# Uses Docker when a daemon that runs Linux containers is available (any supported major
+# version), otherwise local PostgreSQL binaries: those in $PG_BIN if set, else the newest under
+# /usr/lib/postgresql, else the ones `pg_config` reports. That covers Linux, macOS (Homebrew)
+# and Windows (Git Bash, with the PostgreSQL that GitHub's runners ship). TLS is on, with a
+# throwaway CA whose server certificate names only `localhost`, so connecting to 127.0.0.1
+# exercises hostname checks.
 #
 # `start` writes target/postgres-fixture/env; load it with `source` before running:
 #   cargo test -p aidb --test postgres -- --ignored
 # Nothing here is a real secret: the server listens on loopback only and is deleted by `stop`.
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+case "$(uname -s)" in
+  MINGW* | MSYS* | CYGWIN*) WINDOWS=1 ;;
+  *) WINDOWS=0 ;;
+esac
+# On Windows the PostgreSQL and OpenSSL programs are native: give them C:/... paths, and keep
+# Git Bash from rewriting arguments such as `-subj /CN=...` into paths.
+native() { if [ "$WINDOWS" -eq 1 ]; then cygpath -m "$1"; else printf '%s' "$1"; fi; }
+[ "$WINDOWS" -eq 1 ] && export MSYS_NO_PATHCONV=1
+
+ROOT="$(native "$(cd "$(dirname "$0")/.." && pwd)")"
 FIXTURE="$ROOT/target/postgres-fixture"
 PORT="${AIDB_FIXTURE_PORT:-54329}"
 PASSWORD="aidb-fixture-only"
 CONTAINER="aidb-postgres-fixture"
 
-have_docker() { command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; }
+have_docker() {
+  command -v docker >/dev/null 2>&1 &&
+    [ "$(docker info --format '{{.OSType}}' 2>/dev/null)" = "linux" ]
+}
+
+postgres_bin() {
+  if [ -n "${PG_BIN:-}" ]; then
+    native "$PG_BIN"
+  elif ls -d /usr/lib/postgresql/*/bin >/dev/null 2>&1; then
+    ls -d /usr/lib/postgresql/*/bin | sort -V | tail -1
+  elif command -v pg_config >/dev/null 2>&1; then
+    pg_config --bindir
+  fi
+}
 
 make_certs() {
   local dir="$1"
@@ -63,10 +88,11 @@ start_docker() {
 
 start_local() {
   local bin
-  bin="$(ls -d /usr/lib/postgresql/*/bin 2>/dev/null | sort -V | tail -1)"
+  bin="$(postgres_bin)"
   [ -n "$bin" ] || { echo "No Docker daemon and no PostgreSQL binaries found" >&2; exit 1; }
   local data
-  data="$(mktemp -d "${TMPDIR:-/tmp}/aidb-pg-XXXXXX")"
+  # Under /tmp: the socket path must stay short (macOS's TMPDIR is too long for one).
+  data="$(native "$(mktemp -d /tmp/aidb-pg-XXXXXX)")"
   echo "$data" >"$FIXTURE/data-dir"
   cp "$FIXTURE/certs/server.crt" "$FIXTURE/certs/server.key" "$data/"
   local run=()
@@ -76,12 +102,14 @@ start_local() {
     run=(runuser -u postgres --)
   fi
   printf '%s\n' "$PASSWORD" >"$data/pwfile"
-  "${run[@]}" "$bin/initdb" -D "$data/db" -U postgres --pwfile="$data/pwfile" \
+  ${run[@]+"${run[@]}"} "$bin/initdb" -D "$data/db" -U postgres --pwfile="$data/pwfile" \
     --auth=scram-sha-256 \
     --encoding=UTF8 --locale=C >/dev/null
-  "${run[@]}" "$bin/pg_ctl" -D "$data/db" -l "$data/log" -w start -o \
-    "-p $PORT -c listen_addresses=localhost -c unix_socket_directories=$data -c ssl=on -c ssl_cert_file=$data/server.crt -c ssl_key_file=$data/server.key" \
-    >/dev/null
+  local options="-p $PORT -c listen_addresses=localhost -c ssl=on"
+  options+=" -c ssl_cert_file=$data/server.crt -c ssl_key_file=$data/server.key"
+  # Windows has no Unix sockets by default; elsewhere keep the socket out of /var/run.
+  [ "$WINDOWS" -eq 1 ] || options+=" -c unix_socket_directories=$data"
+  ${run[@]+"${run[@]}"} "$bin/pg_ctl" -D "$data/db" -l "$data/log" -w start -o "$options" >/dev/null
   echo "$bin" >"$FIXTURE/bin-dir"
 }
 
@@ -93,12 +121,14 @@ stop() {
     bin="$(cat "$FIXTURE/bin-dir" 2>/dev/null || true)"
     [ "$(id -u)" -eq 0 ] && run=(runuser -u postgres --)
     if [ -n "$bin" ] && [ -d "$data/db" ]; then
-      "${run[@]}" "$bin/pg_ctl" -D "$data/db" -m immediate stop >/dev/null 2>&1 || true
+      ${run[@]+"${run[@]}"} "$bin/pg_ctl" -D "$data/db" -m immediate stop >/dev/null 2>&1 || true
     fi
     rm -rf "$data"
   fi
   rm -rf "$FIXTURE"
 }
+
+if [ -n "${PG_BIN:-}" ]; then PATH="$(cd "$PG_BIN" && pwd):$PATH"; fi
 
 case "${1:-}" in
   start)

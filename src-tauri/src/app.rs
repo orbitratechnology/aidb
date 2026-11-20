@@ -1,5 +1,8 @@
 //! Application assembly: startup, managed state, command registration and shutdown.
 
+use std::sync::Once;
+
+use tauri::ipc::Invoke;
 use tauri::{AppHandle, Manager, RunEvent, Runtime};
 
 use crate::adapters::credentials::Credentials;
@@ -31,7 +34,7 @@ pub fn run() {
             setup(app.handle())?;
             Ok(())
         })
-        .invoke_handler(commands::handler())
+        .invoke_handler(log_first_command(commands::handler()))
         .build(tauri::generate_context!())
         .expect("failed to start the aidb runtime");
 
@@ -40,6 +43,21 @@ pub fn run() {
             shutdown(handle);
         }
     });
+}
+
+/// Logs the first command the interface sends, once, by name only. It shows that the webview
+/// loaded the bundled interface and reached the core: a blank window (missing assets, a script
+/// blocked) leaves no such line. The package smoke tests wait for it.
+fn log_first_command<R: Runtime>(
+    handler: impl Fn(Invoke<R>) -> bool + Send + Sync + 'static,
+) -> impl Fn(Invoke<R>) -> bool + Send + Sync + 'static {
+    let first = Once::new();
+    move |invoke| {
+        first.call_once(|| {
+            tracing::info!(command = invoke.message.command(), "interface connected");
+        });
+        handler(invoke)
+    }
 }
 
 fn setup<R: Runtime>(app: &AppHandle<R>) -> AppResult<()> {

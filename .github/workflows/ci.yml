@@ -160,28 +160,159 @@ jobs:
           cargo test -p aidb --locked --test data_changes -- --ignored
           cargo test -p aidb --locked --test schema_diff -- --ignored
           cargo test -p aidb --locked --test advisor -- --ignored
+      # A release gate: canary secrets must not reach files, logs or the webview. It installs
+      # the global logger, so it runs on its own, at the most verbose level.
+      - name: Scan for secrets
+        run: |
+          source target/postgres-fixture/env
+          AIDB_LOG=trace cargo test -p aidb --locked --lib secret_scan -- --ignored
       - name: Stop PostgreSQL
         if: always()
         run: scripts/postgres-fixture.sh stop
 
-  linux-bundle:
-    name: Linux release bundle
-    needs: [web, rust]
+  audit:
+    name: Dependency audit
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
     runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: audit
+      # RustSec's own tool, checking Cargo.lock against the advisory database. Unmaintained
+      # crates are reported as warnings; known vulnerabilities fail the job.
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --version 0.22.2 --locked
+      - run: cargo audit
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      # Packages that ship in the app; build and test tools are not in the product.
+      - run: pnpm audit --prod --audit-level moderate
+
+  platform:
+    name: ${{ matrix.name }} tests
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows x64
+            runner: windows-latest
+          - name: macOS Apple Silicon
+            runner: macos-latest
+          - name: macOS Intel
+            runner: macos-15-intel
+    runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: platform
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build:web
+      - run: cargo test --workspace --locked
+      # A throwaway keychain, made the default and unlocked, so the test never waits for a
+      # password prompt.
+      - name: Prepare a keychain
+        if: runner.os == 'macOS'
+        run: |
+          security create-keychain -p ci aidb-ci.keychain
+          security set-keychain-settings aidb-ci.keychain
+          security unlock-keychain -p ci aidb-ci.keychain
+          security list-keychains -d user -s aidb-ci.keychain
+          security default-keychain -s aidb-ci.keychain
+      # Round-trips a secret through Credential Manager or the Keychain.
+      - name: Test the OS credential store
+        run: cargo test -p aidb --locked os_store -- --ignored
+      # GitHub's Windows images ship PostgreSQL (PGBIN); macOS gets it from Homebrew.
+      - name: Install PostgreSQL 17
+        run: |
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            brew install postgresql@17
+            echo "PG_BIN=$(brew --prefix postgresql@17)/bin" >> "$GITHUB_ENV"
+          else
+            echo "PG_BIN=$PGBIN" >> "$GITHUB_ENV"
+          fi
+      - name: Start PostgreSQL 17
+        run: scripts/postgres-fixture.sh start 17
+      - name: Run the integration tests against it
+        run: |
+          source target/postgres-fixture/env
+          cargo test -p aidb --locked --test postgres -- --ignored
+          cargo test -p aidb --locked --lib session_commands_work_over_ipc -- --ignored
+          cargo test -p aidb --locked --test agent_eval -- --ignored scripted
+          cargo test -p aidb --locked --test policy -- --ignored
+          cargo test -p aidb --locked --test data_changes -- --ignored
+          cargo test -p aidb --locked --test schema_diff -- --ignored
+          cargo test -p aidb --locked --test advisor -- --ignored
+      - name: Scan for secrets
+        run: |
+          source target/postgres-fixture/env
+          AIDB_LOG=trace cargo test -p aidb --locked --lib secret_scan -- --ignored
+      - name: Stop PostgreSQL
+        if: always()
+        run: scripts/postgres-fixture.sh stop
+
+  bundle:
+    name: ${{ matrix.name }} packages
+    needs: [web, rust]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # The oldest supported Ubuntu LTS, as Tauri recommends: the packages then run on it
+          # and on newer distributions (glibc is backward compatible, not forward).
+          - name: Linux x64
+            runner: ubuntu-22.04
+            bundles: deb rpm appimage
+            artifact: aidb-linux-x64
+          - name: Windows x64
+            runner: windows-latest
+            bundles: msi nsis
+            artifact: aidb-windows-x64
+          - name: macOS Apple Silicon
+            runner: macos-latest
+            bundles: dmg
+            artifact: aidb-macos-arm64
+          - name: macOS Intel
+            runner: macos-15-intel
+            bundles: dmg
+            artifact: aidb-macos-x64
+    runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v7
       # Ubuntu's mirrors are sometimes slow: keep downloaded packages between runs (refreshed
       # weekly), so a run only fetches package lists and what changed.
       - id: apt-week
+        if: runner.os == 'Linux'
         run: echo "week=$(date -u +%G-%V)" >> "$GITHUB_OUTPUT"
       - uses: actions/cache@v6
+        if: runner.os == 'Linux'
         with:
           path: ~/.cache/apt-archives
-          key: apt-${{ runner.os }}-${{ github.job }}-${{ steps.apt-week.outputs.week }}
+          key: apt-${{ matrix.runner }}-${{ github.job }}-${{ steps.apt-week.outputs.week }}
           restore-keys: |
-            apt-${{ runner.os }}-${{ github.job }}-
-            apt-${{ runner.os }}-
+            apt-${{ matrix.runner }}-${{ github.job }}-
+            apt-${{ matrix.runner }}-
       - name: Install Tauri system dependencies
+        if: runner.os == 'Linux'
         timeout-minutes: 20
         run: >-
           scripts/ci-install-apt.sh libwebkit2gtk-4.1-dev libxdo-dev libssl-dev
@@ -197,10 +328,106 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm tauri build --bundles deb
+      - run: pnpm tauri build --bundles ${{ matrix.bundles }}
+      # The same build packaged again as the next patch version, to test upgrading. These
+      # packages are only for the smoke tests.
+      - name: Package the build again as a newer version
+        run: |
+          current=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          next=$(node -p "const [a, b, c] = '$current'.split('.').map(Number); [a, b, c + 1].join('.')")
+          mkdir -p dist/release dist/upgrade
+          find target/release/bundle -maxdepth 2 -type f -name "*$current*" \
+            \( -name '*.deb' -o -name '*.rpm' -o -name '*.AppImage' -o -name '*.msi' -o -name '*.exe' -o -name '*.dmg' \) \
+            -exec cp {} dist/release/ \;
+          pnpm tauri bundle --bundles ${{ matrix.bundles }} --config "{\"version\":\"$next\"}"
+          find target/release/bundle -maxdepth 2 -type f -name "*$next*" \
+            \( -name '*.deb' -o -name '*.rpm' -o -name '*.AppImage' -o -name '*.msi' -o -name '*.exe' -o -name '*.dmg' \) \
+            -exec cp {} dist/upgrade/ \;
+          ls -l dist/release dist/upgrade
       - uses: actions/upload-artifact@v7
         with:
-          name: aidb-linux-deb
-          path: target/release/bundle/deb/*.deb
+          name: ${{ matrix.artifact }}
+          path: dist/release/*
           if-no-files-found: error
           retention-days: 7
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.artifact }}-upgrade
+          path: dist/upgrade/*
+          if-no-files-found: error
+          retention-days: 1
+      # Windows and macOS packages carry what they need (WebView2 and WebKit are part of the
+      # OS), so they are tested here; Linux packages are tested on fresh machines below.
+      - name: Smoke test the MSI installer
+        if: runner.os == 'Windows'
+        run: node scripts/smoke-test.mjs msi dist/release/*.msi dist/upgrade/*.msi
+      - name: Smoke test the NSIS installer
+        if: runner.os == 'Windows'
+        run: node scripts/smoke-test.mjs nsis dist/release/*-setup.exe dist/upgrade/*-setup.exe
+      - name: Smoke test the disk image
+        if: runner.os == 'macOS'
+        run: node scripts/smoke-test.mjs dmg dist/release/*.dmg dist/upgrade/*.dmg
+
+  smoke-ubuntu:
+    name: ${{ matrix.runner }} smoke test
+    needs: bundle
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-22.04, ubuntu-24.04]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - uses: actions/download-artifact@v7
+        with:
+          name: aidb-linux-x64
+          path: dist/release
+      - uses: actions/download-artifact@v7
+        with:
+          name: aidb-linux-x64-upgrade
+          path: dist/upgrade
+      - id: apt-week
+        run: echo "week=$(date -u +%G-%V)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v6
+        with:
+          path: ~/.cache/apt-archives
+          key: apt-${{ matrix.runner }}-${{ github.job }}-${{ steps.apt-week.outputs.week }}
+          restore-keys: |
+            apt-${{ matrix.runner }}-${{ github.job }}-
+      # Only a display: the app's own libraries come with the package (or inside the AppImage).
+      - name: Install a virtual display
+        timeout-minutes: 20
+        run: scripts/ci-install-apt.sh xvfb xauth
+      # The AppImage first, while the machine has none of the app's libraries.
+      - name: Smoke test the AppImage
+        run: xvfb-run -a node scripts/smoke-test.mjs appimage dist/release/*.AppImage dist/upgrade/*.AppImage
+      - name: Smoke test the Debian package
+        env:
+          APT_ARCHIVES: /home/runner/.cache/apt-archives
+        run: xvfb-run -a node scripts/smoke-test.mjs deb dist/release/*.deb dist/upgrade/*.deb
+      - if: always()
+        run: sudo chown -R "$(id -u):$(id -g)" ~/.cache/apt-archives
+
+  smoke-fedora:
+    name: Fedora smoke test
+    needs: bundle
+    runs-on: ubuntu-latest
+    container:
+      image: fedora:45
+    steps:
+      - name: Install Node.js and a virtual display
+        run: dnf install -y --setopt=install_weak_deps=False nodejs xorg-x11-server-Xvfb xauth which
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v7
+        with:
+          name: aidb-linux-x64
+          path: dist/release
+      - uses: actions/download-artifact@v7
+        with:
+          name: aidb-linux-x64-upgrade
+          path: dist/upgrade
+      - name: Smoke test the RPM package
+        run: xvfb-run -a node scripts/smoke-test.mjs rpm dist/release/*.rpm dist/upgrade/*.rpm

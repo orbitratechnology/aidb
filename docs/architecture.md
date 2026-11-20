@@ -931,19 +931,50 @@ Ask screen (8.3) drives it. The model proposes; Rust decides.
 
 | What                    | Where                                                                                                                                                                                                                                  |
 | ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Local metadata database | `aidb.sqlite3` in the Tauri app data directory, e.g. `~/.local/share/com.orbitratech.aidb/` on Linux; `aidb.sqlite3.v<N>.bak` is written before each schema upgrade                                                                    |
-| Logs                    | Tauri app log directory, e.g. `~/.local/share/com.orbitratech.aidb/logs/` on Linux                                                                                                                                                     |
+| Local metadata database | `aidb.sqlite3` in the app data directory (below); `aidb.sqlite3.v<N>.bak` is written before each schema upgrade                                                                                                                        |
+| Logs                    | The app log directory (below), one file a day, seven kept                                                                                                                                                                              |
 | Secrets                 | OS credential store (service `com.orbitratech.aidb`, entries such as `connection:<id>` and `provider:<id>`), or memory for the session when no store is available                                                                      |
 | Webview storage         | Webview local storage inside the app data directory; holds a copy of the saved theme (so the first frame paints in the right colors) and the SQL editor tabs with their drafts and saved-query links (cleared from Settings › Storage) |
 
-Directories follow each OS's conventions through Tauri's path resolver; exact locations per
-platform are documented with release hardening (task 12.3).
+Directories follow Tauri's path resolver (`app_data_dir`, `app_log_dir`); the install smoke
+tests check them on every platform:
+
+| Platform | App data                                                 | Logs                                       |
+| -------- | -------------------------------------------------------- | ------------------------------------------ |
+| Linux    | `~/.local/share/com.orbitratech.aidb` (`$XDG_DATA_HOME`) | `~/.local/share/com.orbitratech.aidb/logs` |
+| macOS    | `~/Library/Application Support/com.orbitratech.aidb`     | `~/Library/Logs/com.orbitratech.aidb`      |
+| Windows  | `%APPDATA%\com.orbitratech.aidb`                         | `%LOCALAPPDATA%\com.orbitratech.aidb\logs` |
+
+Uninstalling removes the program and keeps these directories, as each platform's installers
+do; Settings › Storage clears the data first.
 
 ## Build and CI
 
 - `pnpm build:web` builds the UI; `tauri build` embeds it in the binary.
-- CI (GitHub Actions) runs web checks, end-to-end UI tests, Rust fmt/clippy/tests with a
-  contract drift check, and a Linux `.deb` build. Windows and macOS packaging joins in task 12.2.
+- **Packages**: Linux x64 `.deb`, `.rpm` and AppImage (built on Ubuntu 22.04, the oldest
+  supported LTS); Windows x64 MSI and NSIS installers (the NSIS one installs per user); macOS
+  `.dmg` for Apple Silicon and Intel, built natively on each. macOS bundles are signed ad hoc and
+  Windows installers are unsigned until release certificates exist (12.3).
+- **CI** (GitHub Actions) on every push:
+  - web checks, end-to-end UI tests, and Rust fmt/clippy/tests with a contract drift check;
+  - PostgreSQL 15–18 integration tests and the secret scan on Linux;
+  - on Windows x64, macOS Apple Silicon and macOS Intel: the Rust tests, the OS credential
+    store (Credential Manager, a throwaway Keychain), the PostgreSQL integration tests against
+    the runner's PostgreSQL 17, and the secret scan;
+  - a dependency audit (`cargo audit`, `pnpm audit --prod`);
+  - packages for every platform, kept as build artifacts for seven days, and install smoke
+    tests.
+- **Install smoke tests** (`scripts/smoke-test.mjs`): install with the platform's own installer,
+  start the app and wait for its interface to reach the core, kill it, start it again (the local
+  database must recover), quit it (gracefully on Windows and, where allowed, macOS), check the
+  database's integrity, upgrade to the same build packaged as the next patch version (user data
+  kept, one installation), and uninstall (program gone, data kept). Any ERROR or panic in the
+  log fails the test. Windows and macOS packages are tested on the machine that built them;
+  Linux packages on fresh Ubuntu 22.04 and 24.04 machines (AppImage, `.deb`) and in a Fedora 45
+  container (`.rpm`), so missing package dependencies show up.
+- **Secret scan** (`src/commands/secret_scan.rs`): canary secrets through the real commands at
+  the most verbose log level, then a search of every file the app wrote and every response to
+  the webview (as written, hex, base64).
 - End-to-end UI tests (`pnpm e2e`, Playwright, `apps/desktop/e2e/`) run the real UI in
   Chromium. A test-only page, `e2e/app.html`, installs Tauri's official IPC mocks and answers
   commands from typed fixtures (`e2e/harness/core.ts`); it is not part of the production build.

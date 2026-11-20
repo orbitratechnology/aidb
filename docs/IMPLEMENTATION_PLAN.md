@@ -155,7 +155,7 @@ Status legend: `[x]` done · `[~]` in progress · `[ ]` not started
 
 - [x] **12.1 Responsive and accessibility audit.** 320px through 1440px+, touch targets, keyboard
       navigation, Playwright responsive tests.
-- [ ] **12.2 Cross-platform builds.** Windows, macOS and Linux CI packaging, install smoke tests,
+- [x] **12.2 Cross-platform builds.** Windows, macOS and Linux CI packaging, install smoke tests,
       secret-scanning tests.
 - [ ] **12.3 Release readiness.** Performance profiling, user-facing privacy and security docs,
       supported platforms, release checklist.

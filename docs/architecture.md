@@ -358,21 +358,25 @@ version they were given under.
   - Approvals live in memory only. Connecting drops all of them; disconnecting, editing or
     deleting a profile drops that connection's. A running change keeps its entry until its
     outcome is reported.
-  - An approval's subject is SQL with parameters, or a data change (below). For a data change
-    the binding is rebuilt by planning the change again, so its impact is a fresh exact count:
+  - An approval's subject is SQL with parameters, or a set of data changes (below). For data
+    changes the binding is rebuilt by planning them again, so their impact is a fresh exact count:
     one more or one fewer matching row invalidates the approval.
+  - `approve_and_use` approves and starts running in one step, with one check of the binding
+    and no token issued; data changes use it, since the core both approves and runs them.
 
 ## Data changes
 
 `domain::data_change`, `adapters::postgres::data_change` and `services::data_changes` turn a
-structured INSERT, UPDATE or DELETE into a checked write. A change is data, not SQL: a table,
-column names and values as text, and for UPDATE and DELETE the grid's filters (at least one, so
-a change never addresses a whole table by omission). Limits: 1,000 rows per INSERT, 200
-columns, 10,000 values, 1 MB per value, 8 MB in all, and 10,000 matching rows for an UPDATE or
-DELETE.
+set of structured INSERT, UPDATE and DELETE changes into one checked write. A change is data,
+not SQL: a table, column names and values as text, and for UPDATE and DELETE the grid's filters
+(at least one, so a change never addresses a whole table by omission). A set holds 1 to 200
+changes, applied together, in order, under one approval and in one transaction. Limits: 1,000
+rows per INSERT, 200 columns, 10,000 values and 8 MB in all, 1 MB per value, and 10,000
+matching rows per UPDATE or DELETE and across the set. Errors name the change they come from
+("Change 2 of 3: …").
 
-- **Plan** (read-only transaction, rolled back): look up the table (plain or partitioned; views
-  are refused) and its columns, and write the statement from the server's quoting of the live
+- **Plan** (one read-only transaction for the set, rolled back): look up each table (plain or
+  partitioned; views are refused) and its columns once, and write the statement from the server's quoting of the live
   names, with each value bound as `CAST($n AS <type>)`. Generated columns, `GENERATED ALWAYS`
   identity columns, columns the role cannot write or read, and unknown columns are refused.
   Count the matching rows exactly (refused past 10,000) and have the database convert every
@@ -380,24 +384,29 @@ DELETE.
   storing them applies assignment rules (an over-long `varchar(n)` value is refused, not cut);
   a string or bit value the modifier would shorten is refused at planning time. Numeric scale
   and timestamp precision round as the column does, and the preview shows the rounded value.
-- **Preview** (`preview_data_change`): the plan, the counted rows, up to 20 matching rows as
-  they are now and up to 20 rows of values as they will be stored, the risk with its reasons,
-  and an approval held in the core. The policy assesses the generated statement itself, with
-  the counted rows as its impact (`counted`); a refusal by the policy is audited.
+- **Preview** (`preview_data_change`): for each change its statement, counted rows, up to 20
+  matching rows as they are now (for the first 20 changes) and up to 20 rows of values as they
+  will be stored; the risk of the set with its reasons; and an approval held in the core. The
+  policy assesses the generated statements themselves, with the counted rows as their impact
+  (`counted`). The batch rule for SQL text does not apply to a set: each change is judged as a
+  statement, and the rows of all of them decide between a small (R2) and a bulk (R3) write. A
+  refusal by the policy is audited.
 - **Apply** (`apply_data_change`, the user only): approve (with the database name typed for
-  elevated changes) and use the approval inside the core, so the token never leaves it; each
-  step rebuilds the binding. Then, in one transaction opened with a plain `BEGIN` (a read-only
-  session still refuses it): lock the table in `ROW EXCLUSIVE` mode (blocks structure changes),
-  plan again and compare with the approved statement and parameters, recount the matching rows
-  `FOR UPDATE` (locks them against other writers) and compare, convert the values again and
-  compare, run the statement with `RETURNING` the stored values as text, check the rows written
-  and that every stored value is the planned one (a trigger or rule that changes them rolls the
-  change back), and commit. Any difference rolls back with nothing written. A commit that loses
-  the connection is reported as uncertain, never retried.
+  elevated changes) and start running in one step (`approve_and_use`), which rebuilds the
+  binding once; no token is issued. Then, in one transaction opened with a plain `BEGIN` (a
+  read-only session still refuses it): lock each table in `ROW EXCLUSIVE` mode, in a fixed order
+  (blocks structure changes), and for each change in turn plan it again and compare with the
+  approved statement and parameters, recount its matching rows `FOR UPDATE` (locks them against
+  other writers; earlier changes of the set are already visible) and compare, convert the values
+  again and compare, run the statement with `RETURNING` the stored values as text, and check the
+  rows written and that every stored value is the planned one (a trigger or rule that changes
+  them rolls the set back). Then commit. Any difference rolls everything back with nothing
+  written. A commit that loses the connection is reported as uncertain, never retried.
 - **Outcome**: applied (rows written), rolled back (with the database's reason), or uncertain;
   the approval finishes as succeeded or failed and the outcome is audited.
-- `cancel_data_change` declines a preview. The assistant cannot reach any of this yet; 10.3
-  lets it propose changes that wait for the same approval.
+- `cancel_data_change` declines a preview. The grid edits through this engine (see Frontend);
+  the assistant cannot reach it yet; 10.3 lets it propose changes that wait for the same
+  approval.
 
 ## Audit log
 
@@ -615,6 +624,28 @@ Ask screen (8.3) drives it. The model proposes; Rust decides.
   previous, next) and remembers the offsets visited, since a page can stop early at the size
   limit. Notices explain early stops, unstable order (no primary key) and columns the role
   cannot read. Below 640px rows are cards that open the same detail sheet.
+- **Grid editing** (`features/data/edits.ts`, `edit-store.ts`): on a writable connection, a
+  table's row sheet offers Edit and Delete, and "Add row" opens an empty form. Edits never write
+  at once: they go to a pending-change buffer (in memory, per connection and table, kept across
+  pages and tables until saved or discarded). Existing rows are addressed by their primary key
+  as loaded; a table without one can only get new rows, and a row whose key was cut short cannot
+  be changed. Generated, `GENERATED ALWAYS` identity and array columns, and values cut at 2,000
+  characters, are read-only in the form, with the reason shown. New rows start with every column
+  on its default; typing a value or ticking NULL replaces it. Pending changes show in the grid
+  as a pencil or trash mark on the row, dotted-underlined values and struck-through deleted rows,
+  with screen-reader text; a bar counts them and offers "Review and save" and Discard (which
+  asks first).
+- **Review** (`review-changes-dialog.tsx`): previews the pending changes in the core, in the
+  order deletions, edits, new rows, and shows each before and after (with the value as the
+  column will store it when that differs from what was typed), the rows counted, the risk and
+  reasons, the environment, and the SQL on request. Each edit and deletion also requires the
+  values it was based on to be unchanged (for kinds whose text compares exactly: numbers, text,
+  booleans, dates and times, UUIDs), so a row changed or deleted by someone else since it was
+  loaded matches nothing; the review flags it and Save stays disabled. Save names deletions
+  ("Delete 1 row") and is styled as destructive when there are any; elevated changes need the
+  database name typed. Closing without saving declines the approval. Applied: the buffer is
+  cleared and the rows reload. Rolled back: the reason is shown and the changes stay pending.
+  Uncertain: the user is told to reload and check.
 - **AI providers** (Settings › AI providers): "Use the AI assistant" (off by default) with a
   provider picker; the `ai` settings section stores the switch and the chosen profile, the core
   refuses to turn AI on without an existing provider, and deleting that provider turns AI off.

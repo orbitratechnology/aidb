@@ -9,7 +9,7 @@ use crate::domain::connections::ConnectionId;
 use crate::domain::policy::classify::{
     self, ImpactFacts, ImpactSource, PolicyContext, RiskAssessment,
 };
-use crate::domain::policy::facts::{self, Operation, StatementFacts, TargetTable};
+use crate::domain::policy::facts::{self, Operation, SqlFacts, StatementFacts, TargetTable};
 use crate::domain::sql::MAX_SQL_BYTES;
 use crate::errors::{AppError, AppResult};
 
@@ -61,29 +61,74 @@ pub async fn assess<A: DatabaseAdapter>(
     id: ConnectionId,
     sql: &str,
 ) -> AppResult<RiskAssessment> {
-    assess_with_rows(store, sessions, id, sql, None).await
-}
-
-/// Assesses a single data-changing statement aidb wrote itself, with the rows it writes
-/// counted beforehand (`counted`) instead of estimated by the planner. The count is used only
-/// when `sql` is exactly one statement that writes rows.
-///
-/// # Errors
-///
-/// As [`assess`].
-pub async fn assess_with_rows<A: DatabaseAdapter>(
-    store: &LocalStore,
-    sessions: &Sessions<A>,
-    id: ConnectionId,
-    sql: &str,
-    counted: Option<u64>,
-) -> AppResult<RiskAssessment> {
     if sql.len() > MAX_SQL_BYTES {
         return Err(AppError::invalid_input(format!(
             "The SQL is too long ({} MB at most).",
             MAX_SQL_BYTES / (1024 * 1024)
         )));
     }
+    let sql_facts = facts::inspect(sql);
+    let (impacts, context) = gather(store, sessions, id, &sql_facts, &[]).await?;
+    Ok(log(classify::assess(&sql_facts, &impacts, context)))
+}
+
+/// Assesses data changes aidb wrote itself and applies together: each statement with the rows
+/// it writes, counted beforehand instead of estimated by the planner. See
+/// [`classify::assess_change_set`].
+///
+/// # Errors
+///
+/// As [`assess`].
+pub async fn assess_change_set<A: DatabaseAdapter>(
+    store: &LocalStore,
+    sessions: &Sessions<A>,
+    id: ConnectionId,
+    statements: &[(&str, u64)],
+) -> AppResult<RiskAssessment> {
+    let mut sql_facts = SqlFacts {
+        statements: Vec::new(),
+        problem: None,
+    };
+    let mut counted = Vec::new();
+    for (sql, rows) in statements {
+        let facts = facts::inspect(sql);
+        // A count belongs to its statement only when the text is exactly that one write.
+        let single = facts.statements.len() == 1
+            && matches!(
+                facts.statements[0].operation,
+                Operation::Insert | Operation::Update | Operation::Delete
+            );
+        counted.extend(facts.statements.iter().map(|_| single.then_some(*rows)));
+        sql_facts.statements.extend(facts.statements);
+        if sql_facts.problem.is_none() {
+            sql_facts.problem = facts.problem;
+        }
+    }
+    let (impacts, context) = gather(store, sessions, id, &sql_facts, &counted).await?;
+    Ok(log(classify::assess_change_set(
+        &sql_facts, &impacts, context,
+    )))
+}
+
+fn log(assessment: RiskAssessment) -> RiskAssessment {
+    tracing::debug!(
+        risk = ?assessment.risk,
+        approval = ?assessment.required_approval,
+        statements = assessment.statements.len(),
+        "assessed"
+    );
+    assessment
+}
+
+/// What the database says about each statement (rows written, privileges, cascades) and where
+/// it would run. `counted[i]`, when given, is statement `i`'s counted rows.
+async fn gather<A: DatabaseAdapter>(
+    store: &LocalStore,
+    sessions: &Sessions<A>,
+    id: ConnectionId,
+    sql_facts: &SqlFacts,
+    counted: &[Option<u64>],
+) -> AppResult<(Vec<ImpactFacts>, PolicyContext)> {
     let profile = store
         .connections()
         .get(id)
@@ -94,7 +139,6 @@ pub async fn assess_with_rows<A: DatabaseAdapter>(
         environment: profile.settings.environment,
         writes_allowed: !profile.settings.read_only && !session.server_info().in_recovery,
     };
-    let sql_facts = facts::inspect(sql);
 
     // Every table written, once; the database resolves them with the session's search path.
     let mut targets: Vec<String> = Vec::new();
@@ -120,18 +164,10 @@ pub async fn assess_with_rows<A: DatabaseAdapter>(
             })
     };
 
-    let counted = counted.filter(|_| {
-        sql_facts.problem.is_none()
-            && sql_facts.statements.len() == 1
-            && matches!(
-                sql_facts.statements[0].operation,
-                Operation::Insert | Operation::Update | Operation::Delete
-            )
-    });
     let mut impacts = Vec::with_capacity(sql_facts.statements.len());
-    for statement in &sql_facts.statements {
+    for (index, statement) in sql_facts.statements.iter().enumerate() {
         let mut impact = ImpactFacts::unknown();
-        if let Some(rows) = counted {
+        if let Some(rows) = counted.get(index).copied().flatten() {
             impact.rows = Some(rows);
             impact.source = ImpactSource::Counted;
         } else if let Some(rows) = statement.literal_rows {
@@ -173,14 +209,7 @@ pub async fn assess_with_rows<A: DatabaseAdapter>(
         impacts.push(impact);
     }
 
-    let assessment = classify::assess(&sql_facts, &impacts, context);
-    tracing::debug!(
-        risk = ?assessment.risk,
-        approval = ?assessment.required_approval,
-        statements = assessment.statements.len(),
-        "assessed"
-    );
-    Ok(assessment)
+    Ok((impacts, context))
 }
 
 #[cfg(test)]

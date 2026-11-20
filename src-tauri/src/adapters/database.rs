@@ -109,26 +109,27 @@ pub trait DatabaseSession: std::fmt::Debug + Send + Sync + 'static {
         targets: &[String],
     ) -> impl Future<Output = Result<Vec<TargetTable>, DbError>> + Send;
 
-    /// Makes `change` ready to run against the live table, in a read-only transaction: writes
-    /// its statement, counts the rows an UPDATE or DELETE matches (refusing more than
-    /// [`MAX_CHANGED_ROWS`](crate::domain::data_change::MAX_CHANGED_ROWS)), and has the
-    /// database convert every value to its column's type. With `preview`, also reads some of
-    /// the matching rows as they are now. Nothing is written.
-    fn plan_data_change(
+    /// Makes `changes` ready to run against the live tables, in one read-only transaction:
+    /// writes each statement, counts the rows each UPDATE or DELETE matches (refusing more than
+    /// [`MAX_CHANGED_ROWS`](crate::domain::data_change::MAX_CHANGED_ROWS), alone or in all),
+    /// and has the database convert every value to its column's type. With `preview`, also
+    /// reads some of the rows the first changes match, as they are now. Nothing is written.
+    /// Errors name the change they come from.
+    fn plan_data_changes(
         &self,
-        change: &DataChange,
+        changes: &[DataChange],
         preview: Option<PageLimits>,
-    ) -> impl Future<Output = Result<DataChangePlan, DbError>> + Send;
+    ) -> impl Future<Output = Result<Vec<DataChangePlan>, DbError>> + Send;
 
-    /// Applies `change` in one transaction, only if it still plans to exactly `approved` (same
-    /// statement, parameters, matching rows and stored values): locks the table against
-    /// structure changes and the matching rows against other writers, runs the statement,
-    /// checks the rows written and their stored values, and commits. Any difference rolls it
-    /// back. Returns the rows written.
-    fn apply_data_change(
+    /// Applies `changes` in one transaction, in order, only if each still plans to exactly its
+    /// `approved` plan (same statement, parameters, matching rows and stored values): locks the
+    /// tables against structure changes and the matching rows against other writers, runs each
+    /// statement, checks the rows written and their stored values, and commits. Any
+    /// difference rolls everything back. Returns the rows written.
+    fn apply_data_changes(
         &self,
-        change: &DataChange,
-        approved: &DataChangePlan,
+        changes: &[DataChange],
+        approved: &[DataChangePlan],
     ) -> impl Future<Output = Result<u64, ApplyError>> + Send;
 }
 

@@ -93,12 +93,16 @@ impl Changes {
     }
 
     async fn preview(&self, change: DataChange) -> AppResult<DataChangePreview> {
+        self.preview_set(vec![change]).await
+    }
+
+    async fn preview_set(&self, changes: Vec<DataChange>) -> AppResult<DataChangePreview> {
         data_changes::preview(
             &self.workspace.store,
             &self.workspace.sessions,
             &self.approvals,
             self.workspace.connection_id,
-            change,
+            changes,
             Actor::User,
         )
         .await
@@ -173,17 +177,17 @@ async fn changes_are_previewed_applied_and_verified() {
     assert_eq!(update.approval, ApprovalLevel::Apply);
     assert_eq!(update.reasons, vec!["Writes 2 rows (counted).".to_owned()]);
     assert!(
-        update.statement.starts_with(
+        update.changes[0].statement.starts_with(
             "UPDATE public.items SET status = CAST($1 AS text), price = CAST($2 AS numeric) \
              WHERE status = CAST($3 AS pg_catalog.text) RETURNING"
         ),
         "{}",
-        update.statement
+        update.changes[0].statement
     );
-    let page = update.before.as_ref().expect("matching rows");
+    let page = update.changes[0].before.as_ref().expect("matching rows");
     assert_eq!(page.rows.len(), 2);
     // The stored value, as the column's scale rounds it.
-    let after = update.after.as_ref().expect("values");
+    let after = update.changes[0].after.as_ref().expect("values");
     assert_eq!(after.rows, vec![row(&[Some("sold"), Some("12.35")])]);
 
     let result = changes.apply(&update).await.expect("applies");
@@ -221,8 +225,8 @@ async fn changes_are_previewed_applied_and_verified() {
         .await
         .expect("preview");
     assert_eq!(insert.rows, 2);
-    assert!(insert.before.is_none());
-    let after = insert.after.as_ref().expect("values");
+    assert!(insert.changes[0].before.is_none());
+    let after = insert.changes[0].after.as_ref().expect("values");
     assert_eq!(
         after.rows[0],
         row(&[
@@ -255,7 +259,7 @@ async fn changes_are_previewed_applied_and_verified() {
         .await
         .expect("preview");
     assert_eq!(delete.rows, 2);
-    assert!(delete.after.is_none());
+    assert!(delete.changes[0].after.is_none());
     let result = changes.apply(&delete).await.expect("applies");
     assert_eq!(result.rows_affected, Some(2));
     assert_eq!(changes.read("SELECT count(*)::text FROM items").await, "3");
@@ -326,7 +330,7 @@ async fn values_and_columns_are_checked_before_approval() {
         .await
         .expect("fits");
     assert_eq!(
-        padded.after.as_ref().map(|a| a.rows.clone()),
+        padded.changes[0].after.as_ref().map(|a| a.rows.clone()),
         Some(vec![row(&[Some("ABCDEFGHIJ")])])
     );
     let missing = changes
@@ -399,13 +403,16 @@ async fn changes_since_the_preview_are_never_applied() {
         .sessions
         .get(changes.workspace.connection_id)
         .expect("open");
-    let plan = session.plan_data_change(&retire, None).await.expect("plan");
+    let plans = session
+        .plan_data_changes(std::slice::from_ref(&retire), None)
+        .await
+        .expect("plan");
     database
         .execute("UPDATE items SET status = 'new' WHERE id = 3")
         .await;
     let before = database.snapshot().await;
     let error = session
-        .apply_data_change(&retire, &plan)
+        .apply_data_changes(std::slice::from_ref(&retire), &plans)
         .await
         .expect_err("stale plan");
     match error {
@@ -460,9 +467,9 @@ async fn read_only_and_production_connections_are_guarded() {
         .sessions
         .get(reader.workspace.connection_id)
         .expect("open");
-    let plan = session
-        .plan_data_change(
-            &change,
+    let plans = session
+        .plan_data_changes(
+            std::slice::from_ref(&change),
             Some(PageLimits {
                 max_rows: PREVIEW_ROWS,
                 max_bytes: PREVIEW_BYTES,
@@ -470,7 +477,10 @@ async fn read_only_and_production_connections_are_guarded() {
         )
         .await
         .expect("planning only reads");
-    match session.apply_data_change(&change, &plan).await {
+    match session
+        .apply_data_changes(std::slice::from_ref(&change), &plans)
+        .await
+    {
         Err(ApplyError::RolledBack(error)) => assert_eq!(error.kind(), DbErrorKind::ReadOnly),
         other => panic!("the session must refuse: {other:?}"),
     }
@@ -501,5 +511,125 @@ async fn read_only_and_production_connections_are_guarded() {
     assert_eq!(result.status, ApplyStatus::Applied);
     production.workspace.close().await;
 
+    database.drop().await;
+}
+
+#[tokio::test]
+#[ignore = "needs PostgreSQL: run scripts/postgres-fixture.sh start"]
+async fn sets_apply_together_or_not_at_all() {
+    let database = ScratchDatabase::create("aidb_changes", SCHEMA).await;
+    let changes = Changes::open(&database, Environment::Development, true).await;
+    let key = |id: &str| vec![filter("id", FilterOperator::Equals, Some(id))];
+
+    // A grid save: delete one row, edit another, add one.
+    let save = changes
+        .preview_set(vec![
+            DataChange::Delete {
+                table: table("items"),
+                filters: key("3"),
+            },
+            DataChange::Update {
+                table: table("items"),
+                set: vec![set("status", Some("sold"))],
+                filters: key("1"),
+            },
+            DataChange::Insert {
+                table: table("items"),
+                columns: vec!["id".into(), "code".into()],
+                rows: vec![row(&[Some("7"), Some("G7")])],
+            },
+        ])
+        .await
+        .expect("preview");
+    assert_eq!(save.rows, 3);
+    assert_eq!(
+        save.risk,
+        RiskLevel::R2,
+        "three one-row edits are a small write"
+    );
+    assert_eq!(
+        save.changes.iter().map(|c| c.rows).collect::<Vec<_>>(),
+        [1, 1, 1]
+    );
+    let result = changes.apply(&save).await.expect("applies");
+    assert_eq!(result.rows_affected, Some(3));
+    assert_eq!(
+        changes
+            .read("SELECT string_agg(id || ':' || status, ',' ORDER BY id) FROM items")
+            .await,
+        "1:sold,2:new,7:new"
+    );
+
+    // The last change fails: the earlier ones are rolled back with it.
+    let before = database.snapshot().await;
+    let failing = changes
+        .preview_set(vec![
+            DataChange::Update {
+                table: table("items"),
+                set: vec![set("status", Some("gone"))],
+                filters: key("2"),
+            },
+            DataChange::Insert {
+                table: table("items"),
+                columns: vec!["id".into(), "code".into()],
+                rows: vec![row(&[Some("8"), Some("A2")])],
+            },
+        ])
+        .await
+        .expect("previews");
+    let result = changes.apply(&failing).await.expect("ran");
+    assert_eq!(result.status, ApplyStatus::RolledBack);
+    let message = result.message.unwrap_or_default();
+    assert!(
+        message.starts_with("Change 2 of 2: ") && message.contains("unique constraint"),
+        "{message}"
+    );
+    assert_eq!(database.snapshot().await, before);
+
+    // A change that alters what a later one matches: the recount catches it.
+    let overlapping = changes
+        .preview_set(vec![
+            DataChange::Update {
+                table: table("items"),
+                set: vec![set("status", Some("new"))],
+                filters: key("1"),
+            },
+            DataChange::Update {
+                table: table("items"),
+                set: vec![set("status", Some("checked"))],
+                filters: vec![filter("status", FilterOperator::Equals, Some("new"))],
+            },
+        ])
+        .await
+        .expect("previews");
+    let result = changes.apply(&overlapping).await.expect("ran");
+    assert_eq!(result.status, ApplyStatus::RolledBack);
+    assert!(
+        result
+            .message
+            .as_deref()
+            .is_some_and(|m| m.starts_with("Change 2 of 2: 3 rows now match")),
+        "{result:?}"
+    );
+    assert_eq!(database.snapshot().await, before);
+
+    // A bad value names its change at preview time.
+    let error = changes
+        .preview_set(vec![
+            DataChange::Delete {
+                table: table("items"),
+                filters: key("2"),
+            },
+            DataChange::Update {
+                table: table("items"),
+                set: vec![set("price", Some("cheap"))],
+                filters: key("1"),
+            },
+        ])
+        .await
+        .expect_err("bad value");
+    assert!(error.message().starts_with("Change 2 of 2: "), "{error}");
+
+    changes.workspace.close().await;
     database.drop().await;
 }

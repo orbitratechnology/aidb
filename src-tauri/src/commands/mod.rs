@@ -398,11 +398,11 @@ mod tests {
             "preview_data_change",
             json!({
                 "connectionId": saved.id.to_string(),
-                "change": {
+                "changes": [{
                     "kind": "delete",
                     "table": { "schema": "pg_catalog", "name": "pg_am" },
                     "filters": [{ "column": "amname", "operator": "equals", "value": "none" }],
-                },
+                }],
             }),
         )
         .expect_err("the connection is read-only");
@@ -411,11 +411,11 @@ mod tests {
             "preview_data_change",
             json!({
                 "connectionId": saved.id.to_string(),
-                "change": {
+                "changes": [{
                     "kind": "delete",
                     "table": { "schema": "pg_catalog", "name": "pg_am" },
                     "filters": [],
-                },
+                }],
             }),
         )
         .expect_err("a delete needs a filter");

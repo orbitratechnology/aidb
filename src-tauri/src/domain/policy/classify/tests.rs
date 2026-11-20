@@ -316,3 +316,51 @@ fn unreadable_text_is_blocked() {
         vec!["There is no statement to run.".to_owned()]
     );
 }
+
+#[test]
+fn change_sets_are_judged_by_their_rows_in_all() {
+    let sql =
+        inspect("UPDATE orders SET status = 'x' WHERE id = 1; DELETE FROM orders WHERE id = 2");
+    let counted = |a, b| {
+        [
+            rows(a, ImpactSource::Counted),
+            rows(b, ImpactSource::Counted),
+        ]
+    };
+
+    // Two small edits: as small as one, where SQL text would be a batch (R3).
+    let small = assess_change_set(&sql, &counted(1, 1), development());
+    assert_eq!(small.risk, R2);
+    assert_eq!(small.required_approval, ApprovalLevel::Apply);
+    assert!(small.reasons.is_empty());
+    assert_eq!(assess(&sql, &counted(1, 1), development()).risk, R3);
+
+    // Small one by one, bulk together.
+    let bulk = assess_change_set(&sql, &counted(60, 60), development());
+    assert_eq!(bulk.risk, R3);
+    assert_eq!(bulk.reasons[0].code, ReasonCode::BulkWrite);
+    assert_eq!(
+        bulk.reasons[0].message,
+        "Writes 120 rows in all, more than 100."
+    );
+
+    let unknown = assess_change_set(&sql, &[rows(1, ImpactSource::Counted)], development());
+    assert_eq!(unknown.risk, R3);
+
+    // Every other rule still applies to each change.
+    let production = assess_change_set(
+        &sql,
+        &counted(1, 1),
+        PolicyContext {
+            environment: Environment::Production,
+            writes_allowed: true,
+        },
+    );
+    assert_eq!(production.risk, R3);
+    let every = assess_change_set(
+        &inspect("UPDATE orders SET status = 'x' WHERE id = 1; DELETE FROM orders"),
+        &counted(1, 5),
+        development(),
+    );
+    assert_eq!(every.risk, R4);
+}

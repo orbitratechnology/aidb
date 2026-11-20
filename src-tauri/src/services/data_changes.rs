@@ -1,10 +1,8 @@
-//! Data changes from preview to result: a change is planned against the live table and held
-//! for approval; applying it approves and uses that approval inside the core (the token never
-//! leaves it), then runs the change in one checked transaction and records the outcome.
+//! Data changes from preview to result: a set of changes is planned against the live tables and
+//! held for approval; applying it approves and uses that approval inside the core (no token is
+//! ever issued), then runs the changes in one checked transaction and records the outcome.
 
-use secrecy::SecretString;
-
-use super::approvals::{self, Approvals, Subject};
+use super::approvals::{self, Approvals};
 use super::audit;
 use super::sessions::{Sessions, not_connected};
 use crate::adapters::database::{
@@ -15,7 +13,7 @@ use crate::domain::audit::{Actor, AuditEvent, AuditStatus};
 use crate::domain::connections::ConnectionId;
 use crate::domain::data_change::{
     ApplyStatus, ChangeKind, DataChange, DataChangePreview, DataChangeResult, PREVIEW_BYTES,
-    PREVIEW_ROWS, ValueSample,
+    PREVIEW_ROWS, PlannedChange, ValueSample, validate_set,
 };
 use crate::domain::policy::approval::{ApprovalError, ApprovalId, ApprovalState, sha256_hex};
 use crate::domain::policy::classify::RiskAssessment;
@@ -27,60 +25,94 @@ const PREVIEW_LIMITS: PageLimits = PageLimits {
     max_bytes: PREVIEW_BYTES,
 };
 
-/// "Update of public.orders", for the audit log.
-fn describe(change: &DataChange) -> String {
-    let table = change.table();
+/// What a set of changes does, for the audit log: "Update of public.orders", or "3 changes to
+/// public.orders: 2 updates, 1 delete".
+fn describe(changes: &[DataChange]) -> String {
+    let name = |change: &DataChange| {
+        let table = change.table();
+        format!("{}.{}", table.schema, table.name)
+    };
+    if let [change] = changes {
+        return format!("{} of {}", change.kind().label(), name(change));
+    }
+    let mut tables: Vec<String> = changes.iter().map(name).collect();
+    tables.sort();
+    tables.dedup();
+    let parts: Vec<String> = [
+        (ChangeKind::Update, "update", "updates"),
+        (ChangeKind::Delete, "delete", "deletes"),
+        (ChangeKind::Insert, "insert", "inserts"),
+    ]
+    .into_iter()
+    .filter_map(|(kind, one, many)| {
+        let count = changes
+            .iter()
+            .filter(|change| change.kind() == kind)
+            .count();
+        match count {
+            0 => None,
+            1 => Some(format!("1 {one}")),
+            _ => Some(format!("{count} {many}")),
+        }
+    })
+    .collect();
     format!(
-        "{} of {}.{}",
-        change.kind().label(),
-        table.schema,
-        table.name
+        "{} changes to {}: {}",
+        changes.len(),
+        tables.join(", "),
+        parts.join(", ")
     )
 }
 
 fn reasons(assessment: &RiskAssessment) -> Vec<String> {
-    assessment
+    let mut reasons: Vec<String> = Vec::new();
+    for reason in assessment
         .statements
         .iter()
         .flat_map(|statement| &statement.reasons)
         .chain(&assessment.reasons)
-        .map(|reason| reason.message.clone())
-        .collect()
+    {
+        // Each edit of a set says the same thing; once is enough.
+        if !reasons.contains(&reason.message) {
+            reasons.push(reason.message.clone());
+        }
+    }
+    reasons
 }
 
-/// Plans `change` on the open connection and holds it for the user's approval.
+/// Plans `changes`, applied together in this order, on the open connection, and holds them for
+/// the user's approval.
 ///
 /// # Errors
 ///
 /// `invalid_input` for a malformed change, an unknown column, a value its column cannot hold or
-/// too many matching rows; `permission_denied` when the policy or the role's privileges refuse
-/// it here (audited); `not_found` for an unknown table; `unavailable` when not connected.
+/// too many matching rows (naming the change); `permission_denied` when the policy or the
+/// role's privileges refuse them here (audited); `not_found` for an unknown table;
+/// `unavailable` when not connected.
 pub async fn preview<A: DatabaseAdapter>(
     store: &LocalStore,
     sessions: &Sessions<A>,
     approvals: &Approvals,
     connection_id: ConnectionId,
-    change: DataChange,
+    changes: Vec<DataChange>,
     actor: Actor,
 ) -> AppResult<DataChangePreview> {
-    change.validate()?;
-    let kind = change.kind();
-    let table = change.table().clone();
-    let fingerprint = serde_json::to_vec(&change)
+    validate_set(&changes)?;
+    let fingerprint = serde_json::to_vec(&changes)
         .map(|json| sha256_hex(&json))
         .ok();
-    let description = describe(&change);
-    let requested = approvals::request_data_change(
+    let description = describe(&changes);
+    let requested = approvals::request_data_changes(
         store,
         sessions,
         approvals,
         connection_id,
-        change,
+        changes.clone(),
         PREVIEW_LIMITS,
         actor,
     )
     .await;
-    let (request, plan) = match requested {
+    let (request, plans) = match requested {
         Ok(requested) => requested,
         Err(error) => {
             if error.code() == ErrorCode::PermissionDenied {
@@ -108,16 +140,23 @@ pub async fn preview<A: DatabaseAdapter>(
             return Err(error);
         }
     };
-    let after =
-        (kind != ChangeKind::Delete).then(|| ValueSample::of(&plan.value_columns, &plan.values));
+    let planned: Vec<PlannedChange> = changes
+        .iter()
+        .zip(plans)
+        .map(|(change, plan)| PlannedChange {
+            kind: change.kind(),
+            table: change.table().clone(),
+            after: (change.kind() != ChangeKind::Delete)
+                .then(|| ValueSample::of(&plan.value_columns, &plan.values)),
+            statement: plan.statement,
+            rows: plan.rows,
+            before: plan.before,
+        })
+        .collect();
     Ok(DataChangePreview {
         approval_id: request.id,
-        kind,
-        table,
-        statement: plan.statement,
-        rows: plan.rows,
-        before: plan.before,
-        after,
+        rows: planned.iter().map(|change| change.rows).sum(),
+        changes: planned,
         risk: request.assessment.risk,
         approval: request.level,
         reasons: reasons(&request.assessment),
@@ -133,11 +172,11 @@ fn no_such_change() -> AppError {
     )
 }
 
-/// The user approves a previewed change, which then runs at once. Elevated changes need the
-/// database name typed in `confirmation`.
+/// The user approves previewed changes, which then run at once, together. Elevated changes need
+/// the database name typed in `confirmation`.
 ///
-/// Refusals before anything runs are errors. Once the change runs, the result says whether it
-/// was applied, rolled back (nothing written) or is uncertain (the connection was lost while
+/// Refusals before anything runs are errors. Once the changes run, the result says whether they
+/// were applied, rolled back (nothing written) or are uncertain (the connection was lost while
 /// committing); every outcome is audited.
 ///
 /// # Errors
@@ -153,30 +192,25 @@ pub async fn apply<A: DatabaseAdapter>(
     approval_id: ApprovalId,
     confirmation: Option<&str>,
 ) -> AppResult<DataChangeResult> {
-    let Some((owner, change)) = approvals.data_change(approval_id) else {
+    let Some((_, changes)) = approvals.data_changes(approval_id) else {
         return Err(no_such_change());
     };
-    if owner != connection_id {
-        return Err(AppError::new(
-            ErrorCode::PermissionDenied,
-            ApprovalError::WrongConnection.to_string(),
-        ));
-    }
-    let grant = approvals::approve(store, sessions, approvals, approval_id, confirmation).await?;
-    let token: SecretString = grant.token;
-    let subject = Subject::DataChange(change.clone());
-    let operation =
-        approvals::consume_subject(store, sessions, approvals, connection_id, &token, &subject)
-            .await?;
-    drop(token);
+    let operation = approvals::approve_and_use(
+        store,
+        sessions,
+        approvals,
+        connection_id,
+        approval_id,
+        confirmation,
+    )
+    .await?;
 
-    let outcome = match (&operation.plan, sessions.get(connection_id)) {
-        (Some(plan), Some(session)) => session.apply_data_change(&change, plan).await,
-        (None, _) => Err(ApplyError::RolledBack(DbError::new(
-            DbErrorKind::Other,
-            "The change was not planned.",
-        ))),
-        (_, None) => {
+    let outcome = match sessions.get(connection_id) {
+        Some(_) if operation.plans.len() != changes.len() => Err(ApplyError::RolledBack(
+            DbError::new(DbErrorKind::Other, "The changes were not planned."),
+        )),
+        Some(session) => session.apply_data_changes(&changes, &operation.plans).await,
+        None => {
             let _ = approvals::finish(approvals, operation.id, ApprovalState::Failed);
             return Err(not_connected());
         }
@@ -207,7 +241,7 @@ pub async fn apply<A: DatabaseAdapter>(
                     status: ApplyStatus::Uncertain,
                     rows_affected: None,
                     message: Some(
-                        "The connection was lost while the change was being committed, so it \
+                        "The connection was lost while the changes were being committed, so they \
                          may or may not have been written. Check the table before trying again."
                             .to_owned(),
                     ),
@@ -235,24 +269,24 @@ pub async fn apply<A: DatabaseAdapter>(
         approval_state: Some(state.as_str()),
         status,
         rows_affected: result.rows_affected,
-        detail: Some(format!("{}: {outcome_text}.", describe(&change))),
+        detail: Some(format!("{}: {outcome_text}.", describe(&changes))),
     };
     audit::record(store, &event).await;
     Ok(result)
 }
 
-/// The user declines a previewed change.
+/// The user declines previewed changes.
 ///
 /// # Errors
 ///
-/// `permission_denied` for an unknown approval, one that is not a data change, or one that is
-/// already running.
+/// `permission_denied` for an unknown approval, one that is not for data changes, or one that
+/// is already running.
 pub async fn cancel(
     store: &LocalStore,
     approvals: &Approvals,
     approval_id: ApprovalId,
 ) -> AppResult<()> {
-    let Some((connection_id, change)) = approvals.data_change(approval_id) else {
+    let Some((connection_id, changes)) = approvals.data_changes(approval_id) else {
         return Err(no_such_change());
     };
     approvals::cancel(approvals, approval_id)?;
@@ -273,7 +307,7 @@ pub async fn cancel(
         approval_state: Some(ApprovalState::Cancelled.as_str()),
         status: AuditStatus::Cancelled,
         rows_affected: None,
-        detail: Some(format!("{}: declined.", describe(&change))),
+        detail: Some(format!("{}: declined.", describe(&changes))),
     };
     audit::record(store, &event).await;
     Ok(())

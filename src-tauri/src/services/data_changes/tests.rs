@@ -66,12 +66,16 @@ fn ship() -> DataChange {
 
 impl Setup {
     async fn preview(&self, change: DataChange) -> AppResult<DataChangePreview> {
+        self.preview_set(vec![change]).await
+    }
+
+    async fn preview_set(&self, changes: Vec<DataChange>) -> AppResult<DataChangePreview> {
         preview(
             &self.store,
             &self.sessions,
             &self.approvals,
             self.id,
-            change,
+            changes,
             Actor::User,
         )
         .await
@@ -117,13 +121,14 @@ impl Setup {
 async fn a_previewed_change_is_applied_once_and_audited() {
     let setup = setup(Environment::Development, false).await;
     let preview = setup.preview(ship()).await.expect("preview");
-    assert_eq!(preview.kind, ChangeKind::Update);
+    let change = &preview.changes[0];
+    assert_eq!(change.kind, ChangeKind::Update);
     assert_eq!(preview.rows, 2);
     assert_eq!(preview.risk, RiskLevel::R2);
     assert_eq!(preview.approval, ApprovalLevel::Apply);
     assert_eq!(preview.confirmation, None);
-    assert!(preview.before.is_some(), "matching rows are shown");
-    let after = preview.after.as_ref().expect("values are shown");
+    assert!(change.before.is_some(), "matching rows are shown");
+    let after = change.after.as_ref().expect("values are shown");
     assert_eq!(after.columns, vec!["status"]);
     assert_eq!(after.rows, vec![vec![Some("shipped".to_owned())]]);
     assert_eq!(preview.reasons, vec!["Writes 2 rows (counted).".to_owned()]);
@@ -223,7 +228,7 @@ async fn read_only_connections_and_unfiltered_changes_are_refused() {
     let error = setup.preview(unfiltered).await.expect_err("no filter");
     assert_eq!(error.code(), ErrorCode::InvalidInput);
     assert!(error.message().contains("at least one filter"));
-    assert!(setup.approvals.data_change(ApprovalId::new()).is_none());
+    assert!(setup.approvals.data_changes(ApprovalId::new()).is_none());
 }
 
 #[tokio::test]
@@ -358,8 +363,82 @@ async fn inserts_count_their_rows_and_show_their_values() {
     let preview = setup.preview(insert).await.expect("preview");
     assert_eq!(preview.rows, 150);
     assert_eq!(preview.risk, RiskLevel::R3, "more than 100 rows is bulk");
-    assert!(preview.before.is_none());
-    let after = preview.after.expect("values");
+    let change = &preview.changes[0];
+    assert!(change.before.is_none());
+    let after = change.after.as_ref().expect("values");
     assert_eq!(after.total_rows, 150);
     assert_eq!(after.rows.len(), 20);
+}
+
+#[tokio::test]
+async fn sets_of_changes_are_approved_and_applied_together() {
+    let setup = setup(Environment::Development, false).await;
+    setup.adapter.catalog.set_matched_rows(1);
+    let delete = DataChange::Delete {
+        table: orders(),
+        filters: vec![Filter {
+            column: "id".into(),
+            operator: FilterOperator::Equals,
+            value: Some("9".into()),
+        }],
+    };
+    let preview = setup
+        .preview_set(vec![ship(), delete.clone()])
+        .await
+        .expect("preview");
+    assert_eq!(preview.changes.len(), 2);
+    assert_eq!(preview.rows, 2);
+    // Two one-row edits: a small write, not a batch of SQL statements.
+    assert_eq!(preview.risk, RiskLevel::R2);
+    assert_eq!(preview.approval, ApprovalLevel::Apply);
+    assert_eq!(preview.reasons, vec!["Writes 1 row (counted).".to_owned()]);
+    assert_eq!(preview.changes[1].kind, ChangeKind::Delete);
+    assert!(preview.changes[1].after.is_none());
+
+    let result = setup
+        .apply(preview.approval_id, None)
+        .await
+        .expect("applies");
+    assert_eq!(result.rows_affected, Some(2));
+    assert_eq!(setup.applied(), vec![ship(), delete.clone()]);
+    let audit = setup.audit().await;
+    assert_eq!(
+        audit.last().and_then(|event| event.4.clone()),
+        Some("2 changes to public.orders: 1 update, 1 delete: applied.".to_owned())
+    );
+
+    // The set is checked as a whole: one bad change names itself and nothing is held.
+    let error = setup
+        .preview_set(vec![
+            ship(),
+            DataChange::Delete {
+                table: orders(),
+                filters: Vec::new(),
+            },
+        ])
+        .await
+        .expect_err("no filter");
+    assert_eq!(error.code(), ErrorCode::InvalidInput);
+    assert!(error.message().starts_with("Change 2 of 2: "), "{error}");
+    let empty = setup.preview_set(Vec::new()).await.expect_err("empty");
+    assert_eq!(empty.code(), ErrorCode::InvalidInput);
+}
+
+#[tokio::test]
+async fn approving_for_another_connection_invalidates_the_approval() {
+    let setup = setup(Environment::Development, false).await;
+    let preview = setup.preview(ship()).await.expect("preview");
+    let error = apply(
+        &setup.store,
+        &setup.sessions,
+        &setup.approvals,
+        ConnectionId::new(),
+        preview.approval_id,
+        None,
+    )
+    .await
+    .expect_err("another connection");
+    assert_eq!(error.code(), ErrorCode::PermissionDenied);
+    assert_eq!(setup.approvals.state(preview.approval_id), None);
+    assert!(setup.applied().is_empty());
 }

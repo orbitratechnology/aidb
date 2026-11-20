@@ -29,6 +29,10 @@ pub const MAX_CHANGE_BYTES: usize = 8 * 1024 * 1024;
 /// Most rows an UPDATE or DELETE may match. Larger changes are refused at preview, so every
 /// change aidb applies is counted exactly and verified row by row.
 pub const MAX_CHANGED_ROWS: u64 = 10_000;
+/// Most changes applied together, in one transaction under one approval.
+pub const MAX_SET_CHANGES: usize = 200;
+/// Changes whose matching rows a preview reads as they are now; later ones show counts only.
+pub const PREVIEW_CHANGES: usize = 20;
 /// Rows shown in a preview, before and after.
 pub const PREVIEW_ROWS: u32 = 20;
 /// Size limit of the "before" rows read for a preview.
@@ -130,6 +134,12 @@ pub enum ChangeError {
     NulInValue,
     #[error(transparent)]
     Filter(#[from] RequestError),
+    #[error("Add at least one change.")]
+    NoChanges,
+    #[error("Apply at most {MAX_SET_CHANGES} changes at once.")]
+    TooManyChanges,
+    #[error("Change {0} of {1}: {2}")]
+    InChange(usize, usize, Box<ChangeError>),
 }
 
 impl From<ChangeError> for AppError {
@@ -154,6 +164,15 @@ impl DataChange {
             Self::Insert { table, .. }
             | Self::Update { table, .. }
             | Self::Delete { table, .. } => table,
+        }
+    }
+
+    /// Every value the change stores (not its filters' values).
+    fn values(&self) -> Box<dyn Iterator<Item = &Option<String>> + '_> {
+        match self {
+            Self::Insert { rows, .. } => Box::new(rows.iter().flatten()),
+            Self::Update { set, .. } => Box::new(set.iter().map(|value| &value.value)),
+            Self::Delete { .. } => Box::new(std::iter::empty()),
         }
     }
 
@@ -202,6 +221,35 @@ impl DataChange {
             Self::Delete { filters, .. } => check_filters(filters, "A DELETE"),
         }
     }
+}
+
+/// Checks a set of changes applied together: each one, and the limits on values across all.
+///
+/// # Errors
+///
+/// The first problem found, naming the change when there are several.
+pub fn validate_set(changes: &[DataChange]) -> Result<(), ChangeError> {
+    if changes.is_empty() {
+        return Err(ChangeError::NoChanges);
+    }
+    if changes.len() > MAX_SET_CHANGES {
+        return Err(ChangeError::TooManyChanges);
+    }
+    let total = changes.len();
+    for (index, change) in changes.iter().enumerate() {
+        change.validate().map_err(|error| {
+            if total == 1 {
+                error
+            } else {
+                ChangeError::InChange(index + 1, total, Box::new(error))
+            }
+        })?;
+    }
+    let values = || changes.iter().flat_map(DataChange::values);
+    if values().count() > MAX_CHANGE_VALUES {
+        return Err(ChangeError::TooManyValues);
+    }
+    check_values(values())
 }
 
 fn check_columns<'a>(
@@ -317,14 +365,11 @@ impl ValueSample {
     }
 }
 
-/// What the user reviews before approving a change. The approval it names is held by the core;
-/// approving it is the only way to apply the change.
+/// One change of a preview, as planned.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 #[serde(rename_all = "camelCase")]
-pub struct DataChangePreview {
-    #[cfg_attr(test, ts(type = "string"))]
-    pub approval_id: ApprovalId,
+pub struct PlannedChange {
     pub kind: ChangeKind,
     pub table: ObjectName,
     /// The statement that will run, with `$n` placeholders for the values.
@@ -332,10 +377,25 @@ pub struct DataChangePreview {
     /// Rows it writes: counted now for an UPDATE or DELETE.
     #[cfg_attr(test, ts(type = "number"))]
     pub rows: u64,
-    /// Matching rows as they are now (UPDATE, DELETE).
+    /// Matching rows as they are now (UPDATE, DELETE), for the first [`PREVIEW_CHANGES`].
     pub before: Option<TablePage>,
     /// The values as they will be stored (INSERT, UPDATE).
     pub after: Option<ValueSample>,
+}
+
+/// What the user reviews before approving a set of changes, applied together. The approval it
+/// names is held by the core; approving it is the only way to apply the changes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
+#[serde(rename_all = "camelCase")]
+pub struct DataChangePreview {
+    #[cfg_attr(test, ts(type = "string"))]
+    pub approval_id: ApprovalId,
+    /// In the order they will run.
+    pub changes: Vec<PlannedChange>,
+    /// Rows written by all of them.
+    #[cfg_attr(test, ts(type = "number"))]
+    pub rows: u64,
     pub risk: RiskLevel,
     pub approval: ApprovalLevel,
     /// Why it has its risk, in words.
@@ -525,6 +585,47 @@ mod tests {
         }
     }
 
+    #[test]
+    fn sets_name_the_change_that_is_wrong_and_share_the_limits() {
+        let delete = |filters: Vec<Filter>| DataChange::Delete {
+            table: table(),
+            filters,
+        };
+        assert_eq!(validate_set(&[]), Err(ChangeError::NoChanges));
+        assert_eq!(
+            validate_set(&vec![delete(vec![equals("id", "1")]); MAX_SET_CHANGES + 1]),
+            Err(ChangeError::TooManyChanges)
+        );
+        assert_eq!(
+            validate_set(&[delete(vec![equals("id", "1")]), delete(Vec::new())]),
+            Err(ChangeError::InChange(
+                2,
+                2,
+                Box::new(ChangeError::NoFilter("A DELETE"))
+            ))
+        );
+        assert_eq!(
+            validate_set(&[delete(Vec::new())]),
+            Err(ChangeError::NoFilter("A DELETE")),
+            "a single change needs no number"
+        );
+        assert_eq!(
+            ChangeError::InChange(2, 3, Box::new(ChangeError::NoRows)).to_string(),
+            "Change 2 of 3: Add at least one row."
+        );
+        // The value limits hold across the set, not only per change.
+        let big = Some("x".repeat(MAX_VALUE_BYTES));
+        let update = DataChange::Update {
+            table: table(),
+            set: vec![set("note", big.as_deref())],
+            filters: vec![equals("id", "1")],
+        };
+        assert_eq!(
+            validate_set(&vec![update; 9]),
+            Err(ChangeError::ChangeTooLarge)
+        );
+    }
+
     /// The UI builds changes within the same limits; CI fails if this copy is stale.
     #[test]
     fn export_data_change_limits() {
@@ -536,7 +637,8 @@ mod tests {
              maxInsertRows: {MAX_INSERT_ROWS},\n  maxChangeColumns: {MAX_CHANGE_COLUMNS},\n  \
              maxChangeValues: {MAX_CHANGE_VALUES},\n  maxValueBytes: {MAX_VALUE_BYTES},\n  \
              maxChangeBytes: {MAX_CHANGE_BYTES},\n  maxChangedRows: {MAX_CHANGED_ROWS},\n  \
-             previewRows: {PREVIEW_ROWS},\n\
+             previewRows: {PREVIEW_ROWS},\n  maxSetChanges: {MAX_SET_CHANGES},\n  \
+             previewChanges: {PREVIEW_CHANGES},\n\
              }} as const;\n"
         );
         let dir = std::env::var_os("TS_RS_EXPORT_DIR").expect("set in .cargo/config.toml");

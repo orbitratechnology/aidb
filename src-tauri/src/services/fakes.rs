@@ -401,26 +401,30 @@ impl DatabaseSession for FakeSession {
     }
 
     /// Refuses the table `ghost`.
-    async fn plan_data_change(
+    async fn plan_data_changes(
         &self,
-        change: &DataChange,
+        changes: &[DataChange],
         preview: Option<PageLimits>,
-    ) -> Result<DataChangePlan, DbError> {
-        if change.table().name == "ghost" {
-            return Err(DbError::new(DbErrorKind::ObjectNotFound, "No such table."));
+    ) -> Result<Vec<DataChangePlan>, DbError> {
+        let mut plans = Vec::with_capacity(changes.len());
+        for change in changes {
+            if change.table().name == "ghost" {
+                return Err(DbError::new(DbErrorKind::ObjectNotFound, "No such table."));
+            }
+            let mut plan = fake_plan(change, self.catalog.matched_rows());
+            if preview.is_some() && !matches!(change, DataChange::Insert { .. }) {
+                plan.before = Some(Self::before_page(change));
+            }
+            plans.push(plan);
         }
-        let mut plan = fake_plan(change, self.catalog.matched_rows());
-        if preview.is_some() && !matches!(change, DataChange::Insert { .. }) {
-            plan.before = Some(Self::before_page(change));
-        }
-        Ok(plan)
+        Ok(plans)
     }
 
-    /// Applies only when the plan still matches, like the real engine.
-    async fn apply_data_change(
+    /// Applies only when every plan still matches, like the real engine.
+    async fn apply_data_changes(
         &self,
-        change: &DataChange,
-        approved: &DataChangePlan,
+        changes: &[DataChange],
+        approved: &[DataChangePlan],
     ) -> Result<u64, ApplyError> {
         let failure = self
             .catalog
@@ -443,11 +447,18 @@ impl DatabaseSession for FakeSession {
             }
             None => {}
         }
-        let unchanged = DataChangePlan {
-            before: None,
-            ..approved.clone()
-        };
-        if fake_plan(change, self.catalog.matched_rows()) != unchanged {
+        let current: Vec<DataChangePlan> = changes
+            .iter()
+            .map(|change| fake_plan(change, self.catalog.matched_rows()))
+            .collect();
+        let approved: Vec<DataChangePlan> = approved
+            .iter()
+            .map(|plan| DataChangePlan {
+                before: None,
+                ..plan.clone()
+            })
+            .collect();
+        if current != approved {
             return Err(ApplyError::RolledBack(DbError::new(
                 DbErrorKind::InvalidRequest,
                 "The rows changed since the change was approved.",
@@ -457,8 +468,8 @@ impl DatabaseSession for FakeSession {
             .applied
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .push(change.clone());
-        Ok(approved.rows)
+            .extend(changes.iter().cloned());
+        Ok(approved.iter().map(|plan| plan.rows).sum())
     }
 }
 

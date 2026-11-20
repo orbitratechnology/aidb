@@ -17,6 +17,8 @@
 //! of rows written, or stored values other than the planned ones (a trigger changed them) rolls
 //! the transaction back.
 
+use std::collections::HashMap;
+
 use sqlx::postgres::{PgArguments, PgConnection};
 use sqlx::query::Query;
 use sqlx::{AssertSqlSafe, Connection, Postgres};
@@ -383,41 +385,93 @@ fn too_many_rows() -> DbError {
     ))
 }
 
-/// Plans `change` in a read-only transaction that is rolled back. The outer error is a driver
-/// failure for the caller to classify; the inner one a problem with the change itself.
+/// Names the change an error comes from, when there are several.
+fn label(error: DbError, index: usize, total: usize) -> DbError {
+    if total == 1 {
+        return error;
+    }
+    let message = format!("Change {} of {total}: {}", index + 1, error.message());
+    error.with_message(message)
+}
+
+/// The tables `changes` write, each once, in a fixed order (so concurrent sets lock them in
+/// the same order).
+fn tables(changes: &[DataChange]) -> Vec<&ObjectName> {
+    let mut tables: Vec<&ObjectName> = changes.iter().map(DataChange::table).collect();
+    tables.sort_by(|a, b| (&a.schema, &a.name).cmp(&(&b.schema, &b.name)));
+    tables.dedup();
+    tables
+}
+
+/// Reads each table written, once.
+async fn targets(
+    connection: &mut PgConnection,
+    changes: &[DataChange],
+) -> Result<Result<HashMap<ObjectName, Target>, DbError>, sqlx::Error> {
+    let mut targets = HashMap::new();
+    for table in tables(changes) {
+        match table_data::target(&mut *connection, table).await? {
+            Ok(target) => {
+                targets.insert(table.clone(), target);
+            }
+            Err(error) => return Ok(Err(error)),
+        }
+    }
+    Ok(Ok(targets))
+}
+
+/// Plans `changes` in one read-only transaction that is rolled back. Errors name the change
+/// they come from.
 pub(super) async fn plan(
     connection: &mut PgConnection,
-    change: &DataChange,
-) -> Result<Result<DataChangePlan, DbError>, sqlx::Error> {
-    let mut transaction = connection.begin_with("BEGIN READ ONLY").await?;
-    let target = match table_data::target(&mut transaction, change.table()).await? {
-        Ok(target) => target,
-        Err(error) => return Ok(Err(error)),
-    };
-    let built = match build(change, &target) {
-        Ok(built) => built,
-        Err(error) => return Ok(Err(error)),
-    };
-    let rows = match &built.count {
-        Some(count) => count_rows(&mut transaction, count, false).await?,
-        None => built.insert_rows,
-    };
-    if rows > MAX_CHANGED_ROWS {
-        return Ok(Err(too_many_rows()));
+    changes: &[DataChange],
+    classify: impl Fn(sqlx::Error) -> DbError,
+) -> Result<Vec<DataChangePlan>, DbError> {
+    let total = changes.len();
+    let mut transaction = connection
+        .begin_with("BEGIN READ ONLY")
+        .await
+        .map_err(&classify)?;
+    let targets = targets(&mut transaction, changes)
+        .await
+        .map_err(&classify)??;
+    let mut plans = Vec::with_capacity(total);
+    let mut rows_in_all = 0_u64;
+    for (index, change) in changes.iter().enumerate() {
+        let label = |error| label(error, index, total);
+        let target = &targets[change.table()];
+        let built = build(change, target).map_err(label)?;
+        let rows = match &built.count {
+            Some(count) => count_rows(&mut transaction, count, false)
+                .await
+                .map_err(|e| label(classify(e)))?,
+            None => built.insert_rows,
+        };
+        if rows > MAX_CHANGED_ROWS {
+            return Err(label(too_many_rows()));
+        }
+        rows_in_all += rows;
+        if rows_in_all > MAX_CHANGED_ROWS {
+            return Err(invalid(format!(
+                "These changes write more than {MAX_CHANGED_ROWS} rows in all. Apply fewer at \
+                 once."
+            )));
+        }
+        let values = stored_values(&mut transaction, &built)
+            .await
+            .map_err(|e| label(classify(e)))?
+            .map_err(label)?;
+        plans.push(DataChangePlan {
+            statement: built.statement,
+            parameters: built.parameters,
+            rows,
+            value_columns: built.value_columns,
+            values,
+            before: None,
+        });
     }
-    let values = match stored_values(&mut transaction, &built).await? {
-        Ok(values) => values,
-        Err(error) => return Ok(Err(error)),
-    };
-    transaction.rollback().await?;
-    Ok(Ok(DataChangePlan {
-        statement: built.statement,
-        parameters: built.parameters,
-        rows,
-        value_columns: built.value_columns,
-        values,
-        before: None,
-    }))
+    transaction.rollback().await.map_err(&classify)?;
+    Ok(plans)
 }
 
 fn sorted(mut rows: Vec<Vec<Option<String>>>) -> Vec<Vec<Option<String>>> {
@@ -425,37 +479,89 @@ fn sorted(mut rows: Vec<Vec<Option<String>>>) -> Vec<Vec<Option<String>>> {
     rows
 }
 
-/// Applies `change` if it still plans to `approved`; see the module notes.
+/// Applies `changes` in one transaction, in order, if each still plans to its `approved` plan;
+/// see the module notes. Returns the rows written by all of them.
 pub(super) async fn apply(
     connection: &mut PgConnection,
-    change: &DataChange,
-    approved: &DataChangePlan,
+    changes: &[DataChange],
+    approved: &[DataChangePlan],
     classify: impl Fn(sqlx::Error) -> DbError,
 ) -> Result<u64, ApplyError> {
     let failed = |error| ApplyError::RolledBack(classify(error));
-    let refused = |message: String| ApplyError::RolledBack(invalid(message));
-    let object = change.table();
+    if changes.len() != approved.len() {
+        return Err(ApplyError::RolledBack(invalid(
+            "The changes do not match the approved plan.".to_owned(),
+        )));
+    }
 
     // A plain BEGIN: a read-only session keeps refusing writes.
     let mut transaction = connection.begin().await.map_err(failed)?;
-    let target = table_data::target(&mut transaction, object)
+    // The lock every write takes anyway, taken first on each table: it blocks structure
+    // changes until the end, so the tables checked next are the tables written.
+    let unlocked = targets(&mut transaction, changes)
         .await
         .map_err(failed)?
         .map_err(ApplyError::RolledBack)?;
-    // The lock every write takes anyway, taken first: it blocks structure changes until the
-    // end, so the table checked next is the table written.
-    sqlx::query(AssertSqlSafe(format!(
-        "LOCK TABLE ONLY {} IN ROW EXCLUSIVE MODE",
-        target.relation.quoted
-    )))
-    .execute(&mut *transaction)
-    .await
-    .map_err(failed)?;
-    let target = table_data::target(&mut transaction, object)
+    for table in tables(changes) {
+        sqlx::query(AssertSqlSafe(format!(
+            "LOCK TABLE ONLY {} IN ROW EXCLUSIVE MODE",
+            unlocked[table].relation.quoted
+        )))
+        .execute(&mut *transaction)
+        .await
+        .map_err(failed)?;
+    }
+    let targets = targets(&mut transaction, changes)
         .await
         .map_err(failed)?
         .map_err(ApplyError::RolledBack)?;
-    let built = build(change, &target).map_err(ApplyError::RolledBack)?;
+
+    let total = changes.len();
+    let mut written = 0;
+    for (index, (change, plan)) in changes.iter().zip(approved).enumerate() {
+        written += apply_one(
+            &mut transaction,
+            change,
+            &targets[change.table()],
+            plan,
+            &classify,
+        )
+        .await
+        .map_err(|error| match error {
+            ApplyError::RolledBack(error) => ApplyError::RolledBack(label(error, index, total)),
+            uncertain @ ApplyError::Uncertain(_) => uncertain,
+        })?;
+    }
+
+    transaction.commit().await.map_err(|error| {
+        let error = classify(error);
+        // Without an answer from the server, the commit may or may not have happened.
+        if error.sqlstate().is_none()
+            || matches!(
+                error.kind(),
+                DbErrorKind::ConnectionLost | DbErrorKind::ServerUnavailable
+            )
+        {
+            ApplyError::Uncertain(error)
+        } else {
+            ApplyError::RolledBack(error)
+        }
+    })?;
+    Ok(written)
+}
+
+/// Checks one change against its approved plan, runs it and verifies what it wrote, inside the
+/// write transaction. Changes earlier in the set have already run, so the recount sees them.
+async fn apply_one(
+    connection: &mut PgConnection,
+    change: &DataChange,
+    target: &Target,
+    approved: &DataChangePlan,
+    classify: &impl Fn(sqlx::Error) -> DbError,
+) -> Result<u64, ApplyError> {
+    let failed = |error| ApplyError::RolledBack(classify(error));
+    let refused = |message: String| ApplyError::RolledBack(invalid(message));
+    let built = build(change, target).map_err(ApplyError::RolledBack)?;
     if built.statement != approved.statement || built.parameters != approved.parameters {
         return Err(refused(
             "The table's structure changed since the change was approved. Nothing was changed."
@@ -463,7 +569,7 @@ pub(super) async fn apply(
         ));
     }
     if let Some(count) = &built.count {
-        let rows = count_rows(&mut transaction, count, true)
+        let rows = count_rows(&mut *connection, count, true)
             .await
             .map_err(failed)?;
         if rows != approved.rows {
@@ -475,7 +581,7 @@ pub(super) async fn apply(
             )));
         }
     }
-    let values = stored_values(&mut transaction, &built)
+    let values = stored_values(&mut *connection, &built)
         .await
         .map_err(failed)?
         .map_err(ApplyError::RolledBack)?;
@@ -490,10 +596,10 @@ pub(super) async fn apply(
         &built.parameters,
     );
     let (written, returned) = if change.kind() == ChangeKind::Delete {
-        let result = query.execute(&mut *transaction).await.map_err(failed)?;
+        let result = query.execute(&mut *connection).await.map_err(failed)?;
         (result.rows_affected(), Vec::new())
     } else {
-        let rows = query.fetch_all(&mut *transaction).await.map_err(failed)?;
+        let rows = query.fetch_all(&mut *connection).await.map_err(failed)?;
         let mut returned = Vec::with_capacity(rows.len());
         for row in &rows {
             let cells = (0..built.value_columns.len())
@@ -525,21 +631,6 @@ pub(super) async fn apply(
                 .to_owned(),
         ));
     }
-
-    transaction.commit().await.map_err(|error| {
-        let error = classify(error);
-        // Without an answer from the server, the commit may or may not have happened.
-        if error.sqlstate().is_none()
-            || matches!(
-                error.kind(),
-                DbErrorKind::ConnectionLost | DbErrorKind::ServerUnavailable
-            )
-        {
-            ApplyError::Uncertain(error)
-        } else {
-            ApplyError::RolledBack(error)
-        }
-    })?;
     Ok(written)
 }
 

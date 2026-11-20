@@ -68,6 +68,7 @@ export type { ObjectKind } from './generated/ObjectKind'
 export type { ObjectName } from './generated/ObjectName'
 export type { ObjectSummary } from './generated/ObjectSummary'
 export type { OperationId } from './generated/OperationId'
+export type { PlannedChange } from './generated/PlannedChange'
 export type { PageColumn } from './generated/PageColumn'
 export type { PageRequest } from './generated/PageRequest'
 export type { ParsedConnectionUri } from './generated/ParsedConnectionUri'
@@ -168,6 +169,8 @@ export {
   DataChangePreviewSchema,
   DataChangeResultSchema,
   DataChangeSchema,
+  DataChangeSetSchema,
+  PlannedChangeSchema,
   ValueSampleSchema,
 } from './data-change'
 export {

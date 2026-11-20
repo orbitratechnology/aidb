@@ -390,18 +390,21 @@ export function listAuditEvents(filter: AuditFilter): Promise<AuditEntry[]> {
 }
 
 /**
- * Plans an INSERT, UPDATE or DELETE against the live table and holds it for the user's
- * approval. Nothing is written.
+ * Plans INSERT, UPDATE and DELETE changes, applied together in this order, against the live
+ * tables and holds them for the user's approval. Nothing is written.
  */
 export function previewDataChange(
   connectionId: ConnectionId,
-  change: DataChange,
+  changes: DataChange[],
 ): Promise<DataChangePreview> {
-  return callCommand(COMMANDS.previewDataChange, DataChangePreviewSchema, { connectionId, change })
+  return callCommand(COMMANDS.previewDataChange, DataChangePreviewSchema, {
+    connectionId,
+    changes,
+  })
 }
 
 /**
- * The user's approval of a previewed change, which then runs in one checked transaction.
+ * The user's approval of previewed changes, which then run together in one checked transaction.
  * Elevated changes need the database name in `confirmation`.
  */
 export function applyDataChange(
@@ -416,7 +419,7 @@ export function applyDataChange(
   })
 }
 
-/** Declines a previewed change. */
+/** Declines previewed changes. */
 export function cancelDataChange(approvalId: string): Promise<void> {
   return callCommand(COMMANDS.cancelDataChange, z.null(), { approvalId }).then(() => undefined)
 }

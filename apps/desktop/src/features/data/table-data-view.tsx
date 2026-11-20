@@ -24,13 +24,26 @@ import {
   EyeOffIcon,
   FilterIcon,
   InfoIcon,
+  PencilLineIcon,
+  PlusIcon,
   RefreshCwIcon,
   Rows3Icon,
   SearchXIcon,
   XIcon,
 } from 'lucide-react'
+import { toast } from 'sonner'
 import { LoadError } from '@/components/shared/load-error'
 import { EmptyState } from '@/components/shared/status-states'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -45,9 +58,34 @@ import {
 import { Skeleton } from '@/components/ui/skeleton'
 import { Spinner } from '@/components/ui/spinner'
 import { useMediaQuery } from '@/hooks/use-media-query'
+import { useActiveConnection } from '@/features/connections/sessions'
 import { NativeError } from '@/lib/native'
 import { approximateCount } from './catalog-view'
 import { DataGrid } from './data-grid'
+import { editScope, useEditBuffer } from './edit-store'
+import {
+  bufferProblem,
+  deleteRow,
+  describeCounts,
+  describeKey,
+  editing,
+  editRow,
+  keyId,
+  pendingCounts,
+  pendingRow,
+  putNewRow,
+  removeNewRow,
+  revertRow,
+  reviewItems,
+  rowKey,
+  rowValues,
+  toChanges,
+  type Editing,
+  type EditBuffer,
+  type NewRow,
+  type PendingRow,
+  type ReviewItem,
+} from './edits'
 import { ExportMenu } from './export-menu'
 import { FilterSheet } from './filter-sheet'
 import {
@@ -57,9 +95,11 @@ import {
   type GridFeatures,
   type GridRow,
 } from './grid-table'
-import { tablePageKey, useTablePage, type PageQuery } from './queries'
+import { tablePageKey, useObjectDetails, useTablePage, type PageQuery } from './queries'
 import { RecordList } from './record-list'
-import { RowDetailSheet } from './row-detail-sheet'
+import { ReviewChangesDialog } from './review-changes-dialog'
+import { RowDetailSheet, type RowEditActions } from './row-detail-sheet'
+import { RowEditorSheet, type EditorColumn, type EditorTarget } from './row-editor-sheet'
 import { describeFilter, rowRange, truncatedKeys } from './table-view'
 
 /** Below this width rows are shown as a record list instead of a grid. */
@@ -140,6 +180,95 @@ export function TableDataView({
   const stopped = result.fetchStatus === 'idle' && (result.isPending || result.isPlaceholderData)
   const truncated = useMemo(() => (page ? truncatedKeys(page) : new Set<string>()), [page])
 
+  // Editing: what may change here, the unsaved changes, and the rows they touch on this page.
+  const active = useActiveConnection()
+  const details = useObjectDetails(connectionId, object)
+  const scope = editScope(connectionId, object)
+  const { buffer, update, clear } = useEditBuffer(scope)
+  const readOnly = active?.readOnly ?? true
+  const edit: Editing | null = useMemo(
+    () =>
+      details.data ? editing({ details: details.data, columns: knownColumns, readOnly }) : null,
+    [details.data, knownColumns, readOnly],
+  )
+  const rowKeys = useMemo(
+    () =>
+      page && edit && !edit.rowsBlocked
+        ? page.rows.map((_, row) => rowKey(page, row, edit.keyColumns, truncated))
+        : [],
+    [page, edit, truncated],
+  )
+  const pending = (row: number): PendingRow | undefined => pendingRow(buffer, rowKeys[row] ?? null)
+  const [editor, setEditor] = useState<EditorTarget | null>(null)
+  const [editorRow, setEditorRow] = useState<number | null>(null)
+  const [reviewing, setReviewing] = useState<{
+    changes: ReturnType<typeof toChanges>
+    items: ReviewItem[]
+  } | null>(null)
+  const [discarding, setDiscarding] = useState(false)
+  const counts = pendingCounts(buffer)
+
+  const editorColumns = (row: number | null): EditorColumn[] =>
+    knownColumns.map((column, index) => {
+      const info = details.data?.columns.find((c) => c.name === column.name)
+      const cut = row !== null && truncated.has(`${row}:${index}`)
+      return {
+        column,
+        nullable: info?.nullable ?? true,
+        readOnly:
+          edit?.readOnlyColumns[column.name] ??
+          (cut
+            ? `Only the first ${page?.cellCharLimit.toLocaleString() ?? ''} characters were loaded, so it cannot be edited here.`
+            : null),
+      }
+    })
+
+  const rowEdit = (row: number): RowEditActions | undefined => {
+    if (!page || !edit) return undefined
+    const key = rowKeys[row] ?? null
+    const blocked =
+      edit.blocked ??
+      edit.rowsBlocked ??
+      (key ? null : "This row's primary key was not loaded in full, so it cannot be changed here.")
+    const loaded = rowValues(page, row, truncated)
+    const rowPending = pending(row)
+    return {
+      blocked,
+      pending: rowPending,
+      onEdit: () => {
+        if (!key) return
+        setEditorRow(row)
+        setEditor({
+          mode: 'edit',
+          label: describeKey(key),
+          values: { ...loaded, ...(rowPending?.status === 'edited' ? rowPending.values : {}) },
+        })
+      },
+      onDelete: () => key && update((current) => deleteRow(current, key, loaded)),
+      onRevert: () => key && update((current) => revertRow(current, keyId(key))),
+    }
+  }
+
+  const keepEdits = (values: Record<string, string | null>) => {
+    if (!editor || !page) return
+    if (editor.mode === 'new') {
+      const row: NewRow = { id: editor.id, values }
+      update((current) => putNewRow(current, row))
+    } else if (editorRow !== null) {
+      const key = rowKeys[editorRow]
+      if (key)
+        update((current) => editRow(current, key, rowValues(page, editorRow, truncated), values))
+    }
+    setEditor(null)
+    setEditorRow(null)
+  }
+
+  const startReview = () =>
+    setReviewing({
+      changes: toChanges(buffer, object, knownColumns),
+      items: reviewItems(buffer, knownColumns),
+    })
+
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex flex-wrap items-center gap-2 border-b px-4 py-2 sm:px-6">
@@ -171,6 +300,20 @@ export function TableDataView({
           <RefreshCwIcon data-icon="inline-start" />
           Reload
         </Button>
+        {edit && !edit.blocked && (
+          <Button
+            variant="outline"
+            size="sm"
+            className="max-sm:min-h-11"
+            onClick={() => {
+              setEditorRow(null)
+              setEditor({ mode: 'new', id: crypto.randomUUID(), label: 'New row', values: {} })
+            }}
+          >
+            <PlusIcon data-icon="inline-start" />
+            Add row
+          </Button>
+        )}
         {fetching && (
           <span className="flex items-center gap-2 text-sm text-muted-foreground" role="status">
             <Spinner />
@@ -227,6 +370,20 @@ export function TableDataView({
         </ul>
       )}
 
+      {counts.total > 0 && (
+        <PendingBar
+          buffer={buffer}
+          problem={bufferProblem(buffer)}
+          onEditNew={(row) => {
+            setEditorRow(null)
+            setEditor({ mode: 'new', id: row.id, label: 'New row', values: row.values })
+          }}
+          onRemoveNew={(id) => update((current) => removeNewRow(current, id))}
+          onReview={startReview}
+          onDiscard={() => setDiscarding(true)}
+        />
+      )}
+
       {page && <PageNotices page={page} isView={summary?.kind === 'view'} />}
 
       <Body
@@ -238,6 +395,7 @@ export function TableDataView({
         onClearFilters={() => applyFilters({ filters: [], sort })}
         onOpenRow={(row, column) => setDetail({ row, column })}
         object={object}
+        pending={pending}
       />
 
       {page && (
@@ -249,8 +407,59 @@ export function TableDataView({
           focusColumn={detail?.column}
           onRowChange={(row) => setDetail({ row, column: detail?.column })}
           onClose={() => setDetail(null)}
+          edit={detail ? rowEdit(detail.row) : undefined}
         />
       )}
+      <RowEditorSheet
+        target={editor}
+        source={`${object.schema}.${object.name}`}
+        columns={editorColumns(editorRow)}
+        onKeep={keepEdits}
+        onClose={() => {
+          setEditor(null)
+          setEditorRow(null)
+        }}
+      />
+      {active && (
+        <ReviewChangesDialog
+          open={reviewing !== null}
+          onOpenChange={(open) => !open && setReviewing(null)}
+          connectionId={connectionId}
+          environment={active.environment}
+          changes={reviewing?.changes ?? []}
+          items={reviewing?.items ?? []}
+          onApplied={(outcome) => {
+            clear()
+            setReviewing(null)
+            const rows = outcome.rowsAffected ?? 0
+            toast.success(`Saved. ${rows === 1 ? '1 row' : `${rows} rows`} written.`)
+            void queryClient.invalidateQueries({
+              queryKey: ['tablePage', connectionId, object.schema, object.name],
+            })
+          }}
+          onReload={() => void result.refetch()}
+        />
+      )}
+      <AlertDialog open={discarding} onOpenChange={setDiscarding}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              Discard{' '}
+              {counts.total === 1 ? 'the unsaved change' : `${counts.total} unsaved changes`}?
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {describeCounts(counts)}. {counts.total === 1 ? 'It was' : 'They were'} never saved,
+              so the database stays as it is.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Keep editing</AlertDialogCancel>
+            <AlertDialogAction variant="destructive" onClick={clear}>
+              Discard
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
       <FilterSheet
         open={filtersOpen}
         onOpenChange={setFiltersOpen}
@@ -272,6 +481,7 @@ function Body({
   onClearFilters,
   onOpenRow,
   object,
+  pending,
 }: {
   result: ReturnType<typeof useTablePage>
   grid: boolean
@@ -281,6 +491,7 @@ function Body({
   onClearFilters: () => void
   onOpenRow: (row: number, column?: string) => void
   object: ObjectName
+  pending: (row: number) => PendingRow | undefined
 }) {
   if (result.isError) {
     const error = result.error
@@ -342,9 +553,22 @@ function Body({
   }
   const busy = result.isPlaceholderData
   return grid ? (
-    <DataGrid table={table} page={page} truncated={truncated} busy={busy} onOpenRow={onOpenRow} />
+    <DataGrid
+      table={table}
+      page={page}
+      truncated={truncated}
+      busy={busy}
+      onOpenRow={onOpenRow}
+      pending={pending}
+    />
   ) : (
-    <RecordList page={page} truncated={truncated} busy={busy} onOpenRow={onOpenRow} />
+    <RecordList
+      page={page}
+      truncated={truncated}
+      busy={busy}
+      onOpenRow={onOpenRow}
+      pending={pending}
+    />
   )
 }
 
@@ -481,5 +705,87 @@ function PageNotices({ page, isView }: { page: TablePage; isView: boolean }) {
         </li>
       ))}
     </ul>
+  )
+}
+
+/** Unsaved changes to this table, with the way to review and save or discard them. */
+function PendingBar({
+  buffer,
+  problem,
+  onEditNew,
+  onRemoveNew,
+  onReview,
+  onDiscard,
+}: {
+  buffer: EditBuffer
+  problem: string | null
+  onEditNew: (row: NewRow) => void
+  onRemoveNew: (id: string) => void
+  onReview: () => void
+  onDiscard: () => void
+}) {
+  const counts = pendingCounts(buffer)
+  return (
+    <section
+      aria-label="Unsaved changes"
+      className="flex flex-col gap-2 border-b bg-muted/50 px-4 py-2 sm:px-6"
+    >
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+        <p className="flex min-w-0 flex-1 basis-64 items-start gap-2 text-sm">
+          <PencilLineIcon aria-hidden className="mt-0.5 size-4 shrink-0" />
+          <span>
+            <span className="font-medium">
+              {counts.total === 1 ? '1 unsaved change' : `${counts.total} unsaved changes`}
+            </span>
+            <span className="text-muted-foreground">
+              : {describeCounts(counts)}. Nothing is written until you save.
+            </span>
+          </span>
+        </p>
+        <div className="ml-auto flex gap-2">
+          <Button variant="outline" size="sm" className="max-sm:min-h-11" onClick={onDiscard}>
+            Discard
+          </Button>
+          <Button
+            size="sm"
+            className="max-sm:min-h-11"
+            disabled={problem !== null}
+            onClick={onReview}
+          >
+            Review and save
+          </Button>
+        </div>
+      </div>
+      {problem && <p className="text-sm text-destructive">{problem}</p>}
+      {buffer.inserts.length > 0 && (
+        <ul aria-label="New rows" className="flex flex-wrap gap-2">
+          {buffer.inserts.map((row, index) => (
+            <li key={row.id}>
+              <Badge variant="outline" className="gap-1 py-0.5 pr-0.5 font-normal">
+                <PlusIcon aria-hidden />
+                <Button
+                  variant="link"
+                  size="sm"
+                  className="h-auto px-0"
+                  onClick={() => onEditNew(row)}
+                >
+                  New row {buffer.inserts.length > 1 ? index + 1 : ''}
+                  <span className="sr-only">, edit</span>
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon-xs"
+                  className="max-sm:size-8"
+                  aria-label={`Remove new row ${index + 1}`}
+                  onClick={() => onRemoveNew(row.id)}
+                >
+                  <XIcon />
+                </Button>
+              </Badge>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
   )
 }

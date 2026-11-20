@@ -30,7 +30,9 @@ use super::database::{
 };
 use crate::domain::catalog::{CatalogOverview, ObjectDetails, ObjectName};
 use crate::domain::connections::Engine;
-use crate::domain::data_change::{ChangeKind, DataChange, DataChangePlan, PREVIEW_ROWS};
+use crate::domain::data_change::{
+    ChangeKind, DataChange, DataChangePlan, PREVIEW_CHANGES, PREVIEW_ROWS,
+};
 use crate::domain::database::{Capabilities, OperationId, SUPPORTED_POSTGRES_VERSIONS, ServerInfo};
 use crate::domain::export::{ExportSummary, RowSink};
 use crate::domain::policy::facts::TargetTable;
@@ -288,18 +290,23 @@ impl DatabaseSession for PgSession {
         policy::write_targets(&mut connection, targets, |e| self.session_error(e)).await
     }
 
-    async fn plan_data_change(
+    async fn plan_data_changes(
         &self,
-        change: &DataChange,
+        changes: &[DataChange],
         preview: Option<PageLimits>,
-    ) -> Result<DataChangePlan, DbError> {
+    ) -> Result<Vec<DataChangePlan>, DbError> {
         let mut connection = self.begin_operation(OperationId::new()).await?;
-        let mut plan = data_change::plan(&mut connection, change)
-            .await
-            .map_err(|e| self.session_error(e))??;
-        if let Some(limits) = preview
-            && change.kind() != ChangeKind::Insert
-        {
+        let mut plans =
+            data_change::plan(&mut connection, changes, |e| self.session_error(e)).await?;
+        let Some(limits) = preview else {
+            return Ok(plans);
+        };
+        let previewed = changes
+            .iter()
+            .zip(plans.iter_mut())
+            .filter(|(change, _)| change.kind() != ChangeKind::Insert)
+            .take(PREVIEW_CHANGES);
+        for (change, plan) in previewed {
             let request = PageRequest {
                 object: change.table().clone(),
                 filters: change.filters().to_vec(),
@@ -314,19 +321,22 @@ impl DatabaseSession for PgSession {
                     .map_err(|e| self.session_error(e))??,
             );
         }
-        Ok(plan)
+        Ok(plans)
     }
 
-    async fn apply_data_change(
+    async fn apply_data_changes(
         &self,
-        change: &DataChange,
-        approved: &DataChangePlan,
+        changes: &[DataChange],
+        approved: &[DataChangePlan],
     ) -> Result<u64, ApplyError> {
         let mut connection = self
             .begin_operation(OperationId::new())
             .await
             .map_err(ApplyError::RolledBack)?;
-        data_change::apply(&mut connection, change, approved, |e| self.session_error(e)).await
+        data_change::apply(&mut connection, changes, approved, |e| {
+            self.session_error(e)
+        })
+        .await
     }
 }
 

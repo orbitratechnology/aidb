@@ -136,7 +136,7 @@ Status legend: `[x]` done · `[~]` in progress · `[ ]` not started
 
 - [x] **10.1 Data change engine.** INSERT/UPDATE/DELETE preview, predicate requirement, impact
       estimate, transactional apply with an approval token, verification.
-- [ ] **10.2 Grid editing.** Pending-change buffer, before/after diff, Save/Discard, delete
+- [x] **10.2 Grid editing.** Pending-change buffer, before/after diff, Save/Discard, delete
       confirmation.
 - [ ] **10.3 Agent writes.** `preview_data_change` / `apply_approved_data_change` wired to the
       approval UI.

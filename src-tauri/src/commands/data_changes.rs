@@ -8,27 +8,27 @@ use crate::errors::AppResult;
 use crate::services::data_changes;
 use crate::state::AppState;
 
-/// Plans an INSERT, UPDATE or DELETE against the live table and holds it for approval. Nothing
-/// is written.
+/// Plans INSERT, UPDATE and DELETE changes, applied together in order, against the live tables
+/// and holds them for approval. Nothing is written.
 #[tauri::command]
 #[tracing::instrument(skip_all, err(Debug))]
 pub async fn preview_data_change(
     state: State<'_, AppState>,
     connection_id: ConnectionId,
-    change: DataChange,
+    changes: Vec<DataChange>,
 ) -> AppResult<DataChangePreview> {
     data_changes::preview(
         state.local_store()?,
         state.sessions(),
         state.approvals(),
         connection_id,
-        change,
+        changes,
         Actor::User,
     )
     .await
 }
 
-/// The user's approval of a previewed change, which then runs in one checked transaction.
+/// The user's approval of previewed changes, which then run together in one checked transaction.
 #[tauri::command]
 #[tracing::instrument(skip_all, err(Debug))]
 pub async fn apply_data_change(
@@ -48,7 +48,7 @@ pub async fn apply_data_change(
     .await
 }
 
-/// Declines a previewed change.
+/// Declines previewed changes.
 #[tauri::command]
 #[tracing::instrument(skip_all, err(Debug))]
 pub async fn cancel_data_change(

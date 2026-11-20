@@ -11,4 +11,6 @@ export const DATA_CHANGE_LIMITS = {
   maxChangeBytes: 8388608,
   maxChangedRows: 10000,
   previewRows: 20,
+  maxSetChanges: 200,
+  previewChanges: 20,
 } as const;

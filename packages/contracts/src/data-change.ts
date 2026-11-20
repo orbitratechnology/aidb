@@ -8,6 +8,7 @@ import type { DataChange } from './generated/DataChange'
 import { DATA_CHANGE_LIMITS } from './generated/DataChangeLimits'
 import type { DataChangePreview } from './generated/DataChangePreview'
 import type { DataChangeResult } from './generated/DataChangeResult'
+import type { PlannedChange } from './generated/PlannedChange'
 import type { ValueSample } from './generated/ValueSample'
 import { CellRefSchema, FilterSchema, TablePageSchema } from './table-data'
 import { TABLE_DATA_LIMITS } from './generated/TableDataLimits'
@@ -55,20 +56,31 @@ export const ValueSampleSchema = z.object({
   totalRows: z.number().int().nonnegative(),
 }) satisfies z.ZodType<ValueSample>
 
-export const DataChangePreviewSchema = z.object({
-  approvalId: z.uuid(),
+export const PlannedChangeSchema = z.object({
   kind: ChangeKindSchema,
   table: ObjectNameSchema,
   statement: z.string(),
   rows: z.number().int().nonnegative(),
   before: TablePageSchema.nullable(),
   after: ValueSampleSchema.nullable(),
+}) satisfies z.ZodType<PlannedChange>
+
+export const DataChangePreviewSchema = z.object({
+  approvalId: z.uuid(),
+  changes: z.array(PlannedChangeSchema).min(1),
+  rows: z.number().int().nonnegative(),
   risk: RiskLevelSchema,
   approval: ApprovalLevelSchema,
   reasons: z.array(z.string()),
   confirmation: z.string().nullable(),
   expiresAt: z.string(),
 }) satisfies z.ZodType<DataChangePreview>
+
+/** The changes sent together: at least one, at most the core's limit. */
+export const DataChangeSetSchema = z
+  .array(DataChangeSchema)
+  .min(1)
+  .max(DATA_CHANGE_LIMITS.maxSetChanges)
 
 export const ApplyStatusSchema = z.enum([
   'applied',

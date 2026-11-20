@@ -374,8 +374,39 @@ pub fn classify_statement(
 
 /// The risk of a whole submission, and what it needs before it may run. `impacts` lines up with
 /// `sql.statements`; missing entries count as unknown.
+/// How statements submitted together are judged as a whole.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Grouping {
+    /// SQL text: several statements with a change among them are harder to review (R3).
+    Batch,
+    /// Changes aidb wrote itself from a structured request, each counted: judged by the rows
+    /// they write in all.
+    ChangeSet,
+}
+
 #[must_use]
 pub fn assess(sql: &SqlFacts, impacts: &[ImpactFacts], context: PolicyContext) -> RiskAssessment {
+    assess_grouped(sql, impacts, context, Grouping::Batch)
+}
+
+/// Assesses data changes aidb wrote itself and applies together, with their rows counted. The
+/// batch rule does not apply: their statements are generated, one per change, and their total
+/// rows decide between a small and a bulk write.
+#[must_use]
+pub fn assess_change_set(
+    sql: &SqlFacts,
+    impacts: &[ImpactFacts],
+    context: PolicyContext,
+) -> RiskAssessment {
+    assess_grouped(sql, impacts, context, Grouping::ChangeSet)
+}
+
+fn assess_grouped(
+    sql: &SqlFacts,
+    impacts: &[ImpactFacts],
+    context: PolicyContext,
+    grouping: Grouping,
+) -> RiskAssessment {
     use RiskLevel::{R2, R3, R4};
     let unknown = ImpactFacts::unknown();
     let statements: Vec<StatementRisk> = sql
@@ -406,15 +437,37 @@ pub fn assess(sql: &SqlFacts, impacts: &[ImpactFacts], context: PolicyContext) -
         .iter()
         .filter(|statement| writes(statement.operation))
         .count();
-    if statements.len() > 1 && changes > 0 {
-        reasons.add(
+    match grouping {
+        Grouping::Batch if statements.len() > 1 && changes > 0 => reasons.add(
             ReasonCode::Batch,
             R3,
             format!(
                 "Runs {} statements together, {changes} of them changing the database.",
                 statements.len()
             ),
-        );
+        ),
+        Grouping::ChangeSet if statements.len() > 1 => {
+            let total = (0..statements.len())
+                .map(|index| impacts.get(index).and_then(|impact| impact.rows))
+                .sum::<Option<u64>>();
+            match total {
+                Some(rows) if rows > SMALL_WRITE_ROWS => reasons.add(
+                    ReasonCode::BulkWrite,
+                    R3,
+                    format!(
+                        "Writes {} in all, more than {SMALL_WRITE_ROWS}.",
+                        rows_text(rows)
+                    ),
+                ),
+                Some(_) => {}
+                None => reasons.add(
+                    ReasonCode::UnknownImpact,
+                    R3,
+                    "aidb cannot count how many rows these changes write.",
+                ),
+            }
+        }
+        _ => {}
     }
     let risk = statements
         .iter()

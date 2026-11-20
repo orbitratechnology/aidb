@@ -16,6 +16,7 @@ pub mod library;
 pub mod policy;
 pub mod providers;
 pub mod query;
+pub mod schema_diff;
 pub mod sessions;
 pub mod settings;
 pub mod table_data;

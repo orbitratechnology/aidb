@@ -12,6 +12,7 @@ mod errors;
 mod options;
 mod policy;
 mod query;
+mod schema;
 mod table_data;
 
 use std::collections::HashMap;
@@ -232,6 +233,16 @@ impl DatabaseSession for PgSession {
 
     async fn describe_object(&self, object: &ObjectName) -> Result<ObjectDetails, DbError> {
         catalog::describe(&self.pool, object)
+            .await
+            .map_err(|e| self.session_error(e))?
+    }
+
+    async fn read_schema(
+        &self,
+        schema: &str,
+    ) -> Result<crate::domain::schema_diff::SchemaModel, DbError> {
+        let mut connection = self.begin_operation(OperationId::new()).await?;
+        schema::read(&mut connection, schema)
             .await
             .map_err(|e| self.session_error(e))?
     }

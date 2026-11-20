@@ -16,6 +16,7 @@ describe('isActivePath', () => {
 describe('destinationTitle', () => {
   it('names the top-level destination', () => {
     expect(destinationTitle('/data')).toBe('Data')
+    expect(destinationTitle('/migrations')).toBe('Migrations')
     expect(destinationTitle('/settings/diagnostics')).toBe('Settings')
   })
 

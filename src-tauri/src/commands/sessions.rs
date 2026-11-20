@@ -56,6 +56,7 @@ pub async fn disconnect(state: State<'_, AppState>, id: ConnectionId) -> AppResu
     let closed = state.sessions().close(id).await;
     state.approvals().invalidate_connection(id);
     state.imports().forget_connection(id);
+    state.schema_diffs().forget_connection(id);
     tracing::info!(connection = %id, closed, "disconnected");
     Ok(closed)
 }

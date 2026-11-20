@@ -13,6 +13,7 @@ use crate::services::approvals::Approvals;
 use crate::services::assistant::RunningTasks;
 use crate::services::catalog::CatalogCache;
 use crate::services::imports::Imports;
+use crate::services::schema_diff::SchemaDiffs;
 use crate::services::sessions::Sessions;
 
 /// Directories the app owns on this device.
@@ -86,6 +87,7 @@ pub struct AppState {
     assistant: RunningTasks,
     approvals: Approvals,
     imports: Imports,
+    schema_diffs: SchemaDiffs,
 }
 
 impl AppState {
@@ -100,6 +102,7 @@ impl AppState {
             assistant: RunningTasks::default(),
             approvals: Approvals::default(),
             imports: Imports::default(),
+            schema_diffs: SchemaDiffs::default(),
         }
     }
 
@@ -119,6 +122,12 @@ impl AppState {
     #[must_use]
     pub fn imports(&self) -> &Imports {
         &self.imports
+    }
+
+    /// Schema files read for comparison, and the comparisons made.
+    #[must_use]
+    pub fn schema_diffs(&self) -> &SchemaDiffs {
+        &self.schema_diffs
     }
 
     /// Assistant questions being answered, by task id.

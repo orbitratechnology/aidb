@@ -15,8 +15,12 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { useTheme } from '@/hooks/use-theme'
 import { isTheme } from '@/lib/theme'
+import { MORE_NAV } from './navigation'
 
-/** Compact-screen menu holding Settings and the theme, which have no room in the bottom bar. */
+/**
+ * Compact-screen menu holding the destinations, Settings and the theme that have no room in the
+ * bottom bar.
+ */
 export function AppMenu() {
   const { theme, setTheme } = useTheme()
 
@@ -29,6 +33,14 @@ export function AppMenu() {
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="min-w-48">
         <DropdownMenuGroup>
+          {MORE_NAV.map(({ to, label, icon: Icon }) => (
+            <DropdownMenuItem key={to} asChild className="min-h-11">
+              <Link to={to}>
+                <Icon />
+                {label}
+              </Link>
+            </DropdownMenuItem>
+          ))}
           <DropdownMenuItem asChild className="min-h-11">
             <Link to="/settings">
               <SettingsIcon />

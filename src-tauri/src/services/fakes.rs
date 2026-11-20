@@ -254,6 +254,35 @@ impl DatabaseSession for FakeSession {
         })
     }
 
+    async fn read_schema(
+        &self,
+        schema: &str,
+    ) -> Result<crate::domain::schema_diff::SchemaModel, DbError> {
+        use crate::domain::schema_diff::{Column, SchemaModel, Table};
+        if schema != "public" {
+            return Err(DbError::new(DbErrorKind::ObjectNotFound, "No such schema."));
+        }
+        Ok(SchemaModel {
+            schema: schema.into(),
+            tables: vec![Table {
+                name: "customers".into(),
+                columns: vec![Column {
+                    name: "id".into(),
+                    data_type: "integer".into(),
+                    nullable: false,
+                    default: None,
+                    identity: None,
+                    generated: None,
+                    serial: false,
+                }],
+                rows: Some(10),
+                ..Table::default()
+            }],
+            stored_text: true,
+            ..SchemaModel::default()
+        })
+    }
+
     async fn describe_object(&self, object: &ObjectName) -> Result<ObjectDetails, DbError> {
         self.catalog.describe_loads.fetch_add(1, Ordering::SeqCst);
         if object.schema != "public" || !["customers", "orders"].contains(&object.name.as_str()) {

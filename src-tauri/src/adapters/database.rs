@@ -66,6 +66,13 @@ pub trait DatabaseSession: std::fmt::Debug + Send + Sync + 'static {
         object: &ObjectName,
     ) -> impl Future<Output = Result<ObjectDetails, DbError>> + Send;
 
+    /// A schema's tables (columns, constraints, indexes) and views, for comparison, read in a
+    /// read-only transaction.
+    fn read_schema(
+        &self,
+        schema: &str,
+    ) -> impl Future<Output = Result<crate::domain::schema_diff::SchemaModel, DbError>> + Send;
+
     /// One page of a table or view, read in a read-only transaction. Column names in the
     /// request are matched against the live table; values are bound, never formatted into SQL.
     /// The read runs as `request.operation_id` when given, so it can be cancelled.

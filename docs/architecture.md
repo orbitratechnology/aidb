@@ -450,6 +450,62 @@ first 10 rows (values cut at 2,000 characters), the row count and warnings, neve
 - **Apply**: `apply_data_change`, as for any other set: one transaction, every row or none. The
   audit describes it as "Insert of 2,500 rows into public.items" (or "Insert or update of …").
 
+## Schema comparison
+
+`domain::schema_diff`, `adapters::postgres::schema` and `services::schema_diff` compare a schema
+on the open connection (the target, which the migration changes) with a source: another schema
+on the same connection, a schema on another saved connection, or a `.sql` file. Both sides become
+a `SchemaModel`: tables (columns with type, nullability, default, identity, stored generated
+expression and serial ownership; primary key, unique, check and foreign key constraints;
+indexes that are not a constraint's own; the row estimate) and views (query, and the tables,
+views and columns it reads). Up to 5,000 tables and views per schema.
+
+- **From a database** (`read_schema`): catalog queries in a `READ ONLY` transaction with
+  `SET LOCAL search_path = pg_catalog`, so the server prints every name outside `pg_catalog`
+  with its schema, the same way everywhere (`format_type`, `pg_get_expr`, `pg_get_indexdef`,
+  `pg_get_viewdef`; view dependencies per column from `pg_depend`). Partitioned tables,
+  materialized views, foreign tables, functions, types, unowned sequences, triggers, row
+  security policies and exclusion constraints are counted as not compared.
+- **From another saved connection**: `read_schema_elsewhere` opens a session of its own with
+  the profile forced read-only, reads, and closes it. It never joins the open sessions, so the
+  one-connection rule for plans and approvals holds. The password comes from the credential
+  store, or is typed once for a profile without one.
+- **From a file** (`open_schema_file`, at most 4 MB of UTF-8): the core reads it through the
+  native dialog and holds it in memory (4 at a time, until the page closes). `parse` splits it
+  with the `sqlparser` tokenizer and reads `CREATE TABLE`, `CREATE INDEX`, `ALTER TABLE ... ADD`
+  and `ALTER COLUMN` statements, `CREATE VIEW`, and the identity and `OWNED BY` forms `pg_dump`
+  writes (matched by token). Settings, ownership, comments and privileges are skipped silently;
+  anything else is counted as not compared, and statements it cannot read are listed by line.
+  Nothing in the file runs. Unnamed checks get PostgreSQL's default name.
+- **Comparing** (`generate::plan`): tables, columns and views by name; constraints and indexes
+  by what they are (kind, columns, normalized expression), so differently named copies match.
+  Types use `format_type`'s spelling (`varchar(40)` is `character varying(40)`). Expressions are
+  compared as tokens: lowercase outside quotes, casts and redundant parentheses dropped, and the
+  side's own schema dropped from names (also in `'name'::regclass`). PostgreSQL rewrites view
+  queries and check conditions when it stores them, so a file's views are only added or
+  removed, and a file's check that reads differently matches the database's by name, with a note.
+  Renames are not detected.
+- **Steps**, in an order PostgreSQL accepts: drop views, foreign keys, indexes, other constraints
+  and tables; create tables (with their primary, unique and check constraints); add, change and
+  drop columns (type with `USING`, identity before default, `NOT NULL` before adding an
+  identity, a generated column dropped and added again, a sequence for a new serial default);
+  add constraints and indexes; add foreign keys; create views. Views that read a column being
+  dropped or retyped, and views reading those, are dropped first and created again (PostgreSQL
+  refuses the change otherwise, and `CREATE OR REPLACE VIEW` cannot change a column's type).
+  Names from the source schema are moved to the target's. With "concurrently", index creates and
+  drops use `CONCURRENTLY` and run after the transaction.
+- **Notes per step**: data loss (dropped tables and columns with the row estimate, narrowing type
+  changes), locks (`ACCESS EXCLUSIVE` briefly, or with a rewrite or full scan, `SHARE` while an
+  index builds, `SHARE ROW EXCLUSIVE` for foreign keys, with `NOT VALID` advice), possible
+  failures (existing rows, dependent objects, sequences and identities starting at 1), and
+  statements outside the transaction. Each statement is also classified by the policy (risk on
+  the target connection's environment).
+- **Result** (`compare_schemas`): steps, counts, notes on what was not compared, the highest
+  risk, and the script: `BEGIN; SET LOCAL search_path TO <target>;`, the steps, `COMMIT;`, then
+  the non-transactional ones. The core holds each comparison under its id (8 at a time, dropped
+  when the connection changes); `save_schema_script` writes a held script through the native
+  save dialog. Nothing is applied here.
+
 ## Audit log
 
 `operation_audit` is append-only (a trigger rejects updates); only Settings › Storage clears it.
@@ -709,6 +765,14 @@ Ask screen (8.3) drives it. The model proposes; Rust decides.
   "Check the import" shows what to fix, or the check: environment, risk and reasons, rows and
   statements, the first rows as stored, the SQL on request, and the typed database name when
   elevated. Any change after a check declines it. Applied: a toast, the rows reload.
+- **Migrations** (`features/migrations`, in the sidebar and, below 640px, the app menu): the
+  schema to change, then "Another schema" (a connection, this one by default, and a schema; a
+  password field when that connection has none saved) or "A .sql file" (the file and which of
+  its schemas), and "Create and drop indexes concurrently". The result shows the environment,
+  the highest risk and the counts; an alert listing steps that delete data (and that renames
+  show as a drop and an add); steps outside the transaction; what was not compared; then each
+  step with its action, risk, notes (icon and label, not color alone) and SQL; and Copy script
+  and Save script.
 - **AI providers** (Settings › AI providers): "Use the AI assistant" (off by default) with a
   provider picker; the `ai` settings section stores the switch and the chosen profile, the core
   refuses to turn AI on without an existing provider, and deleting that provider turns AI off.

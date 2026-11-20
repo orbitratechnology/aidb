@@ -171,6 +171,24 @@ export {
 } from './catalog'
 export { COMMANDS, type CommandName } from './commands'
 export {
+  CompareRequestSchema,
+  DiffSummarySchema,
+  MigrationStepSchema,
+  SchemaDiffSchema,
+  SchemaFileSchema,
+  StepNoteSchema,
+} from './schema-diff'
+export type { CompareRequest } from './generated/CompareRequest'
+export type { CompareSource } from './generated/CompareSource'
+export type { DiffSummary } from './generated/DiffSummary'
+export type { GenerateOptions } from './generated/GenerateOptions'
+export type { MigrationStep } from './generated/MigrationStep'
+export type { NoteKind } from './generated/NoteKind'
+export type { SchemaDiff } from './generated/SchemaDiff'
+export type { SchemaFile } from './generated/SchemaFile'
+export type { StepAction } from './generated/StepAction'
+export type { StepNote } from './generated/StepNote'
+export {
   ColumnMappingSchema,
   CsvImportDraftSchema,
   CsvImportPreviewSchema,

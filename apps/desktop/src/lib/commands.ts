@@ -11,6 +11,8 @@ import {
   ContextPreviewSchema,
   CredentialBackendSchema,
   CsvImportDraftSchema,
+  SchemaDiffSchema,
+  SchemaFileSchema,
   CsvImportPreviewSchema,
   DataChangePreviewSchema,
   DataChangeResultSchema,
@@ -48,6 +50,9 @@ import {
   type ContextPreview,
   type CredentialBackend,
   type CsvImportDraft,
+  type CompareRequest,
+  type SchemaDiff,
+  type SchemaFile,
   type CsvImportPreview,
   type CsvImportRequest,
   type CsvOptions,
@@ -475,4 +480,36 @@ export function closeCsvImport(importId: string): Promise<void> {
 /** Data changes waiting for the user's decision (the assistant's proposals among them). */
 export function listPendingChanges(connectionId: ConnectionId | null): Promise<PendingChange[]> {
   return callCommand(COMMANDS.listPendingChanges, z.array(PendingChangeSchema), { connectionId })
+}
+
+/** Asks for a `.sql` file and reads it in the core for comparison. Null when the user cancels. */
+export function openSchemaFile(): Promise<SchemaFile | null> {
+  return callCommand(COMMANDS.openSchemaFile, SchemaFileSchema.nullable())
+}
+
+/** Forgets a file read for comparison. */
+export function closeSchemaFile(fileId: string): Promise<void> {
+  return callCommand(COMMANDS.closeSchemaFile, z.null(), { fileId }).then(() => undefined)
+}
+
+/**
+ * Compares a schema on the open connection with another schema or a file, and returns the steps
+ * that make it match. Nothing runs. `password` is for a source on another connection whose
+ * password is not saved; it is used once.
+ */
+export function compareSchemas(
+  connectionId: ConnectionId,
+  request: CompareRequest,
+  password: string | null,
+): Promise<SchemaDiff> {
+  return callCommand(COMMANDS.compareSchemas, SchemaDiffSchema, {
+    connectionId,
+    request,
+    password,
+  })
+}
+
+/** Saves a comparison's script through the save dialog. The file name, or null if cancelled. */
+export function saveSchemaScript(diffId: string): Promise<string | null> {
+  return callCommand(COMMANDS.saveSchemaScript, z.string().nullable(), { diffId })
 }

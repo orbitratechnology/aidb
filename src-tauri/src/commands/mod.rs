@@ -22,6 +22,7 @@ mod external;
 mod library;
 mod providers;
 mod query;
+mod schema_diff;
 mod sessions;
 mod settings;
 mod table_data;
@@ -56,6 +57,10 @@ pub(crate) fn handler<R: Runtime>() -> impl Fn(Invoke<R>) -> bool + Send + Sync 
         catalog::catalog_overview,
         catalog::refresh_catalog,
         catalog::describe_object,
+        schema_diff::open_schema_file,
+        schema_diff::close_schema_file,
+        schema_diff::compare_schemas,
+        schema_diff::save_schema_script,
         table_data::read_table_page,
         table_data::cancel_operation,
         export::export_table,

@@ -1,4 +1,5 @@
 import {
+  FileDiffIcon,
   GitCompareArrowsIcon,
   SettingsIcon,
   SparklesIcon,
@@ -21,6 +22,11 @@ export const PRIMARY_NAV: readonly NavItem[] = [
   { to: '/changes', label: 'Changes', icon: GitCompareArrowsIcon },
 ]
 
+/** Destinations with no room in the compact bottom navigation: listed in the app menu there. */
+export const MORE_NAV: readonly NavItem[] = [
+  { to: '/migrations', label: 'Migrations', icon: FileDiffIcon },
+]
+
 export const SETTINGS_NAV: NavItem = { to: '/settings', label: 'Settings', icon: SettingsIcon }
 
 export function isActivePath(pathname: string, to: string): boolean {
@@ -29,6 +35,8 @@ export function isActivePath(pathname: string, to: string): boolean {
 
 /** Title of the top-level destination that contains `pathname`. */
 export function destinationTitle(pathname: string): string {
-  const match = [...PRIMARY_NAV, SETTINGS_NAV].find((item) => isActivePath(pathname, item.to))
+  const match = [...PRIMARY_NAV, ...MORE_NAV, SETTINGS_NAV].find((item) =>
+    isActivePath(pathname, item.to),
+  )
   return match?.label ?? 'aidb'
 }

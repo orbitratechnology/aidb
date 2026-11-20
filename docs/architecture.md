@@ -953,7 +953,9 @@ do; Settings › Storage clears the data first.
 - `pnpm build:web` builds the UI; `tauri build` embeds it in the binary.
 - **Packages**: Linux x64 `.deb`, `.rpm` and AppImage (built on Ubuntu 22.04, the oldest
   supported LTS); Windows x64 MSI and NSIS installers (the NSIS one installs per user); macOS
-  `.dmg` for Apple Silicon and Intel, built natively on each. macOS bundles are signed ad hoc and
+  `.dmg` for Apple Silicon and Intel, built natively on each. The AppImage carries the app's
+  libraries but, like every AppImage, uses the system's OpenGL/EGL drivers and fonts, which
+  desktop distributions install by default. macOS bundles are signed ad hoc and
   Windows installers are unsigned until release certificates exist (12.3).
 - **CI** (GitHub Actions) on every push:
   - web checks, end-to-end UI tests, and Rust fmt/clippy/tests with a contract drift check;

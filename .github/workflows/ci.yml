@@ -400,10 +400,14 @@ jobs:
           key: apt-${{ matrix.runner }}-${{ github.job }}-${{ steps.apt-week.outputs.week }}
           restore-keys: |
             apt-${{ matrix.runner }}-${{ github.job }}-
-      # Only a display: the app's own libraries come with the package (or inside the AppImage).
-      - name: Install a virtual display
+      # A display, and the graphics and font libraries every desktop has: an AppImage carries
+      # the app's own libraries but, by design, uses the system's OpenGL/EGL drivers and fonts.
+      # The .deb pulls everything else in through its dependencies.
+      - name: Install a virtual display and a desktop's graphics libraries
         timeout-minutes: 20
-        run: scripts/ci-install-apt.sh xvfb xauth
+        run: >-
+          scripts/ci-install-apt.sh xvfb xauth libegl1 libgl1 libgles2 libgbm1 libgl1-mesa-dri
+          libfontconfig1 libfreetype6
       # The AppImage first, while the machine has none of the app's libraries.
       - name: Smoke test the AppImage
         run: xvfb-run -a node scripts/smoke-test.mjs appimage dist/release/*.AppImage dist/upgrade/*.AppImage

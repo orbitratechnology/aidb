@@ -35,7 +35,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(log_first_command(commands::handler()))
-        .build(tauri::generate_context!())
+        .build(context())
         .expect("failed to start the aidb runtime");
 
     app.run(|handle, event| {
@@ -43,6 +43,13 @@ pub fn run() {
             shutdown(handle);
         }
     });
+}
+
+/// The app's configuration, assets and capabilities, for any runtime (tests use the mock one).
+/// The only expansion of `generate_context!` in the crate: on macOS it embeds the Info.plist
+/// under a fixed symbol, so a second expansion fails to link.
+pub(crate) fn context<R: Runtime>() -> tauri::Context<R> {
+    tauri::generate_context!()
 }
 
 /// Logs the first command the interface sends, once, by name only. It shows that the webview

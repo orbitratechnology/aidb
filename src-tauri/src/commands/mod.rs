@@ -114,11 +114,7 @@ mod tests {
 
     use super::handler;
 
-    /// The app's context, built once: on macOS it embeds the Info.plist under a fixed symbol, so
-    /// each expansion of `generate_context!` outside this function would clash.
-    pub(super) fn context() -> tauri::Context<MockRuntime> {
-        tauri::generate_context!()
-    }
+    pub(super) use crate::app::context;
 
     fn app() -> App<MockRuntime> {
         mock_builder()

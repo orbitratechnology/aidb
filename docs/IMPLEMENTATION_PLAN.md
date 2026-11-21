@@ -157,7 +157,7 @@ Status legend: `[x]` done · `[~]` in progress · `[ ]` not started
       navigation, Playwright responsive tests.
 - [x] **12.2 Cross-platform builds.** Windows, macOS and Linux CI packaging, install smoke tests,
       secret-scanning tests.
-- [ ] **12.3 Release readiness.** Performance profiling, user-facing privacy and security docs,
+- [x] **12.3 Release readiness.** Performance profiling, user-facing privacy and security docs,
       supported platforms, release checklist.
 
 ## Version baseline (checked 24 October 2026)

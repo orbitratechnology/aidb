@@ -19,8 +19,8 @@ import type {
   TablePage,
 } from '@aidb/contracts'
 
-/** What state the app starts in. */
-export type Scenario = 'connected' | 'disconnected'
+/** What state the app starts in. `large` is connected to a big database (performance tests). */
+export type Scenario = 'connected' | 'disconnected' | 'large'
 
 const CONNECTION = '6f1c2a40-0000-4000-8000-00000000c001'
 const PROVIDER = '6f1c2a40-0000-4000-8000-00000000a001'
@@ -379,6 +379,42 @@ const diagnostics: DiagnosticsInfo = {
   credentialStore: { backend: 'os_store', reason: null },
 }
 
+/** 10,000 tables and views over five schemas: half the catalog overview's cap. */
+const largeCatalog: CatalogSnapshot = {
+  ...catalog,
+  schemas: ['public', 'sales', 'billing', 'ops', 'archive'].map((name) => ({
+    name,
+    comment: null,
+    accessible: true,
+  })),
+  objects: Array.from({ length: 10_000 }, (_, i) => ({
+    schema: ['public', 'sales', 'billing', 'ops', 'archive'][i % 5]!,
+    name: `${i % 10 === 0 ? 'v' : 't'}${String(i).padStart(5, '0')}`,
+    kind: i % 10 === 0 ? ('view' as const) : ('table' as const),
+    rowEstimate: i * 37,
+    comment: null,
+    readable: true,
+  })),
+}
+
+/** A full page: the Safety setting's 500 rows, twelve columns. */
+function largePage(): TablePage {
+  const base = page()
+  const columns = Array.from({ length: 12 }, (_, i) => ({
+    name: `column_${i}`,
+    dataType: i % 3 === 0 ? 'integer' : 'text',
+    kind: i % 3 === 0 ? ('number' as const) : ('text' as const),
+  }))
+  return {
+    ...base,
+    columns,
+    rows: Array.from({ length: 500 }, (_, r) =>
+      columns.map((_, c) => (c % 3 === 0 ? String(r * 12 + c) : `value ${r}-${c} with some text`)),
+    ),
+    order: [{ column: 'column_0', direction: 'asc' }],
+  }
+}
+
 const appInfo: AppInfo = { name: 'aidb', version: '0.1.0', platform: 'linux' }
 
 type Args = Record<string, unknown> | undefined
@@ -388,7 +424,8 @@ export function handler(
   scenario: Scenario,
   theme: 'light' | 'dark',
 ): (command: string, args: Args) => unknown {
-  const connected = scenario === 'connected'
+  const connected = scenario !== 'disconnected'
+  const large = scenario === 'large'
   const settings: AppSettings = { ...appSettings, appearance: { theme } }
   const answers: Record<string, (args: Args) => unknown> = {
     app_info: () => appInfo,
@@ -398,10 +435,10 @@ export function handler(
     list_connections: () => [connection],
     active_sessions: () => (connected ? [session] : []),
     list_providers: () => [provider],
-    catalog_overview: () => catalog,
-    refresh_catalog: () => catalog,
+    catalog_overview: () => (large ? largeCatalog : catalog),
+    refresh_catalog: () => (large ? largeCatalog : catalog),
     describe_object: () => orders,
-    read_table_page: () => page(),
+    read_table_page: () => (large ? largePage() : page()),
     analyze_sql: (args) => analysis(String(args?.sql ?? '')),
     run_query: (args) => result(String((args?.request as { sql?: string } | undefined)?.sql ?? '')),
     explain_query: () => plan,

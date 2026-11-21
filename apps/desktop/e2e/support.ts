@@ -44,7 +44,7 @@ export const ROUTES = [
   '/settings/diagnostics',
 ] as const
 
-type Options = { scenario?: 'connected' | 'disconnected'; theme?: 'light' | 'dark' }
+type Options = { scenario?: 'connected' | 'disconnected' | 'large'; theme?: 'light' | 'dark' }
 
 /** Opens a screen of the app running on the fixture core, and waits for it to settle. */
 export async function open(page: Page, route: string, options: Options = {}): Promise<void> {

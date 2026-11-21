@@ -8,6 +8,8 @@ const port = 4173
 export default defineConfig({
   testDir: './e2e',
   testMatch: '**/*.spec.ts',
+  // Performance tests run against a production build, with their own config.
+  testIgnore: 'performance/**',
   fullyParallel: true,
   forbidOnly: Boolean(process.env.CI),
   retries: 0,

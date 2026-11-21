@@ -51,7 +51,8 @@
     "shortDescription": "Local-first PostgreSQL client with an optional AI agent",
     "copyright": "Copyright (c) 2026 Orbitra Tech",
     "macOS": {
-      "signingIdentity": "-"
+      "signingIdentity": "-",
+      "minimumSystemVersion": "13.0"
     },
     "icon": [
       "icons/32x32.png",

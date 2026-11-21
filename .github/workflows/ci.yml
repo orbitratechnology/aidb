@@ -34,6 +34,10 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm test
       - run: pnpm build:web
+      # Every file that holds the version agrees, and a release tag names it.
+      - run: node scripts/check-version.mjs
+      - name: Report the interface's size
+        run: node scripts/size-report.mjs
 
   e2e:
     name: End to end (responsive, accessibility, keyboard)
@@ -53,6 +57,9 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm e2e
+      # The production-built interface with a large database: screen switches, the schema tree,
+      # the grid. Timings go to the job summary.
+      - run: pnpm --filter @aidb/desktop e2e:performance
       - name: Keep failure screenshots
         if: failure()
         uses: actions/upload-artifact@v7
@@ -166,6 +173,12 @@ jobs:
         run: |
           source target/postgres-fixture/env
           AIDB_LOG=trace cargo test -p aidb --locked --lib secret_scan -- --ignored
+      # Large catalogs and tables, with generous budgets; once, on the middle of the range.
+      - name: Measure performance
+        if: matrix.postgres == '17'
+        run: |
+          source target/postgres-fixture/env
+          cargo test -p aidb --locked --test performance -- --ignored --nocapture
       - name: Stop PostgreSQL
         if: always()
         run: scripts/postgres-fixture.sh stop
@@ -328,6 +341,29 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      # Developer ID signing and notarization, once the maintainer adds the certificate as
+      # repository secrets (docs/release-checklist.md). Tauri reads these variables; without
+      # them the bundles stay signed ad hoc. Only set variables are passed on, since Tauri
+      # treats a present but empty one as configured.
+      - name: Use the macOS signing certificate if configured
+        if: runner.os == 'macOS'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY \
+            APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
+            if [ -n "${!name}" ]; then
+              # The delimiter form keeps multi-line values (a base64 certificate) intact.
+              delimiter="EOF_$(openssl rand -hex 8)"
+              { echo "$name<<$delimiter"; echo "${!name}"; echo "$delimiter"; } >> "$GITHUB_ENV"
+              echo "$name is configured"
+            fi
+          done
       - run: pnpm tauri build --bundles ${{ matrix.bundles }}
       # The same build packaged again as the next patch version, to test upgrading. These
       # packages are only for the smoke tests.
@@ -344,6 +380,17 @@ jobs:
             \( -name '*.deb' -o -name '*.rpm' -o -name '*.AppImage' -o -name '*.msi' -o -name '*.exe' -o -name '*.dmg' \) \
             -exec cp {} dist/upgrade/ \;
           ls -l dist/release dist/upgrade
+      - name: Report the packages' sizes
+        run: |
+          {
+            echo "### Packages: ${{ matrix.name }}"
+            echo
+            echo "| Package | Size |"
+            echo "| --- | ---: |"
+            for file in dist/release/*; do
+              echo "| \`$(basename "$file")\` | $(( $(wc -c < "$file") / 1048576 )) MB |"
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.artifact }}
@@ -352,7 +399,7 @@ jobs:
           retention-days: 7
       - uses: actions/upload-artifact@v7
         with:
-          name: ${{ matrix.artifact }}-upgrade
+          name: smoke-upgrade-${{ matrix.artifact }}
           path: dist/upgrade/*
           if-no-files-found: error
           retention-days: 1
@@ -390,7 +437,7 @@ jobs:
           path: dist/release
       - uses: actions/download-artifact@v7
         with:
-          name: aidb-linux-x64-upgrade
+          name: smoke-upgrade-aidb-linux-x64
           path: dist/upgrade
       - id: apt-week
         run: echo "week=$(date -u +%G-%V)" >> "$GITHUB_OUTPUT"
@@ -435,7 +482,43 @@ jobs:
           path: dist/release
       - uses: actions/download-artifact@v7
         with:
-          name: aidb-linux-x64-upgrade
+          name: smoke-upgrade-aidb-linux-x64
           path: dist/upgrade
       - name: Smoke test the RPM package
         run: xvfb-run -a node scripts/smoke-test.mjs rpm dist/release/*.rpm dist/upgrade/*.rpm
+
+  # On a version tag, once every test and smoke test has passed: a draft GitHub release with
+  # the packages, their SHA-256 checksums, and the changelog's section as notes. The
+  # maintainer reviews and publishes it (docs/release-checklist.md).
+  release:
+    name: Draft the release
+    if: github.ref_type == 'tag' && startsWith(github.ref_name, 'v')
+    needs: [web, e2e, rust, postgres, audit, platform, bundle, smoke-ubuntu, smoke-fedora]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - run: node scripts/check-version.mjs
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: aidb-*
+          path: dist
+          merge-multiple: true
+      - name: Write checksums
+        working-directory: dist
+        run: sha256sum -- * > SHA256SUMS && cat SHA256SUMS
+      - name: Take the release notes from the changelog
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          awk -v v="$version" '
+            /^## \[/ { section = index($0, "[" v "]") > 0; next }
+            section { print }
+          ' CHANGELOG.md > notes.md
+          test -s notes.md || { echo "CHANGELOG.md has no section for $version"; exit 1; }
+      - name: Create the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          gh release create "$GITHUB_REF_NAME" dist/* --draft --verify-tag
+          --title "aidb ${GITHUB_REF_NAME#v}" --notes-file notes.md

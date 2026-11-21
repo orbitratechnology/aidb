@@ -216,6 +216,8 @@ const FORMATS = {
 }
 
 const spec = FORMATS[format] ?? fail(`unknown format ${format}`)
+/** Startup times and memory, reported at the end (and in the CI job summary). */
+const measurements = []
 const dirs = appDirs()
 
 function logText() {
@@ -241,6 +243,7 @@ async function start(context) {
   const binary = spec.binary()
   if (!fs.existsSync(binary)) fail(`${context}: ${binary} is not installed`)
   console.log(`$ ${binary}`)
+  const launched = Date.now()
   const child = spawn(binary, [], {
     env: {
       ...process.env,
@@ -273,8 +276,47 @@ async function start(context) {
     console.error(`--- app output ---\n${output.slice(-4000)}\n--- app log ---\n${logText()}`)
     throw error
   }
-  console.log(`${context}: started, the interface connected`)
+  const ms = startupMs(launched)
+  console.log(`${context}: started, the interface connected after ${ms} ms`)
+  measurements.push({ step: context, startup: ms })
   return { child, exitedRef: () => exited }
+}
+
+/** Milliseconds from launch to the "interface connected" line, by the log's own clock. */
+function startupMs(launched) {
+  const line = logText()
+    .split('\n')
+    .find((text) => text.includes(READY))
+  const stamp = line?.match(/^\S*?(\d{4}-\d{2}-\d{2}T[\d:.]+Z)/)?.[1]
+  return stamp ? Date.parse(stamp) - launched : null
+}
+
+/**
+ * Resident memory of the app and the processes it started, in MB. On macOS WebKit's own
+ * processes run under launchd, so only the app's process is counted there.
+ */
+function memoryMb(child) {
+  try {
+    if (process.platform === 'win32') {
+      const script =
+        '$all = Get-CimInstance Win32_Process | Select-Object ProcessId, ParentProcessId, WorkingSetSize; ' +
+        `$ids = @(${child.pid}); ` +
+        'do { $more = @($all | Where-Object { $ids -contains $_.ParentProcessId -and $ids -notcontains $_.ProcessId } | ForEach-Object { $_.ProcessId }); $ids += $more } while ($more.Count -gt 0); ' +
+        '($all | Where-Object { $ids -contains $_.ProcessId } | Measure-Object WorkingSetSize -Sum).Sum'
+      return Math.round(Number(run('powershell', ['-NoProfile', '-Command', script])) / 1e6)
+    }
+    // Every process in the app's group (it was started as the group's leader).
+    const kb = execFileSync('ps', ['-A', '-o', 'pgid=,rss='])
+      .toString()
+      .split('\n')
+      .map((line) => line.trim().split(/\s+/).map(Number))
+      .filter(([pgid]) => pgid === child.pid)
+      .reduce((sum, [, rss]) => sum + rss, 0)
+    return Math.round(kb / 1000)
+  } catch (error) {
+    console.log(`memory: not measured (${error.message})`)
+    return null
+  }
 }
 
 /** Sends a signal to the app and every process it started. */
@@ -357,6 +399,23 @@ function packageVersion(file) {
   return match ? match[1] : fail(`no version in ${file}`)
 }
 
+function report() {
+  const lines = measurements.map(({ step, startup, memory }) =>
+    startup !== undefined
+      ? `| ${format} | ${step} | ${startup ?? '?'} ms |`
+      : `| ${format} | ${step} | ${memory ?? '?'} MB |`,
+  )
+  const table = [`| Package | Measurement | Value |`, `| --- | --- | --- |`, ...lines].join('\n')
+  console.log(`\n${table}`)
+  const summary = process.env.GITHUB_STEP_SUMMARY
+  if (summary) {
+    fs.appendFileSync(
+      summary,
+      `\n### ${format} on ${process.platform}/${process.arch}\n\n${table}\n`,
+    )
+  }
+}
+
 async function main() {
   console.log(`Smoke test: ${format} on ${process.platform}/${process.arch}`)
   console.log(`data: ${dirs.data}\nlogs: ${dirs.logs}`)
@@ -369,7 +428,11 @@ async function main() {
   checkVersion(packageVersion(first), 'install')
 
   step('Start, then crash')
-  await crash(await start('first start'))
+  const first = await start('first start')
+  // Settled memory: a few seconds after the interface is up.
+  await sleep(5000)
+  measurements.push({ step: 'memory after start', memory: memoryMb(first.child) })
+  await crash(first)
 
   step('Start after the crash, then quit')
   await quit(await start('start after a crash'), 'quit')
@@ -392,6 +455,7 @@ async function main() {
   fs.rmSync(dirs.data, { recursive: true, force: true })
   fs.rmSync(dirs.logs, { recursive: true, force: true })
 
+  report()
   console.log(`\nSmoke test passed: ${format}`)
 }
 

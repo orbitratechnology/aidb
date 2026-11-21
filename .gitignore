@@ -44,3 +44,4 @@ coverage/
 # Playwright output
 test-results/
 playwright-report/
+dist-e2e/

@@ -956,7 +956,8 @@ do; Settings › Storage clears the data first.
   `.dmg` for Apple Silicon and Intel, built natively on each. The AppImage carries the app's
   libraries but, like every AppImage, uses the system's OpenGL/EGL drivers and fonts, which
   desktop distributions install by default. macOS bundles are signed ad hoc and
-  Windows installers are unsigned until release certificates exist (12.3).
+  Windows installers are unsigned until release certificates exist (see the release
+  checklist).
 - **CI** (GitHub Actions) on every push:
   - web checks, end-to-end UI tests, and Rust fmt/clippy/tests with a contract drift check;
   - PostgreSQL 15–18 integration tests and the secret scan on Linux;
@@ -984,3 +985,14 @@ do; Settings › Storage clears the data first.
   navigation, 44px controls on phones), axe's WCAG 2.2 AA rules in light and dark, and keyboard
   use (skip link, visible focus, focus in and out of dialogs, running SQL, the SQL tabs). A
   test fails on an uncaught page error or a command the fixtures do not answer.
+- **Performance** ([performance](performance.md)): the smoke tests record each package's start
+  time (from the app's own log) and memory; `tests/performance.rs` times the core on a database
+  with 2,000 tables and a 300,000-row table (PostgreSQL 17 job); `e2e/performance/` times the
+  production-built interface with 10,000 catalog objects and 500-row pages, and checks that the
+  tree and grid stay bounded; `scripts/size-report.mjs` reports the bundle. All appear in the
+  CI job summaries, with budgets well above the targets.
+- **Releases** ([release checklist](release-checklist.md)): `scripts/check-version.mjs` keeps
+  the five version fields equal (and a tag equal to them). Pushing a `v*` tag runs everything
+  again and, once it all passes, drafts a GitHub release with every package, `SHA256SUMS`, and
+  the changelog's section as notes. macOS Developer ID signing and notarization turn on when
+  the certificate secrets exist.

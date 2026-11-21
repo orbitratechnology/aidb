@@ -16,3 +16,6 @@ packages/contracts/src/generated/
 # Playwright output
 apps/desktop/test-results/
 apps/desktop/playwright-report/
+
+# Production build of the e2e harness (performance tests)
+apps/desktop/dist-e2e/

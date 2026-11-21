@@ -66,20 +66,23 @@ export function SettingsOverview() {
     <nav aria-label="Settings">
       <ItemGroup className="gap-2">
         {SETTINGS_SECTIONS.map(({ id, title, summary, icon: Icon }) => (
-          <Item key={id} variant="outline" asChild>
-            <Link to={`/settings/${id}`}>
-              <ItemMedia variant="icon">
-                <Icon />
-              </ItemMedia>
-              <ItemContent>
-                <ItemTitle>{title}</ItemTitle>
-                <ItemDescription>{summary}</ItemDescription>
-              </ItemContent>
-              <ItemActions>
-                <ChevronRightIcon aria-hidden className="size-4 text-muted-foreground" />
-              </ItemActions>
-            </Link>
-          </Item>
+          // The link keeps its own role, so the list item is a wrapper around it.
+          <div key={id} role="listitem">
+            <Item variant="outline" asChild>
+              <Link to={`/settings/${id}`}>
+                <ItemMedia variant="icon">
+                  <Icon />
+                </ItemMedia>
+                <ItemContent>
+                  <ItemTitle>{title}</ItemTitle>
+                  <ItemDescription>{summary}</ItemDescription>
+                </ItemContent>
+                <ItemActions>
+                  <ChevronRightIcon aria-hidden className="size-4 text-muted-foreground" />
+                </ItemActions>
+              </Link>
+            </Item>
+          </div>
         ))}
       </ItemGroup>
     </nav>

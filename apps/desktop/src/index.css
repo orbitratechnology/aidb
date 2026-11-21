@@ -65,10 +65,12 @@
   --secondary: oklch(0.97 0 0);
   --secondary-foreground: oklch(0.205 0 0);
   --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
+  /* Darker than the shadcn default (0.556) so small text keeps 4.5:1 on muted and accent fills. */
+  --muted-foreground: oklch(0.52 0 0);
   --accent: oklch(0.97 0 0);
   --accent-foreground: oklch(0.205 0 0);
-  --destructive: oklch(0.577 0.245 27.325);
+  /* Darker than the shadcn default (0.577) so destructive text keeps 4.5:1 on its own tint. */
+  --destructive: oklch(0.505 0.213 27.518);
   --border: oklch(0.922 0 0);
   --input: oklch(0.922 0 0);
   --ring: oklch(0.708 0 0);
@@ -143,6 +145,26 @@
   }
   body {
     @apply bg-background text-foreground antialiased;
+  }
+}
+
+/*
+ * Phone touch targets (44px) for shadcn parts the app does not restyle per use. Unlayered, so
+ * these win over the components' own utility classes.
+ */
+@media (width < 40rem) {
+  /* A checkbox or switch beside its label: the label, which also toggles it, grows to 44px. */
+  [data-slot='field'][data-orientation='horizontal'] [data-slot='field-label'] {
+    min-height: 2.75rem;
+    align-items: center;
+  }
+  /* The corner close button of dialogs and sheets. */
+  [data-slot='dialog-content'] > [data-slot='dialog-close'],
+  [data-slot='sheet-content'] > [data-slot='sheet-close'] {
+    top: 0.5rem;
+    right: 0.5rem;
+    width: 2.75rem;
+    height: 2.75rem;
   }
 }
 

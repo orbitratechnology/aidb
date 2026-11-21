@@ -62,6 +62,11 @@ impl CatalogCache {
         self.lock().clear();
     }
 
+    /// Drops one connection's cached catalog, after aidb changed its structure.
+    pub fn forget(&self, id: ConnectionId) {
+        self.lock().remove(&id);
+    }
+
     fn lock(&self) -> MutexGuard<'_, HashMap<ConnectionId, Entry>> {
         self.entries.lock().unwrap_or_else(PoisonError::into_inner)
     }

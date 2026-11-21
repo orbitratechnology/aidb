@@ -10,15 +10,21 @@
 //! generates its `allow-*` permission), and grant that permission in a capability file. A command
 //! missing from a capability is rejected by Tauri before it runs.
 
+mod advisor;
 mod app;
+mod assistant;
+mod audit;
 mod catalog;
 mod connections;
+mod data_changes;
 mod diagnostics;
 mod export;
 mod external;
 mod library;
+mod migrations;
 mod providers;
 mod query;
+mod schema_diff;
 mod sessions;
 mod settings;
 mod table_data;
@@ -53,6 +59,15 @@ pub(crate) fn handler<R: Runtime>() -> impl Fn(Invoke<R>) -> bool + Send + Sync 
         catalog::catalog_overview,
         catalog::refresh_catalog,
         catalog::describe_object,
+        advisor::explain_query,
+        schema_diff::open_schema_file,
+        schema_diff::close_schema_file,
+        schema_diff::compare_schemas,
+        schema_diff::save_schema_script,
+        migrations::prepare_migration,
+        migrations::apply_migration,
+        migrations::cancel_migration,
+        migrations::list_migration_records,
         table_data::read_table_page,
         table_data::cancel_operation,
         export::export_table,
@@ -69,9 +84,24 @@ pub(crate) fn handler<R: Runtime>() -> impl Fn(Invoke<R>) -> bool + Send + Sync 
         providers::delete_provider,
         providers::save_provider_key,
         providers::forget_provider_key,
-        providers::test_provider
+        providers::test_provider,
+        assistant::preview_assistant_context,
+        assistant::ask_assistant,
+        assistant::cancel_assistant_task,
+        audit::list_audit_events,
+        data_changes::preview_data_change,
+        data_changes::apply_data_change,
+        data_changes::cancel_data_change,
+        data_changes::list_pending_changes,
+        data_changes::open_csv_import,
+        data_changes::reread_csv_import,
+        data_changes::preview_csv_import,
+        data_changes::close_csv_import
     ]
 }
+
+#[cfg(test)]
+mod secret_scan;
 
 #[cfg(test)]
 mod tests {
@@ -84,15 +114,17 @@ mod tests {
 
     use super::handler;
 
+    pub(super) use crate::app::context;
+
     fn app() -> App<MockRuntime> {
         mock_builder()
             .plugin(tauri_plugin_dialog::init())
             .invoke_handler(handler())
-            .build(tauri::generate_context!())
+            .build(context())
             .expect("mock app builds")
     }
 
-    fn window(app: &App<MockRuntime>, label: &str) -> WebviewWindow<MockRuntime> {
+    pub(super) fn window(app: &App<MockRuntime>, label: &str) -> WebviewWindow<MockRuntime> {
         app.get_webview_window(label).unwrap_or_else(|| {
             WebviewWindowBuilder::new(app, label, WebviewUrl::default())
                 .build()
@@ -100,12 +132,23 @@ mod tests {
         })
     }
 
-    fn invoke(window: &WebviewWindow<MockRuntime>, cmd: &str, body: Value) -> Result<Value, Value> {
+    pub(super) fn invoke(
+        window: &WebviewWindow<MockRuntime>,
+        cmd: &str,
+        body: Value,
+    ) -> Result<Value, Value> {
         let request = InvokeRequest {
             cmd: cmd.into(),
             callback: CallbackFn(0),
             error: CallbackFn(1),
-            url: "tauri://localhost".parse().expect("app URL parses"),
+            // The app's own origin, which the capability allows: Windows serves it over http.
+            url: if cfg!(windows) {
+                "http://tauri.localhost"
+            } else {
+                "tauri://localhost"
+            }
+            .parse()
+            .expect("app URL parses"),
             body: InvokeBody::Json(body),
             headers: Default::default(),
             invoke_key: INVOKE_KEY.to_string(),
@@ -171,6 +214,56 @@ mod tests {
         );
     }
 
+    /// Nothing the webview can call approves, applies or runs a change: such commands do not
+    /// exist, and no capability grants one. Approvals are issued and used inside the core only.
+    #[test]
+    fn nothing_in_the_webview_can_approve_or_write() {
+        let app = app();
+        let main = window(&app, "main");
+        for cmd in [
+            "approve",
+            "approve_change",
+            "request_approval",
+            "consume_approval",
+            "apply_change",
+            "execute_write",
+            "run_write",
+            "run_sql",
+            "plugin:sql|execute",
+            "plugin:shell|execute",
+        ] {
+            let error = invoke(&main, cmd, json!({})).expect_err(cmd);
+            let text = error.as_str().unwrap_or_default().to_lowercase();
+            assert!(
+                text.contains("not allowed") || text.contains("not found"),
+                "{cmd}: {error}"
+            );
+        }
+
+        let capability: serde_json::Value =
+            serde_json::from_str(include_str!("../../capabilities/default.json"))
+                .expect("capability parses");
+        let granted = capability["permissions"]
+            .as_array()
+            .expect("permissions")
+            .iter()
+            .filter_map(serde_json::Value::as_str)
+            .collect::<Vec<_>>();
+        // The write paths: the user applies a data change or a schema migration previewed in
+        // the core, which holds the approval. Nothing else may approve, execute or write.
+        const USER_APPROVED_WRITES: [&str; 2] =
+            ["allow-apply-data-change", "allow-apply-migration"];
+        for permission in granted
+            .iter()
+            .filter(|permission| !USER_APPROVED_WRITES.contains(permission))
+        {
+            for word in ["approve", "apply", "execute", "write", "consume", "policy"] {
+                assert!(!permission.contains(word), "{permission} grants {word}");
+            }
+        }
+        assert!(granted.contains(&"allow-run-query"), "reads stay available");
+    }
+
     /// The dialog plugin is registered (the core uses it), but no capability grants it.
     #[test]
     fn dialog_and_file_plugins_are_not_reachable_from_the_webview() {
@@ -226,7 +319,7 @@ mod tests {
         let app = mock_builder()
             .manage(state)
             .invoke_handler(handler())
-            .build(tauri::generate_context!())
+            .build(context())
             .expect("mock app builds");
         let main = window(&app, "main");
         let connection = serde_json::to_value(&settings).expect("draft serializes");
@@ -328,6 +421,47 @@ mod tests {
             }),
         )
         .expect("refusals are outcomes");
+        let audit = invoke(
+            &main,
+            "list_audit_events",
+            json!({ "filter": { "connectionId": saved.id.to_string(), "limit": 10 } }),
+        )
+        .expect("list_audit_events");
+        let blocked_change = invoke(
+            &main,
+            "preview_data_change",
+            json!({
+                "connectionId": saved.id.to_string(),
+                "changes": [{
+                    "kind": "delete",
+                    "table": { "schema": "pg_catalog", "name": "pg_am" },
+                    "filters": [{ "column": "amname", "operator": "equals", "value": "none" }],
+                }],
+            }),
+        )
+        .expect_err("the connection is read-only");
+        let unfiltered_change = invoke(
+            &main,
+            "preview_data_change",
+            json!({
+                "connectionId": saved.id.to_string(),
+                "changes": [{
+                    "kind": "delete",
+                    "table": { "schema": "pg_catalog", "name": "pg_am" },
+                    "filters": [],
+                }],
+            }),
+        )
+        .expect_err("a delete needs a filter");
+        let never_previewed = invoke(
+            &main,
+            "apply_data_change",
+            json!({
+                "connectionId": saved.id.to_string(),
+                "approvalId": "6f9619ff-8b86-4d01-b42d-00c04fc964ff",
+            }),
+        )
+        .expect_err("nothing to apply");
         let closed =
             invoke(&main, "disconnect", json!({ "id": saved.id.to_string() })).expect("disconnect");
         let after = invoke(&main, "active_sessions", json!({})).expect("active_sessions");
@@ -363,6 +497,22 @@ mod tests {
         assert_eq!(query["rows"], json!([["1"]]));
         assert_eq!(refused["status"], "refused");
         assert_eq!(refused["kind"], "schema");
+        // The refused change is on record by fingerprint, never by text.
+        let event = &audit[0];
+        assert_eq!(event["operation"], "sql_refused");
+        assert_eq!(event["status"], "rejected");
+        assert_eq!(event["risk"], "R4");
+        assert_eq!(event["fingerprint"].as_str().map(str::len), Some(64));
+        assert!(!audit.to_string().contains("DROP"), "{audit}");
+        assert_eq!(blocked_change["code"], "permission_denied");
+        assert!(
+            blocked_change["message"]
+                .as_str()
+                .is_some_and(|m| m.contains("read-only")),
+            "{blocked_change}"
+        );
+        assert_eq!(unfiltered_change["code"], "invalid_input");
+        assert_eq!(never_previewed["code"], "permission_denied");
         assert_eq!(closed, true);
         assert_eq!(after.as_array().map(Vec::len), Some(0));
         assert_eq!(export_closed["code"], "unavailable");
@@ -405,7 +555,7 @@ mod tests {
         let app = mock_builder()
             .manage(state)
             .invoke_handler(handler())
-            .build(tauri::generate_context!())
+            .build(context())
             .expect("mock app builds");
         let main = window(&app, "main");
 
@@ -463,7 +613,7 @@ mod tests {
         let app = mock_builder()
             .manage(state)
             .invoke_handler(handler())
-            .build(tauri::generate_context!())
+            .build(context())
             .expect("mock app builds");
         let main = window(&app, "main");
         let draft = json!({

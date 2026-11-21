@@ -45,6 +45,7 @@ import {
   listSavedQueries,
 } from '@/lib/commands'
 import { HISTORY_KEY, historyOutcome, LIST_LIMIT, SAVED_KEY, sqlPreview } from './library-view'
+import { returnFocus } from '@/lib/focus-return'
 
 const timeFormat = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' })
 
@@ -79,6 +80,7 @@ export function LibrarySheet({ open, onOpenChange, connectionId, onOpenSql }: Pr
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent
+        {...returnFocus}
         side="right"
         className="gap-0 data-[side=right]:w-full data-[side=right]:sm:max-w-lg"
       >

@@ -7,14 +7,16 @@ use std::time::Duration;
 
 use super::sessions::Sessions;
 use crate::adapters::database::{
-    ConnectTarget, DatabaseAdapter, DatabaseSession, DbError, DbErrorKind, ExportError,
+    ApplyError, ConnectTarget, DatabaseAdapter, DatabaseSession, DbError, DbErrorKind, ExportError,
 };
 use crate::domain::catalog::{
     CatalogOverview, ObjectDetails, ObjectKind, ObjectName, ObjectSummary, SchemaSummary,
 };
 use crate::domain::connections::{ConnectionDraft, Engine};
+use crate::domain::data_change::{DataChange, DataChangePlan};
 use crate::domain::database::{Capabilities, OperationId, ServerInfo, SessionLimits};
 use crate::domain::export::{ExportSummary, RowSink};
+use crate::domain::policy::facts::TargetTable;
 use crate::domain::query::QueryRows;
 use crate::domain::settings::SafetySettings;
 use crate::domain::sql::ReadShape;
@@ -30,6 +32,32 @@ pub struct FakeCatalog {
     pub describe_loads: AtomicUsize,
     /// The last page read and the limits it was read with.
     pub last_page: Mutex<Option<(PageRequest, PageLimits)>>,
+    /// The planner's estimate for any write; `None` fails the estimate.
+    pub write_estimate: Mutex<Option<u64>>,
+    /// What `write_targets` reports for a target; others exist with every privilege.
+    pub targets: Mutex<Vec<TargetTable>>,
+    /// Rows an UPDATE or DELETE matches; change it to simulate other writers.
+    pub matched_rows: Mutex<u64>,
+    /// Changes applied, in order.
+    pub applied: Mutex<Vec<DataChange>>,
+    /// Makes the next apply fail: rolled back, or uncertain when `true`.
+    pub apply_failure: Mutex<Option<bool>>,
+}
+
+impl FakeCatalog {
+    pub fn set_matched_rows(&self, rows: u64) {
+        *self
+            .matched_rows
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = rows;
+    }
+
+    fn matched_rows(&self) -> u64 {
+        *self
+            .matched_rows
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+    }
 }
 
 impl FakeCatalog {
@@ -108,6 +136,74 @@ impl DatabaseAdapter for Arc<FakeAdapter> {
     }
 }
 
+/// The plan the fake writes for a change: plain SQL for the policy to read, the values as
+/// given, and [`FakeCatalog::matched_rows`] rows for an UPDATE or DELETE.
+fn fake_plan(change: &DataChange, matched: u64) -> DataChangePlan {
+    let table = change.table();
+    let name = format!("{}.{}", table.schema, table.name);
+    let predicate = |offset: usize| {
+        change
+            .filters()
+            .iter()
+            .enumerate()
+            .map(|(index, filter)| format!("{} = ${}", filter.column, offset + index + 1))
+            .collect::<Vec<_>>()
+            .join(" AND ")
+    };
+    let filter_values = change.filters().iter().map(|f| f.value.clone());
+    match change {
+        DataChange::Insert { columns, rows, .. } => DataChangePlan {
+            statement: format!(
+                "INSERT INTO {name} ({}) VALUES {}",
+                columns.join(", "),
+                (0..rows.len())
+                    .map(|row| format!(
+                        "({})",
+                        (0..columns.len())
+                            .map(|c| format!("${}", row * columns.len() + c + 1))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            parameters: rows.iter().flatten().cloned().collect(),
+            rows: rows.len() as u64,
+            value_columns: columns.clone(),
+            values: rows.clone(),
+            before: None,
+        },
+        DataChange::Update { set, .. } => DataChangePlan {
+            statement: format!(
+                "UPDATE {name} SET {} WHERE {}",
+                set.iter()
+                    .enumerate()
+                    .map(|(index, value)| format!("{} = ${}", value.column, index + 1))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                predicate(set.len())
+            ),
+            parameters: set
+                .iter()
+                .map(|value| value.value.clone())
+                .chain(filter_values)
+                .collect(),
+            rows: matched,
+            value_columns: set.iter().map(|value| value.column.clone()).collect(),
+            values: vec![set.iter().map(|value| value.value.clone()).collect()],
+            before: None,
+        },
+        DataChange::Delete { .. } => DataChangePlan {
+            statement: format!("DELETE FROM {name} WHERE {}", predicate(0)),
+            parameters: filter_values.collect(),
+            rows: matched,
+            value_columns: Vec::new(),
+            values: Vec::new(),
+            before: None,
+        },
+    }
+}
+
 fn summary(name: &str) -> ObjectSummary {
     ObjectSummary {
         schema: "public".into(),
@@ -155,6 +251,92 @@ impl DatabaseSession for FakeSession {
             }],
             objects: vec![summary("customers"), summary("orders")],
             truncated: false,
+        })
+    }
+
+    async fn apply_migration(
+        &self,
+        _schema: &str,
+        statements: &[crate::adapters::database::MigrationStatement],
+        _fingerprint: &str,
+    ) -> crate::adapters::database::MigrationRun {
+        // A statement containing "fail" fails, as the database would refuse it.
+        match statements.iter().position(|s| s.sql.contains("fail")) {
+            Some(step) if statements[step].transactional => {
+                crate::adapters::database::MigrationRun::RolledBack {
+                    step: Some(step),
+                    error: DbError::new(DbErrorKind::InvalidRequest, "it failed"),
+                }
+            }
+            Some(step) => crate::adapters::database::MigrationRun::Partial {
+                applied: step,
+                step,
+                error: DbError::new(DbErrorKind::InvalidRequest, "it failed"),
+            },
+            None => crate::adapters::database::MigrationRun::Applied,
+        }
+    }
+
+    async fn explain_read(
+        &self,
+        sql: &str,
+        analyze: bool,
+        _operation: OperationId,
+    ) -> Result<(serde_json::Value, Vec<crate::domain::advisor::TableFacts>), DbError> {
+        // A whole-table scan of `orders` keeping one row, measured when asked.
+        let mut plan = serde_json::json!({
+            "Node Type": "Seq Scan", "Relation Name": "orders", "Schema": "public",
+            "Alias": "orders", "Total Cost": 1943.0, "Plan Rows": 1,
+            "Filter": "(orders.customer_id = 42)"
+        });
+        if analyze {
+            plan["Actual Rows"] = 1.into();
+            plan["Actual Loops"] = 1.into();
+            plan["Actual Total Time"] = 9.5.into();
+            plan["Rows Removed by Filter"] = 99_999.into();
+        }
+        if sql.contains("fail") {
+            return Err(DbError::new(DbErrorKind::InvalidRequest, "it failed"));
+        }
+        Ok((
+            serde_json::json!([{ "Plan": plan, "Planning Time": 0.1 }]),
+            vec![crate::domain::advisor::TableFacts {
+                schema: "public".into(),
+                name: "orders".into(),
+                rows: Some(100_000.0),
+                last_analyzed: None,
+                columns: vec!["id".into(), "customer_id".into()],
+                indexes: Vec::new(),
+            }],
+        ))
+    }
+
+    async fn read_schema(
+        &self,
+        schema: &str,
+    ) -> Result<crate::domain::schema_diff::SchemaModel, DbError> {
+        use crate::domain::schema_diff::{Column, SchemaModel, Table};
+        if schema != "public" {
+            return Err(DbError::new(DbErrorKind::ObjectNotFound, "No such schema."));
+        }
+        Ok(SchemaModel {
+            schema: schema.into(),
+            tables: vec![Table {
+                name: "customers".into(),
+                columns: vec![Column {
+                    name: "id".into(),
+                    data_type: "integer".into(),
+                    nullable: false,
+                    default: None,
+                    identity: None,
+                    generated: None,
+                    serial: false,
+                }],
+                rows: Some(10),
+                ..Table::default()
+            }],
+            stored_text: true,
+            ..SchemaModel::default()
         })
     }
 
@@ -266,6 +448,134 @@ impl DatabaseSession for FakeSession {
             has_more: false,
             byte_limit_reached: false,
         })
+    }
+
+    async fn estimate_written_rows(&self, _sql: &str) -> Result<u64, DbError> {
+        let estimate = *self
+            .catalog
+            .write_estimate
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        estimate.ok_or_else(|| DbError::new(DbErrorKind::Other, "no estimate"))
+    }
+
+    async fn write_targets(&self, targets: &[String]) -> Result<Vec<TargetTable>, DbError> {
+        let known = self
+            .catalog
+            .targets
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        Ok(targets
+            .iter()
+            .map(|target| {
+                known
+                    .iter()
+                    .find(|table| &table.target == target)
+                    .cloned()
+                    .unwrap_or_else(|| TargetTable {
+                        target: target.clone(),
+                        resolved: Some(format!("public.{target}")),
+                        can_insert: true,
+                        can_update: true,
+                        can_delete: true,
+                        can_truncate: true,
+                        cascades_to: Vec::new(),
+                    })
+            })
+            .collect())
+    }
+
+    /// Refuses the table `ghost`.
+    async fn plan_data_changes(
+        &self,
+        changes: &[DataChange],
+        preview: Option<PageLimits>,
+        _max_rows: u64,
+    ) -> Result<Vec<DataChangePlan>, DbError> {
+        let mut plans = Vec::with_capacity(changes.len());
+        for change in changes {
+            if change.table().name == "ghost" {
+                return Err(DbError::new(DbErrorKind::ObjectNotFound, "No such table."));
+            }
+            let mut plan = fake_plan(change, self.catalog.matched_rows());
+            if preview.is_some() && !matches!(change, DataChange::Insert { .. }) {
+                plan.before = Some(Self::before_page(change));
+            }
+            plans.push(plan);
+        }
+        Ok(plans)
+    }
+
+    /// Applies only when every plan still matches, like the real engine.
+    async fn apply_data_changes(
+        &self,
+        changes: &[DataChange],
+        approved: &[DataChangePlan],
+    ) -> Result<u64, ApplyError> {
+        let failure = self
+            .catalog
+            .apply_failure
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
+        match failure {
+            Some(true) => {
+                return Err(ApplyError::Uncertain(DbError::new(
+                    DbErrorKind::ConnectionLost,
+                    "The connection to the database was lost.",
+                )));
+            }
+            Some(false) => {
+                return Err(ApplyError::RolledBack(DbError::new(
+                    DbErrorKind::InvalidRequest,
+                    "duplicate key value violates unique constraint \"orders_pkey\".",
+                )));
+            }
+            None => {}
+        }
+        let current: Vec<DataChangePlan> = changes
+            .iter()
+            .map(|change| fake_plan(change, self.catalog.matched_rows()))
+            .collect();
+        let approved: Vec<DataChangePlan> = approved
+            .iter()
+            .map(|plan| DataChangePlan {
+                before: None,
+                ..plan.clone()
+            })
+            .collect();
+        if current != approved {
+            return Err(ApplyError::RolledBack(DbError::new(
+                DbErrorKind::InvalidRequest,
+                "The rows changed since the change was approved.",
+            )));
+        }
+        self.catalog
+            .applied
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .extend(changes.iter().cloned());
+        Ok(approved.iter().map(|plan| plan.rows).sum())
+    }
+}
+
+impl FakeSession {
+    /// A page of the matching rows, as the preview reads them.
+    fn before_page(change: &DataChange) -> TablePage {
+        TablePage {
+            object: change.table().clone(),
+            columns: Vec::new(),
+            omitted_columns: Vec::new(),
+            rows: Vec::new(),
+            truncated_cells: Vec::new(),
+            offset: 0,
+            has_more: false,
+            byte_limit_reached: false,
+            order: Vec::new(),
+            stable_order: true,
+            cell_char_limit: crate::domain::table_data::CELL_CHAR_LIMIT,
+        }
     }
 }
 

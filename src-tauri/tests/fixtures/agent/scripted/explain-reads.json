@@ -1,0 +1,27 @@
+{
+  "description": "EXPLAIN, with and without ANALYZE, works for reads and comes with aidb's findings.",
+  "question": "Is the orders lookup by customer fast?",
+  "model": [
+    {
+      "calls": [
+        {
+          "name": "explain_query",
+          "input": { "sql": "SELECT * FROM orders WHERE customer_id = 1" }
+        },
+        {
+          "name": "explain_query",
+          "input": { "sql": "SELECT count(*) FROM orders", "analyze": true }
+        }
+      ]
+    },
+    { "text": "It scans a small table; it is fast." }
+  ],
+  "expect": {
+    "status": "succeeded",
+    "steps": [
+      ["explain_query", "succeeded"],
+      ["explain_query", "succeeded"]
+    ],
+    "results_contain": ["Seq Scan on public.orders", "actual rows", "aidb found nothing to suggest"]
+  }
+}

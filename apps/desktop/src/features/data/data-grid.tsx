@@ -2,10 +2,17 @@ import { useRef, useState, type KeyboardEvent } from 'react'
 import type { PageColumn } from '@aidb/contracts'
 import type { ReactTable } from '@tanstack/react-table'
 import { useVirtualizer } from '@tanstack/react-virtual'
-import { ArrowDownIcon, ArrowUpIcon, ChevronsUpDownIcon } from 'lucide-react'
+import {
+  ArrowDownIcon,
+  ArrowUpIcon,
+  ChevronsUpDownIcon,
+  PencilIcon,
+  Trash2Icon,
+} from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { CellValue } from './cell-value'
 import { copyRow } from './copy-actions'
+import type { PendingRow } from './edits'
 import { columnIds, type GridFeatures, type GridRow } from './grid-table'
 import type { ResultSet } from './table-view'
 
@@ -23,6 +30,8 @@ type GridProps = {
   busy: boolean
   /** Opens the row's details, scrolled to `column` when given. */
   onOpenRow: (row: number, column?: string) => void
+  /** Unsaved changes to a row, shown in place of its values. */
+  pending?: (row: number) => PendingRow | undefined
 }
 
 /**
@@ -30,7 +39,7 @@ type GridProps = {
  * One row is focusable at a time; arrow keys, Home/End and Page Up/Down move between rows,
  * Enter opens the row's details and Ctrl/Cmd+C copies the row as JSON.
  */
-export function DataGrid({ table, page, truncated, busy, onOpenRow }: GridProps) {
+export function DataGrid({ table, page, truncated, busy, onOpenRow, pending }: GridProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const rows = table.getRowModel().rows
   const [active, setActive] = useState(0)
@@ -157,6 +166,8 @@ export function DataGrid({ table, page, truncated, busy, onOpenRow }: GridProps)
           {virtualizer.getVirtualItems().map((item) => {
             const row = rows[item.index]
             if (!row) return null
+            const change = pending?.(item.index)
+            const deleted = change?.status === 'deleted'
             return (
               <tr
                 key={row.id}
@@ -165,21 +176,29 @@ export function DataGrid({ table, page, truncated, busy, onOpenRow }: GridProps)
                 tabIndex={item.index === activeRow ? 0 : -1}
                 onKeyDown={(event) => onRowKeyDown(event, item.index)}
                 onFocus={() => setActive(item.index)}
-                className="absolute left-0 flex w-full border-b outline-none hover:bg-muted/50 focus:bg-muted focus:ring-2 focus:ring-ring focus:ring-inset"
+                className={cn(
+                  'absolute left-0 flex w-full border-b outline-none hover:bg-muted/50 focus:bg-muted focus:ring-2 focus:ring-ring focus:ring-inset',
+                  deleted && 'text-muted-foreground line-through',
+                )}
                 style={{
                   height: ROW_HEIGHT,
                   transform: `translateY(${item.start - virtualizer.options.scrollMargin}px)`,
                 }}
               >
                 <td
-                  className="sticky left-0 z-10 flex shrink-0 items-center border-r bg-background px-2 text-xs text-muted-foreground tabular-nums"
+                  className="sticky left-0 z-10 flex shrink-0 items-center gap-1 border-r bg-background px-2 text-xs text-muted-foreground tabular-nums no-underline"
                   style={{ width: ROW_NUMBER_WIDTH }}
                 >
                   {page.offset + item.index + 1}
+                  {change && <PendingMark status={change.status} />}
                 </td>
                 {row.getVisibleCells().map((cell) => {
                   const index = columnIndex.get(cell.column.id) ?? 0
                   const column = page.columns[index]
+                  const edited =
+                    change?.status === 'edited' &&
+                    column !== undefined &&
+                    column.name in change.values
                   return (
                     <td
                       key={cell.id}
@@ -190,11 +209,18 @@ export function DataGrid({ table, page, truncated, busy, onOpenRow }: GridProps)
                         onOpenRow(item.index, column?.name)
                       }}
                     >
-                      <CellValue
-                        value={row.original[index] ?? null}
-                        kind={column?.kind ?? 'other'}
-                        truncated={truncated.has(`${item.index}:${index}`)}
-                      />
+                      {edited ? (
+                        <EditedValue
+                          value={change.values[column.name] ?? null}
+                          kind={column.kind}
+                        />
+                      ) : (
+                        <CellValue
+                          value={row.original[index] ?? null}
+                          kind={column?.kind ?? 'other'}
+                          truncated={truncated.has(`${item.index}:${index}`)}
+                        />
+                      )}
                     </td>
                   )
                 })}
@@ -261,5 +287,31 @@ function HeaderLabel({
         <span className="text-xs text-muted-foreground tabular-nums">{sortIndex + 1}</span>
       )}
     </button>
+  )
+}
+
+/** Marks a row with unsaved changes; the words are for screen readers, the icon for sight. */
+export function PendingMark({ status }: { status: PendingRow['status'] }) {
+  const Icon = status === 'deleted' ? Trash2Icon : PencilIcon
+  return (
+    <span className="ml-auto inline-flex text-foreground" title={PENDING_LABELS[status]}>
+      <Icon aria-hidden className="size-3.5" />
+      <span className="sr-only">{PENDING_LABELS[status]}</span>
+    </span>
+  )
+}
+
+const PENDING_LABELS: Record<PendingRow['status'], string> = {
+  edited: 'Edited, not saved',
+  deleted: 'Marked for deletion, not saved',
+}
+
+/** An unsaved value: underlined with a dotted line and labelled, so it never relies on color. */
+function EditedValue({ value, kind }: { value: string | null; kind: PageColumn['kind'] }) {
+  return (
+    <span className="flex min-w-0 flex-1 items-center gap-1 underline decoration-dotted underline-offset-4">
+      <CellValue value={value} kind={kind} />
+      <span className="sr-only"> (edited, not saved)</span>
+    </span>
   )
 }

@@ -6,12 +6,16 @@ use std::time::Instant;
 
 use super::sessions::{Sessions, not_connected};
 use super::table_data::page_limits;
-use super::{library, settings};
+use super::{audit, library, settings};
 use crate::adapters::database::{DatabaseAdapter, DatabaseSession};
 use crate::adapters::local_store::LocalStore;
-use crate::domain::connections::ConnectionId;
+use crate::domain::audit::{Actor, AuditEvent, AuditStatus};
+use crate::domain::connections::{ConnectionId, Environment};
+use crate::domain::policy::approval::sha256_hex;
+use crate::domain::policy::classify::{self, PolicyContext};
+use crate::domain::policy::facts;
 use crate::domain::query::{QueryFailure, QueryRefusal, QueryRequest, QueryResult, QueryRun};
-use crate::domain::sql::{self, MAX_SQL_BYTES, SqlAnalysis, TextIndex};
+use crate::domain::sql::{self, MAX_SQL_BYTES, SqlAnalysis, StatementKind, TextIndex};
 use crate::domain::table_data::CELL_CHAR_LIMIT;
 use crate::errors::{AppError, AppResult, redact};
 
@@ -43,12 +47,81 @@ pub async fn run<A: DatabaseAdapter>(
     request: QueryRequest,
 ) -> AppResult<QueryRun> {
     let first_page = request.offset == 0;
-    let (run, ran) = execute(store, sessions, id, &request).await?;
+    let (run, ran) = execute(store, sessions, id, &request, None).await?;
     // Later pages re-run the same statement; history records it once.
     if first_page && !ran.trim().is_empty() {
         library::record(store, id, &ran, &run).await;
     }
+    if let QueryRun::Refused(QueryRefusal {
+        kind: Some(kind), ..
+    }) = &run
+        && !matches!(kind, StatementKind::Read | StatementKind::Unknown)
+    {
+        audit_refusal(store, id, &ran, *kind).await;
+    }
     Ok(run)
+}
+
+/// Records a statement the editor refused because it is not a read: an attempt to change
+/// something outside the approval flow. The audit log gets its digest and risk, not its text.
+async fn audit_refusal(store: &LocalStore, id: ConnectionId, sql: &str, kind: StatementKind) {
+    let profile = store.connections().get(id).await.ok().flatten();
+    let assessment = classify::assess(
+        &facts::inspect(sql),
+        &[],
+        PolicyContext {
+            environment: profile.as_ref().map_or(Environment::default(), |profile| {
+                profile.settings.environment
+            }),
+            writes_allowed: profile
+                .as_ref()
+                .is_some_and(|profile| !profile.settings.read_only),
+        },
+    );
+    audit::record(
+        store,
+        &AuditEvent {
+            connection_id: Some(id),
+            environment: profile.map(|profile| profile.settings.environment),
+            actor: Actor::User,
+            operation: "sql_refused",
+            risk: Some(assessment.risk),
+            fingerprint: Some(sha256_hex(sql.trim().as_bytes())),
+            approval_state: None,
+            status: AuditStatus::Rejected,
+            rows_affected: None,
+            detail: Some(format!(
+                "The SQL editor runs reads only; this was a {} statement.",
+                match kind {
+                    StatementKind::Write => "data-changing",
+                    StatementKind::Schema => "structure-changing",
+                    StatementKind::Session => "session or transaction",
+                    StatementKind::Privileged => "privileged",
+                    StatementKind::Read | StatementKind::Unknown => "other",
+                }
+            )),
+        },
+    )
+    .await;
+}
+
+/// Runs one read statement for the assistant: the same checks and read-only transaction as the
+/// editor, at most `max_rows` rows (within the Safety limit), and nothing recorded in the
+/// editor's history.
+///
+/// # Errors
+///
+/// As [`run`].
+pub async fn run_for_assistant<A: DatabaseAdapter>(
+    store: &LocalStore,
+    sessions: &Sessions<A>,
+    id: ConnectionId,
+    request: QueryRequest,
+    max_rows: u32,
+) -> AppResult<QueryRun> {
+    Ok(execute(store, sessions, id, &request, Some(max_rows))
+        .await?
+        .0)
 }
 
 /// Runs the request; returns the outcome and the text it is about (the one statement, or the
@@ -58,6 +131,7 @@ async fn execute<A: DatabaseAdapter>(
     sessions: &Sessions<A>,
     id: ConnectionId,
     request: &QueryRequest,
+    max_rows: Option<u32>,
 ) -> AppResult<(QueryRun, String)> {
     request.validate()?;
     let session = sessions.get(id).ok_or_else(not_connected)?;
@@ -102,7 +176,10 @@ async fn execute<A: DatabaseAdapter>(
         return Ok((refusal, request.sql.clone()));
     };
 
-    let limits = page_limits(&settings::load(store).await?.safety);
+    let mut limits = page_limits(&settings::load(store).await?.safety);
+    if let Some(max_rows) = max_rows {
+        limits.max_rows = limits.max_rows.min(max_rows);
+    }
     let started = Instant::now();
     let outcome = session
         .run_read(
@@ -316,5 +393,60 @@ mod tests {
 
         assert_eq!(closed.code(), ErrorCode::Unavailable);
         assert_eq!(huge.code(), ErrorCode::InvalidInput);
+    }
+
+    #[tokio::test]
+    async fn refused_changes_are_audited_by_fingerprint() {
+        use crate::domain::audit::{AuditFilter, AuditStatus};
+        use crate::domain::connections::ConnectionDraft;
+        use crate::domain::policy::risk::RiskLevel;
+
+        let (_dir, store, sessions, _) = open().await;
+        let profile = store
+            .connections()
+            .insert(
+                &ConnectionDraft::new("Shop", "db", "orders", "reader")
+                    .validated()
+                    .expect("valid"),
+            )
+            .await
+            .expect("profile");
+        sessions.open(profile.id, target("db")).await.expect("open");
+        let sql = "DELETE FROM orders WHERE note = 'secret-value'";
+        let run = super::run(&store, &sessions, profile.id, request(sql))
+            .await
+            .expect("refusal");
+        assert!(matches!(run, QueryRun::Refused(_)));
+        // Reads and statements aidb cannot read are not audited.
+        super::run(&store, &sessions, profile.id, request("SELECT 1"))
+            .await
+            .expect("read");
+        super::run(&store, &sessions, profile.id, request("FROBNICATE"))
+            .await
+            .expect("unknown");
+
+        let events = store
+            .audit()
+            .list(&AuditFilter {
+                connection_id: Some(profile.id),
+                before_id: None,
+                limit: 10,
+            })
+            .await
+            .expect("audit");
+        assert_eq!(events.len(), 1);
+        let event = &events[0];
+        assert_eq!(event.operation, "sql_refused");
+        assert_eq!(event.status, AuditStatus::Rejected);
+        assert_eq!(event.risk, Some(RiskLevel::R3));
+        assert_eq!(
+            event.fingerprint.as_deref(),
+            Some(sha256_hex(sql.as_bytes()).as_str())
+        );
+        let detail = event.detail.as_deref().unwrap_or_default();
+        assert!(
+            !detail.contains("secret-value") && !detail.contains("DELETE"),
+            "{detail}"
+        );
     }
 }

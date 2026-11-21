@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "description": "Local-first desktop database client with an optional natural-language agent",
   "license": "MIT",
-  "packageManager": "pnpm@10.28.0",
+  "packageManager": "pnpm@10.34.9",
   "engines": {
     "node": ">=22.12"
   },
@@ -18,7 +18,8 @@
     "lint": "pnpm -r lint",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "test": "pnpm -r test"
+    "test": "pnpm -r test",
+    "e2e": "pnpm --filter @aidb/desktop e2e"
   },
   "devDependencies": {
     "@tauri-apps/cli": "2.12.4",

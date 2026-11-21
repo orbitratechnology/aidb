@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-cancel-assistant-task"
+description = "Enables the cancel_assistant_task command without any pre-configured scope."
+commands.allow = ["cancel_assistant_task"]
+
+[[permission]]
+identifier = "deny-cancel-assistant-task"
+description = "Denies the cancel_assistant_task command without any pre-configured scope."
+commands.deny = ["cancel_assistant_task"]

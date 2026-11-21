@@ -1,0 +1,11 @@
+{
+  "description": "A model that keeps calling tools stops at the step limit.",
+  "question": "What schemas are there?",
+  "model": [{ "calls": [{ "name": "list_schemas", "input": {} }], "repeat": 30 }],
+  "expect": {
+    "status": "partial",
+    "rejected": 0,
+    "step_count": 10,
+    "notice": "rounds"
+  }
+}

@@ -36,6 +36,7 @@ import { ProviderTestDialog } from '@/features/ai/test-dialog'
 import { SETTINGS_QUERY_KEY, useSettings, useUpdateSettings } from '@/hooks/use-settings'
 import { deleteProvider } from '@/lib/commands'
 import { SettingsSection } from '../settings-section'
+import { returnFocus } from '@/lib/focus-return'
 
 export function AiSettings() {
   const providers = useProviders()
@@ -223,7 +224,7 @@ function AssistantSwitch({
         </Field>
       )}
       <AlertDialog open={confirming !== null} onOpenChange={(open) => !open && setConfirming(null)}>
-        <AlertDialogContent>
+        <AlertDialogContent {...returnFocus}>
           <AlertDialogHeader>
             <AlertDialogTitle>
               Send questions to {target?.name ?? 'this provider'}?
@@ -275,7 +276,7 @@ function DeleteProviderDialog({
   })
   return (
     <AlertDialog open={provider !== null} onOpenChange={(open) => !open && onClose()}>
-      <AlertDialogContent>
+      <AlertDialogContent {...returnFocus}>
         <AlertDialogHeader>
           <AlertDialogTitle>Delete {provider?.name}?</AlertDialogTitle>
           <AlertDialogDescription>

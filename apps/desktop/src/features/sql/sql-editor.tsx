@@ -37,10 +37,13 @@ const theme = EditorView.theme({
     backgroundColor: 'var(--background)',
     fontSize: '0.875rem',
   },
-  '&.cm-focused': { outline: 'none' },
+  // Keyboard users need to see that the editor has focus, not only a caret.
+  '&.cm-focused': { outline: '2px solid var(--ring)', outlineOffset: '-2px' },
   '.cm-scroller': { fontFamily: 'var(--font-mono)', lineHeight: '1.6' },
   '.cm-content': { caretColor: 'var(--foreground)', padding: '0.5rem 0' },
   '.cm-cursor, .cm-dropCursor': { borderLeftColor: 'var(--foreground)' },
+  // CodeMirror's own grey placeholder falls below 4.5:1 on the active line.
+  '.cm-placeholder': { color: 'var(--muted-foreground)' },
   '.cm-gutters': {
     backgroundColor: 'var(--background)',
     color: 'var(--muted-foreground)',

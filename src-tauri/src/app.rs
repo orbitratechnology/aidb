@@ -1,5 +1,8 @@
 //! Application assembly: startup, managed state, command registration and shutdown.
 
+use std::sync::Once;
+
+use tauri::ipc::Invoke;
 use tauri::{AppHandle, Manager, RunEvent, Runtime};
 
 use crate::adapters::credentials::Credentials;
@@ -31,8 +34,8 @@ pub fn run() {
             setup(app.handle())?;
             Ok(())
         })
-        .invoke_handler(commands::handler())
-        .build(tauri::generate_context!())
+        .invoke_handler(log_first_command(commands::handler()))
+        .build(context())
         .expect("failed to start the aidb runtime");
 
     app.run(|handle, event| {
@@ -40,6 +43,28 @@ pub fn run() {
             shutdown(handle);
         }
     });
+}
+
+/// The app's configuration, assets and capabilities, for any runtime (tests use the mock one).
+/// The only expansion of `generate_context!` in the crate: on macOS it embeds the Info.plist
+/// under a fixed symbol, so a second expansion fails to link.
+pub(crate) fn context<R: Runtime>() -> tauri::Context<R> {
+    tauri::generate_context!()
+}
+
+/// Logs the first command the interface sends, once, by name only. It shows that the webview
+/// loaded the bundled interface and reached the core: a blank window (missing assets, a script
+/// blocked) leaves no such line. The package smoke tests wait for it.
+fn log_first_command<R: Runtime>(
+    handler: impl Fn(Invoke<R>) -> bool + Send + Sync + 'static,
+) -> impl Fn(Invoke<R>) -> bool + Send + Sync + 'static {
+    let first = Once::new();
+    move |invoke| {
+        first.call_once(|| {
+            tracing::info!(command = invoke.message.command(), "interface connected");
+        });
+        handler(invoke)
+    }
 }
 
 fn setup<R: Runtime>(app: &AppHandle<R>) -> AppResult<()> {
@@ -57,7 +82,15 @@ fn setup<R: Runtime>(app: &AppHandle<R>) -> AppResult<()> {
     );
 
     let local_store = match tauri::async_runtime::block_on(LocalStore::open(paths.data_dir())) {
-        Ok(store) => LocalStoreState::Ready(store),
+        Ok(store) => {
+            // Tasks still marked running were cut off when the app last quit.
+            match tauri::async_runtime::block_on(store.agent_tasks().close_abandoned()) {
+                Ok(0) => {}
+                Ok(closed) => tracing::info!(closed, "closed assistant tasks left running"),
+                Err(error) => tracing::warn!(error = %error, "could not close abandoned tasks"),
+            }
+            LocalStoreState::Ready(store)
+        }
         Err(error) => {
             tracing::error!(error = ?crate::errors::AppError::from(error), "local database unavailable");
             LocalStoreState::Unavailable {

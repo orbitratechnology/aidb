@@ -11,8 +11,10 @@ use thiserror::Error;
 
 use crate::domain::catalog::{CatalogOverview, ObjectDetails, ObjectName};
 use crate::domain::connections::ConnectionDraft;
+use crate::domain::data_change::{DataChange, DataChangePlan};
 use crate::domain::database::{Capabilities, OperationId, ServerInfo, SessionLimits};
 use crate::domain::export::{ExportSummary, RowSink};
+use crate::domain::policy::facts::TargetTable;
 use crate::domain::query::QueryRows;
 use crate::domain::sql::ReadShape;
 use crate::domain::table_data::{PageLimits, PageRequest, TablePage};
@@ -64,6 +66,34 @@ pub trait DatabaseSession: std::fmt::Debug + Send + Sync + 'static {
         object: &ObjectName,
     ) -> impl Future<Output = Result<ObjectDetails, DbError>> + Send;
 
+    /// A schema's tables (columns, constraints, indexes) and views, for comparison, read in a
+    /// read-only transaction.
+    fn read_schema(
+        &self,
+        schema: &str,
+    ) -> impl Future<Output = Result<crate::domain::schema_diff::SchemaModel, DbError>> + Send;
+
+    /// Applies a migration to `schema`: its transactional statements in one transaction (with
+    /// `schema` first on the search path), refused when the catalog fingerprint is no longer
+    /// `fingerprint`; then the others, one by one.
+    fn apply_migration(
+        &self,
+        schema: &str,
+        statements: &[MigrationStatement],
+        fingerprint: &str,
+    ) -> impl Future<Output = MigrationRun> + Send;
+
+    /// Plans one read statement with `EXPLAIN (FORMAT JSON, VERBOSE)` (with `analyze`, also
+    /// runs it, read-only) and reads the statistics, columns and indexes of the tables it reads.
+    fn explain_read(
+        &self,
+        sql: &str,
+        analyze: bool,
+        operation: OperationId,
+    ) -> impl Future<
+        Output = Result<(serde_json::Value, Vec<crate::domain::advisor::TableFacts>), DbError>,
+    > + Send;
+
     /// One page of a table or view, read in a read-only transaction. Column names in the
     /// request are matched against the live table; values are bound, never formatted into SQL.
     /// The read runs as `request.operation_id` when given, so it can be cancelled.
@@ -94,6 +124,81 @@ pub trait DatabaseSession: std::fmt::Debug + Send + Sync + 'static {
         offset: u64,
         operation: Option<OperationId>,
     ) -> impl Future<Output = Result<QueryRows, DbError>> + Send;
+
+    /// The planner's estimate of the rows one INSERT, UPDATE, DELETE or MERGE would write.
+    /// Plans it with `EXPLAIN` in a read-only transaction that is rolled back: nothing runs.
+    fn estimate_written_rows(&self, sql: &str)
+    -> impl Future<Output = Result<u64, DbError>> + Send;
+
+    /// For tables a statement writes (as written, resolved with the session's search path):
+    /// whether they exist, what the role may do to them, and which tables delete with them.
+    fn write_targets(
+        &self,
+        targets: &[String],
+    ) -> impl Future<Output = Result<Vec<TargetTable>, DbError>> + Send;
+
+    /// Makes `changes` ready to run against the live tables, in one read-only transaction:
+    /// writes each statement, counts the rows each UPDATE or DELETE matches (refusing more than
+    /// [`MAX_CHANGED_ROWS`](crate::domain::data_change::MAX_CHANGED_ROWS) for one change, or more
+    /// than `max_rows` written by all of them),
+    /// and has the database convert every value to its column's type. With `preview`, also
+    /// reads some of the rows the first changes match, as they are now. Nothing is written.
+    /// Errors name the change they come from.
+    fn plan_data_changes(
+        &self,
+        changes: &[DataChange],
+        preview: Option<PageLimits>,
+        max_rows: u64,
+    ) -> impl Future<Output = Result<Vec<DataChangePlan>, DbError>> + Send;
+
+    /// Applies `changes` in one transaction, in order, only if each still plans to exactly its
+    /// `approved` plan (same statement, parameters, matching rows and stored values): locks the
+    /// tables against structure changes and the matching rows against other writers, runs each
+    /// statement, checks the rows written and their stored values, and commits. Any
+    /// difference rolls everything back. Returns the rows written.
+    fn apply_data_changes(
+        &self,
+        changes: &[DataChange],
+        approved: &[DataChangePlan],
+    ) -> impl Future<Output = Result<u64, ApplyError>> + Send;
+}
+
+/// One statement of a schema migration, in the order it runs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MigrationStatement {
+    pub sql: String,
+    /// False for statements that cannot run in a transaction (`CONCURRENTLY`): they run after
+    /// it commits, one by one.
+    pub transactional: bool,
+}
+
+/// How applying a migration ended.
+#[derive(Debug)]
+pub enum MigrationRun {
+    /// Every statement ran.
+    Applied,
+    /// Nothing was changed: statement `step` (counted from 0) failed, or with `None`, the schema
+    /// changed before the first one, or the transaction could not start or commit.
+    RolledBack { step: Option<usize>, error: DbError },
+    /// The transaction committed; statement `step` after it failed with `applied` run in all.
+    Partial {
+        applied: usize,
+        step: usize,
+        error: DbError,
+    },
+    /// The connection was lost while committing: it may or may not have been applied.
+    Uncertain(DbError),
+}
+
+/// Why an approved change was not applied.
+#[derive(Debug, Error)]
+pub enum ApplyError {
+    /// It failed or a check refused it, and was rolled back: nothing was written.
+    #[error(transparent)]
+    RolledBack(DbError),
+    /// The connection was lost while committing: it may or may not have been written.
+    #[error(transparent)]
+    Uncertain(DbError),
 }
 
 impl From<ExportError> for AppError {

@@ -156,7 +156,7 @@ function DetailRow({
   children?: ReactNode
 }) {
   return (
-    <Item size="sm">
+    <Item size="sm" role="listitem">
       <ItemContent>
         <ItemTitle>{label}</ItemTitle>
       </ItemContent>

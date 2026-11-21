@@ -109,7 +109,12 @@ fn profile_error(error: StoreError, name: &str) -> AppError {
     }
 }
 
-async fn get(store: &LocalStore, id: ProviderId) -> AppResult<ProviderProfile> {
+/// One saved profile.
+///
+/// # Errors
+///
+/// `not_found` for an unknown profile; `storage` if the local database cannot be read.
+pub async fn get(store: &LocalStore, id: ProviderId) -> AppResult<ProviderProfile> {
     store
         .providers()
         .get(id)

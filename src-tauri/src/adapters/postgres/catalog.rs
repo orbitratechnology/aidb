@@ -15,7 +15,7 @@ use crate::domain::catalog::{
 
 /// A digest of names, types, nullability, constraints, defaults, view queries, indexes and
 /// comments. It uses no row versions, so `ANALYZE` and `VACUUM` do not change it.
-const FINGERPRINT: &str = r"
+pub(super) const FINGERPRINT: &str = r"
 WITH schemas AS (
     SELECT n.oid, n.nspname FROM pg_namespace n
     WHERE n.nspname <> 'information_schema' AND n.nspname NOT LIKE 'pg\_%'

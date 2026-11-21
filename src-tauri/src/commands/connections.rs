@@ -52,6 +52,10 @@ pub async fn update_connection(
         allow_unencrypted,
     )
     .await?;
+    // Approvals were given for the old settings (environment, writes allowed).
+    state.approvals().invalidate_connection(id);
+    state.imports().forget_connection(id);
+    state.schema_diffs().forget_connection(id);
     // An open session keeps the settings it started with; close it so the new ones apply.
     state.sessions().close(id).await;
     Ok(updated)
@@ -72,6 +76,9 @@ pub async fn delete_connection(
     )
     .await?;
     state.sessions().close(id).await;
+    state.approvals().invalidate_connection(id);
+    state.imports().forget_connection(id);
+    state.schema_diffs().forget_connection(id);
     Ok(())
 }
 

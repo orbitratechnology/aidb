@@ -30,6 +30,12 @@ export const router = createHashRouter([
         }),
       },
       {
+        path: 'migrations',
+        lazy: async () => ({
+          Component: (await import('@/features/migrations/migrations-page')).MigrationsPage,
+        }),
+      },
+      {
         path: 'settings',
         lazy: async () => ({
           Component: (await import('@/features/settings/settings-pages')).SettingsLayout,

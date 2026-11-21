@@ -1,15 +1,24 @@
 //! Use cases that coordinate domain rules with adapters. Commands call these; they never reach
 //! adapters directly.
 
+pub mod advisor;
 pub mod ai;
+pub mod approvals;
+pub mod assistant;
+pub mod audit;
 pub mod catalog;
 pub mod connection_secrets;
 pub mod connections;
+pub mod data_changes;
 #[cfg(test)]
 pub(crate) mod fakes;
+pub mod imports;
 pub mod library;
+pub mod migrations;
+pub mod policy;
 pub mod providers;
 pub mod query;
+pub mod schema_diff;
 pub mod sessions;
 pub mod settings;
 pub mod table_data;

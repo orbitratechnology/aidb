@@ -6,10 +6,15 @@
 //! was sent a cancel is closed instead of returned to the pool, so a late signal can never hit
 //! the next operation.
 
+mod advisor;
 mod catalog;
+mod data_change;
 mod errors;
+mod migration;
 mod options;
+mod policy;
 mod query;
+mod schema;
 mod table_data;
 
 use std::collections::HashMap;
@@ -24,12 +29,16 @@ use sqlx::{Connection, Postgres};
 use self::errors::{Endpoint, Phase, classify, connect_timeout};
 pub use self::options::APPLICATION_NAME;
 use super::database::{
-    ConnectTarget, DatabaseAdapter, DatabaseSession, DbError, DbErrorKind, ExportError,
+    ApplyError, ConnectTarget, DatabaseAdapter, DatabaseSession, DbError, DbErrorKind, ExportError,
 };
 use crate::domain::catalog::{CatalogOverview, ObjectDetails, ObjectName};
 use crate::domain::connections::Engine;
+use crate::domain::data_change::{
+    ChangeKind, DataChange, DataChangePlan, PREVIEW_CHANGES, PREVIEW_ROWS,
+};
 use crate::domain::database::{Capabilities, OperationId, SUPPORTED_POSTGRES_VERSIONS, ServerInfo};
 use crate::domain::export::{ExportSummary, RowSink};
+use crate::domain::policy::facts::TargetTable;
 use crate::domain::query::QueryRows;
 use crate::domain::sql::ReadShape;
 use crate::domain::table_data::{PageLimits, PageRequest, TablePage};
@@ -230,6 +239,44 @@ impl DatabaseSession for PgSession {
             .map_err(|e| self.session_error(e))?
     }
 
+    async fn read_schema(
+        &self,
+        schema: &str,
+    ) -> Result<crate::domain::schema_diff::SchemaModel, DbError> {
+        let mut connection = self.begin_operation(OperationId::new()).await?;
+        schema::read(&mut connection, schema)
+            .await
+            .map_err(|e| self.session_error(e))?
+    }
+
+    async fn apply_migration(
+        &self,
+        schema: &str,
+        statements: &[crate::adapters::database::MigrationStatement],
+        fingerprint: &str,
+    ) -> crate::adapters::database::MigrationRun {
+        let mut connection = match self.begin_operation(OperationId::new()).await {
+            Ok(connection) => connection,
+            Err(error) => {
+                return crate::adapters::database::MigrationRun::RolledBack { step: None, error };
+            }
+        };
+        migration::apply(&mut connection, schema, statements, fingerprint, |e| {
+            self.session_error(e)
+        })
+        .await
+    }
+
+    async fn explain_read(
+        &self,
+        sql: &str,
+        analyze: bool,
+        operation: OperationId,
+    ) -> Result<(serde_json::Value, Vec<crate::domain::advisor::TableFacts>), DbError> {
+        let mut connection = self.begin_operation(operation).await?;
+        advisor::explain(&mut connection, sql, analyze, |e| self.session_error(e)).await
+    }
+
     async fn read_page(
         &self,
         request: &PageRequest,
@@ -269,6 +316,68 @@ impl DatabaseSession for PgSession {
     ) -> Result<QueryRows, DbError> {
         let mut connection = self.begin_operation(operation.unwrap_or_default()).await?;
         query::run_read(&mut connection, sql, shape, limits, offset, |e| {
+            self.session_error(e)
+        })
+        .await
+    }
+
+    async fn estimate_written_rows(&self, sql: &str) -> Result<u64, DbError> {
+        let mut connection = self.begin_operation(OperationId::new()).await?;
+        policy::estimate_written_rows(&mut connection, sql, |e| self.session_error(e)).await
+    }
+
+    async fn write_targets(&self, targets: &[String]) -> Result<Vec<TargetTable>, DbError> {
+        let mut connection = self.begin_operation(OperationId::new()).await?;
+        policy::write_targets(&mut connection, targets, |e| self.session_error(e)).await
+    }
+
+    async fn plan_data_changes(
+        &self,
+        changes: &[DataChange],
+        preview: Option<PageLimits>,
+        max_rows: u64,
+    ) -> Result<Vec<DataChangePlan>, DbError> {
+        let mut connection = self.begin_operation(OperationId::new()).await?;
+        let mut plans = data_change::plan(&mut connection, changes, max_rows, |e| {
+            self.session_error(e)
+        })
+        .await?;
+        let Some(limits) = preview else {
+            return Ok(plans);
+        };
+        let previewed = changes
+            .iter()
+            .zip(plans.iter_mut())
+            .filter(|(change, _)| change.kind() != ChangeKind::Insert)
+            .take(PREVIEW_CHANGES);
+        for (change, plan) in previewed {
+            let request = PageRequest {
+                object: change.table().clone(),
+                filters: change.filters().to_vec(),
+                sort: Vec::new(),
+                offset: 0,
+                limit: Some(PREVIEW_ROWS),
+                operation_id: None,
+            };
+            plan.before = Some(
+                table_data::read_page(&mut connection, &request, limits)
+                    .await
+                    .map_err(|e| self.session_error(e))??,
+            );
+        }
+        Ok(plans)
+    }
+
+    async fn apply_data_changes(
+        &self,
+        changes: &[DataChange],
+        approved: &[DataChangePlan],
+    ) -> Result<u64, ApplyError> {
+        let mut connection = self
+            .begin_operation(OperationId::new())
+            .await
+            .map_err(ApplyError::RolledBack)?;
+        data_change::apply(&mut connection, changes, approved, |e| {
             self.session_error(e)
         })
         .await

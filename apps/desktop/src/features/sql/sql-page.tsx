@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  type KeyboardEvent as ReactKeyboardEvent,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react'
 import type { CatalogSnapshot, ConnectionId, QueryRun, SavedQuery } from '@aidb/contracts'
 import type { SQLNamespace } from '@codemirror/lang-sql'
 import { setDiagnostics } from '@codemirror/lint'
@@ -6,6 +13,7 @@ import type { EditorView } from '@codemirror/view'
 import { useQueryClient } from '@tanstack/react-query'
 import {
   LibraryBigIcon,
+  ListTreeIcon,
   PlayIcon,
   PlusIcon,
   SaveIcon,
@@ -30,6 +38,7 @@ import { HISTORY_KEY, SAVED_KEY } from './library-view'
 import { pageTrail, shiftPosition } from './paging'
 import { QueryResultView } from './query-result-view'
 import { useTabRuns, type DoneRun, type DraftPosition } from './run-store'
+import { PlanSheet } from './plan-sheet'
 import { docPosition, problemRange, statementAt } from './run-target'
 import { SaveQueryDialog } from './save-query-dialog'
 import { SqlEditor } from './sql-editor'
@@ -86,6 +95,7 @@ function SqlWorkspace({ connectionId }: { connectionId: ConnectionId }) {
   const setRun = useTabRuns((state) => state.set)
   const forgetRun = useTabRuns((state) => state.forget)
   const viewRef = useRef<EditorView | null>(null)
+  const tablistRef = useRef<HTMLDivElement>(null)
   const catalog = useCatalog(connectionId)
   const schema = useMemo(() => namespace(catalog.data), [catalog.data])
   const activeTab = tabs.find((tab) => tab.id === activeId) ?? tabs[0]
@@ -224,6 +234,34 @@ function SqlWorkspace({ connectionId }: { connectionId: ConnectionId }) {
     [connectionId, setRun],
   )
 
+  // The query shown in the plan sheet: the selection, or the statement at the cursor.
+  const [explaining, setExplaining] = useState<string | null>(null)
+  const explainCurrent = useCallback(async () => {
+    const view = viewRef.current
+    if (!view) return
+    const doc = view.state.doc.toString()
+    const selection = view.state.selection.main
+    if (!selection.empty) {
+      setExplaining(doc.slice(selection.from, selection.to))
+      return
+    }
+    try {
+      const analysis = await analyzeSql(doc)
+      if (analysis.problem) {
+        toast.error('Could not read the SQL', { description: analysis.problem.message })
+        return
+      }
+      const statement = statementAt(analysis, selection.head)
+      if (!statement) {
+        toast('Nothing to explain', { description: 'Write a query first.' })
+        return
+      }
+      setExplaining(doc.slice(statement.span.start.offset, statement.span.end.offset))
+    } catch (error) {
+      toast.error('Could not read the SQL', { description: String(error) })
+    }
+  }, [])
+
   const showProblem = useCallback(() => {
     const current = useTabRuns.getState().runs[shownTab()]
     if (viewRef.current && current?.status === 'done' && current.problemAt) {
@@ -330,55 +368,98 @@ function SqlWorkspace({ connectionId }: { connectionId: ConnectionId }) {
     return () => window.removeEventListener('keydown', onKey)
   }, [add, closeTab, cycle, saveCurrent])
 
+  // Tab keys (WAI-ARIA tabs pattern): arrows, Home and End move and select; Delete closes.
+  const focusTab = (id: string | undefined) => {
+    if (!id) return
+    requestAnimationFrame(() =>
+      tablistRef.current?.querySelector<HTMLElement>(`[data-tab-id="${id}"]`)?.focus(),
+    )
+  }
+  const onTabKey = (event: ReactKeyboardEvent) => {
+    const current = (event.target as HTMLElement).dataset.tabId
+    if (!current) return
+    const ids = tabs.map((tab) => tab.id)
+    const at = ids.indexOf(current)
+    const target = {
+      ArrowRight: ids[(at + 1) % ids.length],
+      ArrowLeft: ids[(at - 1 + ids.length) % ids.length],
+      Home: ids[0],
+      End: ids[ids.length - 1],
+    }[event.key]
+    if (target) {
+      event.preventDefault()
+      select(target)
+      focusTab(target)
+    } else if (event.key === 'Delete') {
+      event.preventDefault()
+      closeTab(current)
+      focusTab(useEditorTabs.getState().activeId)
+    }
+  }
+
   if (!activeTab) return null
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div
-        role="tablist"
-        aria-label="SQL drafts"
-        className="flex shrink-0 items-end gap-1 overflow-x-auto border-b px-2 pt-2"
-      >
-        {tabs.map((tab) => {
-          const selected = tab.id === activeId
-          return (
-            <div
-              key={tab.id}
-              className={cn(
-                'flex shrink-0 items-center rounded-t-md border border-b-0',
-                selected ? 'bg-background' : 'border-transparent bg-muted/50',
-              )}
-            >
-              <button
-                type="button"
-                role="tab"
-                aria-selected={selected}
-                tabIndex={selected ? 0 : -1}
-                onClick={() => select(tab.id)}
+      <div className="flex shrink-0 items-end gap-1 border-b px-2 pt-2">
+        <div
+          ref={tablistRef}
+          role="tablist"
+          aria-label="SQL drafts"
+          className="flex min-w-0 items-end gap-1 overflow-x-auto"
+          onKeyDown={onTabKey}
+        >
+          {tabs.map((tab) => {
+            const selected = tab.id === activeId
+            return (
+              <div
+                key={tab.id}
                 className={cn(
-                  'h-8 max-w-48 truncate px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring max-sm:h-11',
-                  selected ? 'font-medium' : 'text-muted-foreground',
+                  'flex shrink-0 items-center rounded-t-md border border-b-0',
+                  selected ? 'bg-background' : 'border-transparent bg-muted/50',
                 )}
               >
-                {tab.title}
-                {runs[tab.id]?.status === 'running' && <span className="sr-only"> (running)</span>}
-              </button>
-              <Button
-                variant="ghost"
-                size="icon-xs"
-                className="mr-1 max-sm:size-9"
-                aria-label={`Close ${tab.title}`}
-                onClick={() => closeTab(tab.id)}
-              >
-                <XIcon />
-              </Button>
-            </div>
-          )
-        })}
+                <button
+                  type="button"
+                  role="tab"
+                  id={`sql-tab-${tab.id}`}
+                  data-tab-id={tab.id}
+                  aria-selected={selected}
+                  aria-controls={selected ? 'sql-tab-panel' : undefined}
+                  aria-keyshortcuts="Delete"
+                  tabIndex={selected ? 0 : -1}
+                  onClick={() => select(tab.id)}
+                  className={cn(
+                    'h-8 max-w-48 truncate px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring max-sm:h-11',
+                    selected ? 'font-medium' : 'text-muted-foreground',
+                  )}
+                >
+                  {tab.title}
+                  {runs[tab.id]?.status === 'running' && (
+                    <span className="sr-only"> (running)</span>
+                  )}
+                </button>
+                {/* A pointer shortcut only: a tablist may hold nothing but tabs, so keyboard and
+                    screen reader users close the focused tab with Delete instead. */}
+                <Button
+                  variant="ghost"
+                  size="icon-xs"
+                  className="mr-1 max-sm:size-11"
+                  aria-hidden
+                  tabIndex={-1}
+                  title={`Close ${tab.title}`}
+                  onClick={() => closeTab(tab.id)}
+                >
+                  <XIcon />
+                </Button>
+              </div>
+            )
+          })}
+        </div>
         <Button
           variant="ghost"
           size="icon-sm"
-          className="mb-0.5 max-sm:size-11"
+          className="mb-0.5 shrink-0 max-sm:size-11"
           aria-label="New tab"
           title={`New tab (${MOD}+Alt+N)`}
           disabled={tabs.length >= MAX_TABS}
@@ -400,6 +481,16 @@ function SqlWorkspace({ connectionId }: { connectionId: ConnectionId }) {
             Run
           </Button>
         )}
+        <Button
+          variant="outline"
+          className="max-sm:min-h-11"
+          disabled={running}
+          title="Show the query's plan and what it suggests"
+          onClick={() => void explainCurrent()}
+        >
+          <ListTreeIcon data-icon="inline-start" />
+          Explain
+        </Button>
         {running ? (
           <span className="flex items-center gap-2 text-sm text-muted-foreground" role="status">
             <Spinner />
@@ -435,7 +526,12 @@ function SqlWorkspace({ connectionId }: { connectionId: ConnectionId }) {
         </div>
       </div>
 
-      <div className="h-[40%] min-h-36 shrink-0 border-b">
+      <div
+        id="sql-tab-panel"
+        role="tabpanel"
+        aria-labelledby={`sql-tab-${activeTab.id}`}
+        className="h-[40%] min-h-36 shrink-0 border-b"
+      >
         <SqlEditor
           tabId={activeTab.id}
           openTabs={tabs.map((tab) => tab.id)}
@@ -448,6 +544,7 @@ function SqlWorkspace({ connectionId }: { connectionId: ConnectionId }) {
         />
       </div>
 
+      <PlanSheet connectionId={connectionId} sql={explaining} onClose={() => setExplaining(null)} />
       <section aria-label="Result" className="flex min-h-0 flex-1 flex-col">
         {doneRun ? (
           <QueryResultView

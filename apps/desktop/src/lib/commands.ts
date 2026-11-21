@@ -1,5 +1,6 @@
 import {
   ActiveSessionSchema,
+  AuditEntrySchema,
   AppInfoSchema,
   AppSettingsSchema,
   CatalogSnapshotSchema,
@@ -7,7 +8,19 @@ import {
   COMMANDS,
   ConnectionDetailsSchema,
   ConnectionTestReportSchema,
+  ContextPreviewSchema,
   CredentialBackendSchema,
+  CsvImportDraftSchema,
+  SchemaDiffSchema,
+  QueryPlanSchema,
+  MigrationPreviewSchema,
+  MigrationRecordSchema,
+  MigrationResultSchema,
+  SchemaFileSchema,
+  CsvImportPreviewSchema,
+  DataChangePreviewSchema,
+  DataChangeResultSchema,
+  PendingChangeSchema,
   ProviderDetailsSchema,
   ProviderTestReportSchema,
   DiagnosticsInfoSchema,
@@ -23,7 +36,12 @@ import {
   StorageSummarySchema,
   TableExportOutcomeSchema,
   TablePageSchema,
+  TaskEventSchema,
+  TaskOutcomeSchema,
   type ActiveSession,
+  type AskRequest,
+  type AuditEntry,
+  type AuditFilter,
   type AppInfo,
   type AppSettings,
   type CatalogSnapshot,
@@ -33,7 +51,24 @@ import {
   type ConnectionDraft,
   type ConnectionId,
   type ConnectionTestReport,
+  type ContextPreview,
   type CredentialBackend,
+  type CsvImportDraft,
+  type CompareRequest,
+  type SchemaDiff,
+  type ExplainRequest,
+  type QueryPlan,
+  type MigrationPreview,
+  type MigrationRecord,
+  type MigrationResult,
+  type SchemaFile,
+  type CsvImportPreview,
+  type CsvImportRequest,
+  type CsvOptions,
+  type DataChange,
+  type DataChangePreview,
+  type DataChangeResult,
+  type PendingChange,
   type ProviderDetails,
   type ProviderDraft,
   type ProviderId,
@@ -58,7 +93,11 @@ import {
   type StorageSummary,
   type TableExportOutcome,
   type TablePage,
+  type TaskEvent,
+  type TaskId,
+  type TaskOutcome,
 } from '@aidb/contracts'
+import { Channel } from '@tauri-apps/api/core'
 import { z } from 'zod'
 import { callCommand, NativeError } from './native'
 
@@ -329,4 +368,208 @@ export function forgetProviderKey(id: ProviderId): Promise<boolean> {
 /** Sends a few short, fixed prompts to the provider and saves what it supports. */
 export function testProvider(id: ProviderId): Promise<ProviderTestReport> {
   return callCommand(COMMANDS.testProvider, ProviderTestReportSchema, { id })
+}
+
+/** What a question would send to the provider, for review. Nothing is sent. */
+export function previewAssistantContext(
+  connectionId: ConnectionId,
+  request: AskRequest,
+): Promise<ContextPreview> {
+  return callCommand(COMMANDS.previewAssistantContext, ContextPreviewSchema, {
+    connectionId,
+    request,
+  })
+}
+
+/**
+ * Asks the assistant a question on the open connection. Progress arrives through `onEvent`;
+ * events that do not match the contract are dropped.
+ */
+export function askAssistant(
+  connectionId: ConnectionId,
+  request: AskRequest,
+  onEvent: (event: TaskEvent) => void,
+): Promise<TaskOutcome> {
+  const channel = new Channel<unknown>((raw) => {
+    const event = TaskEventSchema.safeParse(raw)
+    if (event.success) onEvent(event.data)
+  })
+  return callCommand(COMMANDS.askAssistant, TaskOutcomeSchema, {
+    connectionId,
+    request,
+    onEvent: channel,
+  })
+}
+
+/** Stops a running question. Resolves to whether it was still running. */
+export function cancelAssistantTask(taskId: TaskId): Promise<boolean> {
+  return callCommand(COMMANDS.cancelAssistantTask, z.boolean(), { taskId })
+}
+
+/** Audit events, newest first. */
+export function listAuditEvents(filter: AuditFilter): Promise<AuditEntry[]> {
+  return callCommand(COMMANDS.listAuditEvents, z.array(AuditEntrySchema), { filter })
+}
+
+/**
+ * Plans INSERT, UPDATE and DELETE changes, applied together in this order, against the live
+ * tables and holds them for the user's approval. Nothing is written.
+ */
+export function previewDataChange(
+  connectionId: ConnectionId,
+  changes: DataChange[],
+): Promise<DataChangePreview> {
+  return callCommand(COMMANDS.previewDataChange, DataChangePreviewSchema, {
+    connectionId,
+    changes,
+  })
+}
+
+/**
+ * The user's approval of previewed changes, which then run together in one checked transaction.
+ * Elevated changes need the database name in `confirmation`.
+ */
+export function applyDataChange(
+  connectionId: ConnectionId,
+  approvalId: string,
+  confirmation: string | null,
+): Promise<DataChangeResult> {
+  return callCommand(COMMANDS.applyDataChange, DataChangeResultSchema, {
+    connectionId,
+    approvalId,
+    confirmation,
+  })
+}
+
+/** Declines previewed changes. */
+export function cancelDataChange(approvalId: string): Promise<void> {
+  return callCommand(COMMANDS.cancelDataChange, z.null(), { approvalId }).then(() => undefined)
+}
+
+/**
+ * Asks for a CSV file to import into `table`. The core reads it, detects how it is written and
+ * holds it; the webview gets a sample. Null when the user closes the file dialog.
+ */
+export function openCsvImport(
+  connectionId: ConnectionId,
+  table: ObjectName,
+): Promise<CsvImportDraft | null> {
+  return callCommand(COMMANDS.openCsvImport, CsvImportDraftSchema.nullable(), {
+    connectionId,
+    table,
+  })
+}
+
+/** Reads an open import's file again with another encoding, delimiter or header choice. */
+export function rereadCsvImport(importId: string, options: CsvOptions): Promise<CsvImportDraft> {
+  return callCommand(COMMANDS.rereadCsvImport, CsvImportDraftSchema, { importId, options })
+}
+
+/**
+ * Checks the mapping and plans the import against the live table. Either lists what to fix or
+ * holds the import for approval; apply it with `applyDataChange`.
+ */
+export function previewCsvImport(
+  connectionId: ConnectionId,
+  importId: string,
+  request: CsvImportRequest,
+): Promise<CsvImportPreview> {
+  return callCommand(COMMANDS.previewCsvImport, CsvImportPreviewSchema, {
+    connectionId,
+    importId,
+    request,
+  })
+}
+
+/** Forgets an open import's file. */
+export function closeCsvImport(importId: string): Promise<void> {
+  return callCommand(COMMANDS.closeCsvImport, z.null(), { importId }).then(() => undefined)
+}
+
+/** Data changes waiting for the user's decision (the assistant's proposals among them). */
+export function listPendingChanges(connectionId: ConnectionId | null): Promise<PendingChange[]> {
+  return callCommand(COMMANDS.listPendingChanges, z.array(PendingChangeSchema), { connectionId })
+}
+
+/** Asks for a `.sql` file and reads it in the core for comparison. Null when the user cancels. */
+export function openSchemaFile(): Promise<SchemaFile | null> {
+  return callCommand(COMMANDS.openSchemaFile, SchemaFileSchema.nullable())
+}
+
+/** Forgets a file read for comparison. */
+export function closeSchemaFile(fileId: string): Promise<void> {
+  return callCommand(COMMANDS.closeSchemaFile, z.null(), { fileId }).then(() => undefined)
+}
+
+/**
+ * Compares a schema on the open connection with another schema or a file, and returns the steps
+ * that make it match. Nothing runs. `password` is for a source on another connection whose
+ * password is not saved; it is used once.
+ */
+export function compareSchemas(
+  connectionId: ConnectionId,
+  request: CompareRequest,
+  password: string | null,
+): Promise<SchemaDiff> {
+  return callCommand(COMMANDS.compareSchemas, SchemaDiffSchema, {
+    connectionId,
+    request,
+    password,
+  })
+}
+
+/** Saves a comparison's script through the save dialog. The file name, or null if cancelled. */
+export function saveSchemaScript(diffId: string): Promise<string | null> {
+  return callCommand(COMMANDS.saveSchemaScript, z.string().nullable(), { diffId })
+}
+
+/** Prepares a comparison's migration for approval. Nothing runs. */
+export function prepareMigration(
+  connectionId: ConnectionId,
+  diffId: string,
+): Promise<MigrationPreview> {
+  return callCommand(COMMANDS.prepareMigration, MigrationPreviewSchema, { connectionId, diffId })
+}
+
+/**
+ * The user's approval of a prepared migration, which then runs in one transaction and is
+ * checked by comparing again. `acceptDataLoss` must be set when steps delete data.
+ */
+export function applyMigration(
+  connectionId: ConnectionId,
+  approvalId: string,
+  confirmation: string | null,
+  acceptDataLoss: boolean,
+): Promise<MigrationResult> {
+  return callCommand(COMMANDS.applyMigration, MigrationResultSchema, {
+    connectionId,
+    approvalId,
+    confirmation,
+    acceptDataLoss,
+  })
+}
+
+/** Declines a prepared migration. */
+export function cancelMigration(approvalId: string): Promise<void> {
+  return callCommand(COMMANDS.cancelMigration, z.null(), { approvalId }).then(() => undefined)
+}
+
+/** Applied migrations, newest first, for one connection or all. */
+export function listMigrationRecords(
+  connectionId: ConnectionId | null,
+): Promise<MigrationRecord[]> {
+  return callCommand(COMMANDS.listMigrationRecords, z.array(MigrationRecordSchema), {
+    connectionId,
+  })
+}
+
+/**
+ * Plans one query (with `analyze`, also runs it, read-only and rolled back) and returns the
+ * plan tree with suggestions drawn from it. Cancel it with `cancelOperation`.
+ */
+export function explainQuery(
+  connectionId: ConnectionId,
+  request: ExplainRequest,
+): Promise<QueryPlan> {
+  return callCommand(COMMANDS.explainQuery, QueryPlanSchema, { connectionId, request })
 }

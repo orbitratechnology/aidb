@@ -116,48 +116,48 @@ Status legend: `[x]` done · `[~]` in progress · `[ ]` not started
 
 - [x] **8.1 Agent domain.** Versioned task plan, typed tool registry (R0/R1 tools), context builder
       with budgets and untrusted-content framing.
-- [ ] **8.2 Planner loop.** Tool-call validation (unknown or malformed calls rejected), cancellation,
+- [x] **8.2 Planner loop.** Tool-call validation (unknown or malformed calls rejected), cancellation,
       verification, task persistence.
-- [ ] **8.3 Ask UI.** Composer, context review list, attachments (`.sql`, `.csv`, `.json`, `.md`,
+- [x] **8.3 Ask UI.** Composer, context review list, attachments (`.sql`, `.csv`, `.json`, `.md`,
       `.txt`), streamed activity trace, results and follow-ups.
-- [ ] **8.4 Agent evaluation suite.** Scripted provider fixtures, read-task benchmarks, injection
+- [x] **8.4 Agent evaluation suite.** Scripted provider fixtures, read-task benchmarks, injection
       cases.
 
 ## Phase 9: Policy and approval engine
 
-- [ ] **9.1 Risk classifier.** Deterministic R0–R4 classification from statement, environment,
+- [x] **9.1 Risk classifier.** Deterministic R0–R4 classification from statement, environment,
       permissions and estimated impact.
-- [ ] **9.2 Approvals.** State machine, digest binding, short expiry, single use, invalidation on
+- [x] **9.2 Approvals.** State machine, digest binding, short expiry, single use, invalidation on
       connection or environment change.
-- [ ] **9.3 Audit and Changes view.** Redacted audit events, Changes/History UI, bypass and
+- [x] **9.3 Audit and Changes view.** Redacted audit events, Changes/History UI, bypass and
       prompt-injection tests.
 
 ## Phase 10: Controlled writes and CSV import
 
-- [ ] **10.1 Data change engine.** INSERT/UPDATE/DELETE preview, predicate requirement, impact
+- [x] **10.1 Data change engine.** INSERT/UPDATE/DELETE preview, predicate requirement, impact
       estimate, transactional apply with an approval token, verification.
-- [ ] **10.2 Grid editing.** Pending-change buffer, before/after diff, Save/Discard, delete
+- [x] **10.2 Grid editing.** Pending-change buffer, before/after diff, Save/Discard, delete
       confirmation.
-- [ ] **10.3 Agent writes.** `preview_data_change` / `apply_approved_data_change` wired to the
+- [x] **10.3 Agent writes.** `preview_data_change` / `apply_approved_data_change` wired to the
       approval UI.
-- [ ] **10.4 CSV import.** Encoding/delimiter/header detection, column mapping, validation preview,
+- [x] **10.4 CSV import.** Encoding/delimiter/header detection, column mapping, validation preview,
       insert-only default, explicit upsert, transactional apply.
 
 ## Phase 11: Migrations and query advisor
 
-- [ ] **11.1 Schema diff.** Schema-to-schema and schema-to-`.sql` comparison, SQL generation, risk
+- [x] **11.1 Schema diff.** Schema-to-schema and schema-to-`.sql` comparison, SQL generation, risk
       notes (data loss, locks, non-transactional statements).
-- [ ] **11.2 Migration workflow.** Review, approval, apply and `migration_records`.
-- [ ] **11.3 Query advisor.** `EXPLAIN (FORMAT JSON)` plan tree, evidence-based suggestions, agent
+- [x] **11.2 Migration workflow.** Review, approval, apply and `migration_records`.
+- [x] **11.3 Query advisor.** `EXPLAIN (FORMAT JSON)` plan tree, evidence-based suggestions, agent
       explanation.
 
 ## Phase 12: Hardening and release
 
-- [ ] **12.1 Responsive and accessibility audit.** 320px through 1440px+, touch targets, keyboard
+- [x] **12.1 Responsive and accessibility audit.** 320px through 1440px+, touch targets, keyboard
       navigation, Playwright responsive tests.
-- [ ] **12.2 Cross-platform builds.** Windows, macOS and Linux CI packaging, install smoke tests,
+- [x] **12.2 Cross-platform builds.** Windows, macOS and Linux CI packaging, install smoke tests,
       secret-scanning tests.
-- [ ] **12.3 Release readiness.** Performance profiling, user-facing privacy and security docs,
+- [x] **12.3 Release readiness.** Performance profiling, user-facing privacy and security docs,
       supported platforms, release checklist.
 
 ## Version baseline (checked 24 October 2026)

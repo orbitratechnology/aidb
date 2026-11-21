@@ -4,7 +4,9 @@
 //! The model proposes; Rust decides. Risk, required approval, the target connection and every
 //! tool's arguments are checked or computed here, never taken from the model's say-so.
 
+pub mod ask;
 pub mod context;
 pub mod plan;
 pub mod risk;
+pub mod task;
 pub mod tools;

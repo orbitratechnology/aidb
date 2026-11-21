@@ -37,20 +37,26 @@ pub async fn connect(
     id: ConnectionId,
     password: Option<SecretString>,
 ) -> AppResult<ActiveSession> {
-    sessions::connect(
+    let active = sessions::connect(
         state.local_store()?,
         state.credentials(),
         state.sessions(),
         id,
         password,
     )
-    .await
+    .await?;
+    // Connecting reopens this connection and closes the others: no approval carries over.
+    state.approvals().invalidate_all();
+    Ok(active)
 }
 
 #[tauri::command]
 #[tracing::instrument(skip_all)]
 pub async fn disconnect(state: State<'_, AppState>, id: ConnectionId) -> AppResult<bool> {
     let closed = state.sessions().close(id).await;
+    state.approvals().invalidate_connection(id);
+    state.imports().forget_connection(id);
+    state.schema_diffs().forget_connection(id);
     tracing::info!(connection = %id, closed, "disconnected");
     Ok(closed)
 }

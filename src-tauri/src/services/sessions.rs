@@ -179,6 +179,23 @@ impl<A: DatabaseAdapter> Sessions<A> {
         })
     }
 
+    /// Reads a schema through a session of its own, closed straight after. It is never one of
+    /// the open sessions, so nothing else can use it.
+    ///
+    /// # Errors
+    ///
+    /// The adapter's [`DbError`] if connecting or reading fails.
+    pub async fn read_schema_once(
+        &self,
+        target: ConnectTarget,
+        schema: &str,
+    ) -> Result<crate::domain::schema_diff::SchemaModel, DbError> {
+        let session = self.adapter.connect(target).await?;
+        let model = session.read_schema(schema).await;
+        session.close().await;
+        model
+    }
+
     fn lock(&self) -> MutexGuard<'_, HashMap<ConnectionId, Entry<A::Session>>> {
         // Inserts and removals only; a panic cannot leave the map half-updated.
         self.open.lock().unwrap_or_else(PoisonError::into_inner)
@@ -248,6 +265,40 @@ pub async fn test<A: DatabaseAdapter>(
     };
     let target = target(store, settings, password).await?;
     Ok(sessions.test(target).await?)
+}
+
+/// Reads `schema` on a saved connection that is not the open one, read-only whatever its
+/// setting, through a session closed straight after. Uses `password` if given, otherwise the
+/// saved one. Returns the profile's name with the schema.
+///
+/// # Errors
+///
+/// `not_found` for an unknown profile or schema, the credential store's or database's error
+/// otherwise.
+pub async fn read_schema_elsewhere<A: DatabaseAdapter>(
+    store: &LocalStore,
+    credentials: &Credentials,
+    sessions: &Sessions<A>,
+    id: ConnectionId,
+    password: Option<SecretString>,
+    schema: &str,
+) -> AppResult<(String, crate::domain::schema_diff::SchemaModel)> {
+    let profile = store
+        .connections()
+        .get(id)
+        .await?
+        .ok_or_else(|| AppError::not_found("The connection no longer exists."))?;
+    let password = match password {
+        Some(password) => Some(password),
+        None => connection_secrets::load_password(credentials, id).await?,
+    };
+    let name = profile.settings.name.clone();
+    let mut settings = profile.settings;
+    settings.read_only = true;
+    let target = target(store, settings, password).await?;
+    let model = sessions.read_schema_once(target, schema).await?;
+    tracing::info!(connection = %id, "read a schema for comparison");
+    Ok((name, model))
 }
 
 async fn target(

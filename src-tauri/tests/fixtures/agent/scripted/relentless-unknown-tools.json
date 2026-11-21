@@ -1,0 +1,26 @@
+{
+  "description": "A model that keeps asking for tools that do not exist is stopped.",
+  "question": "Clean up the database.",
+  "model": [
+    {
+      "calls": [
+        { "name": "drop_table", "input": { "table": "orders" } },
+        { "name": "execute_sql", "input": { "sql": "TRUNCATE orders" } },
+        { "name": "shell", "input": { "command": "rm -rf /" } }
+      ]
+    },
+    {
+      "calls": [
+        { "name": "approve", "input": {} },
+        { "name": "run_write_query", "input": { "sql": "DELETE FROM orders" } }
+      ]
+    },
+    { "text": "Done." }
+  ],
+  "expect": {
+    "status": "failed",
+    "rejected": 5,
+    "step_count": 0,
+    "notice": "not allowed"
+  }
+}

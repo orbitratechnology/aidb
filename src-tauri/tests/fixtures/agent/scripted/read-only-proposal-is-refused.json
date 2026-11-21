@@ -1,0 +1,45 @@
+{
+  "description": "On a read-only connection the tool is not offered; a model that calls it anyway gets the policy's refusal, and nothing waits for approval.",
+  "question": "Cancel order 3.",
+  "model": [
+    {
+      "calls": [
+        {
+          "name": "preview_data_change",
+          "input": {
+            "purpose": "Cancel order 3",
+            "changes": [
+              {
+                "kind": "update",
+                "schema": "public",
+                "table": "orders",
+                "set": [
+                  {
+                    "column": "status",
+                    "value": "cancelled"
+                  }
+                ],
+                "filters": [
+                  {
+                    "column": "id",
+                    "operator": "equals",
+                    "value": "3"
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "text": "This connection is read-only, so I cannot prepare that change."
+    }
+  ],
+  "expect": {
+    "status": "succeeded",
+    "steps": [["preview_data_change", "failed"]],
+    "results_contain": ["read-only"],
+    "proposal": false
+  }
+}

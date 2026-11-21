@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-compare-schemas"
+description = "Enables the compare_schemas command without any pre-configured scope."
+commands.allow = ["compare_schemas"]
+
+[[permission]]
+identifier = "deny-compare-schemas"
+description = "Denies the compare_schemas command without any pre-configured scope."
+commands.deny = ["compare_schemas"]

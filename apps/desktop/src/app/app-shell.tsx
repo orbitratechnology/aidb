@@ -41,13 +41,15 @@ export function AppShell() {
       <AppSidebar />
       <SidebarInset className="h-dvh min-w-0 overflow-hidden">
         <TopBar />
-        <main
+        {/* SidebarInset is already the page's one <main> landmark; this is its scrolling
+            content and the skip link's target. */}
+        <div
           id="main-content"
           tabIndex={-1}
           className="flex min-h-0 flex-1 flex-col overflow-y-auto outline-none"
         >
           <Outlet />
-        </main>
+        </div>
         <BottomNav />
       </SidebarInset>
     </SidebarProvider>

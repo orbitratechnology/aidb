@@ -13,7 +13,7 @@ import {
   SidebarMenuItem,
   SidebarRail,
 } from '@/components/ui/sidebar'
-import { isActivePath, PRIMARY_NAV, SETTINGS_NAV, type NavItem } from './navigation'
+import { isActivePath, MORE_NAV, PRIMARY_NAV, SETTINGS_NAV, type NavItem } from './navigation'
 
 function NavMenuItem({ item, pathname }: { item: NavItem; pathname: string }) {
   const Icon = item.icon
@@ -56,7 +56,7 @@ export function AppSidebar() {
           <SidebarGroupContent>
             <nav aria-label="Primary">
               <SidebarMenu>
-                {PRIMARY_NAV.map((item) => (
+                {[...PRIMARY_NAV, ...MORE_NAV].map((item) => (
                   <NavMenuItem key={item.to} item={item} pathname={pathname} />
                 ))}
               </SidebarMenu>

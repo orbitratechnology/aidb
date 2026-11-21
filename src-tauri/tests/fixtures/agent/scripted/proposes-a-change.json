@@ -1,0 +1,62 @@
+{
+  "description": "Asked to cancel an order, the model looks up the table and prepares the change; it is held for the user's review, nothing is written, and the model learns no values or counts.",
+  "question": "Cancel order 3.",
+  "writable": true,
+  "model": [
+    {
+      "calls": [
+        {
+          "name": "describe_table",
+          "input": {
+            "schema": "public",
+            "name": "orders"
+          }
+        }
+      ]
+    },
+    {
+      "calls": [
+        {
+          "name": "preview_data_change",
+          "input": {
+            "purpose": "Cancel order 3",
+            "changes": [
+              {
+                "kind": "update",
+                "schema": "public",
+                "table": "orders",
+                "set": [
+                  {
+                    "column": "status",
+                    "value": "cancelled"
+                  }
+                ],
+                "filters": [
+                  {
+                    "column": "id",
+                    "operator": "equals",
+                    "value": "3"
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "text": "I prepared the change. It is waiting for your review in the app."
+    }
+  ],
+  "expect": {
+    "status": "succeeded",
+    "rejected": 0,
+    "steps": [
+      ["describe_table", "succeeded"],
+      ["preview_data_change", "succeeded"]
+    ],
+    "results_contain": ["Nothing has been written", "update of public.orders"],
+    "results_lack": ["2026-09-20", "R2"],
+    "proposal": true
+  }
+}

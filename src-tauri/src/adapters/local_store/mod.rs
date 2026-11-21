@@ -4,9 +4,12 @@
 //! database is upgraded, a consistent copy is written next to it, so a failed upgrade never loses
 //! data. Secrets and query results are never stored here.
 
+mod agent_tasks;
+mod audit;
 mod connections;
 mod library;
 mod maintenance;
+mod migrations;
 mod providers;
 mod schema_cache;
 mod settings;
@@ -22,9 +25,12 @@ use thiserror::Error;
 
 use crate::errors::{AppError, ErrorCode};
 
+pub use agent_tasks::{AgentTasks, StoredTask};
+pub use audit::AuditLog;
 pub use connections::ConnectionProfiles;
 pub use library::{LIST_LIMIT, QueryHistory, SavedQueries};
 pub use maintenance::{ClearTarget, Maintenance, StorageSummary};
+pub use migrations::{MigrationRecords, NewMigrationRecord};
 pub use providers::ProviderProfiles;
 pub use schema_cache::{SchemaCache, SchemaCacheRecord};
 pub use settings::Settings;
@@ -144,6 +150,21 @@ impl LocalStore {
     #[must_use]
     pub fn connections(&self) -> ConnectionProfiles<'_> {
         ConnectionProfiles::new(&self.pool)
+    }
+
+    #[must_use]
+    pub fn audit(&self) -> AuditLog<'_> {
+        AuditLog::new(&self.pool)
+    }
+
+    #[must_use]
+    pub fn migrations(&self) -> MigrationRecords<'_> {
+        MigrationRecords::new(&self.pool)
+    }
+
+    #[must_use]
+    pub fn agent_tasks(&self) -> AgentTasks<'_> {
+        AgentTasks::new(&self.pool)
     }
 
     #[must_use]

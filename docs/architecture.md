@@ -95,7 +95,7 @@ SQLite through SQLx (`src-tauri/src/adapters/local_store/`), schema in
 | `agent_tasks`           | Task summaries and plans                                                | with task 8.2        |
 | `operation_audit`       | Redacted operation records; append-only (updates rejected by a trigger) | with task 9.3        |
 | `schema_cache_metadata` | Cache freshness per connection; never row data                          | with task 5.1        |
-| `migration_records`     | Applied migration files, hashes and outcomes                            | with task 11.2       |
+| `migration_records`     | Applied migrations: source, script SHA-256, steps run, status, check    | `MigrationRecords`   |
 
 Rules: `STRICT` tables with CHECK constraints mirroring domain limits; WAL journal; foreign keys
 on; deleting a connection removes its cache and query history but keeps saved queries, tasks,
@@ -297,6 +297,299 @@ Current commands: `app_info`, `diagnostics`, `open_external_url`, `get_settings`
   listed, searched and deleted through `save_query`, `list_saved_queries` and
   `delete_saved_query`. They are never run on their own.
 
+## Policy
+
+`domain::policy` decides how risky a statement is; nothing in it trusts a model's or the UI's
+label. It is deterministic and versioned (`POLICY_VERSION` 1); approvals (9.2) will record the
+version they were given under.
+
+- **Facts** (`facts::inspect`): splits the SQL with the editor's analyzer, then reads each
+  statement: the operation (from its kind and first keywords, so statements the parser cannot
+  read still get one), the objects it writes as written, whether an UPDATE or DELETE has a WHERE
+  that refers to a column (`WHERE 1 = 1` does not), rows in an INSERT's VALUES list, and flags:
+  destructive (DROP COLUMN or CONSTRAINT, CASCADE), disables safeguards (triggers, row-level
+  security, rules, `session_replication_role`, read-only settings), non-transactional
+  (CONCURRENTLY, VACUUM), server file or program access (COPY), and blocked functions anywhere
+  in it. Data-changing CTEs count as the write they contain.
+- **Database facts** (`services::policy::assess`): for writes the planner can plan, the rows
+  its data-changing nodes are fed (`EXPLAIN (FORMAT JSON)` without ANALYZE, in a read-only
+  transaction that is rolled back; it works in read-only sessions and runs nothing); for each
+  written table, resolved with the session's search path, whether the role holds the needed
+  privilege and which tables delete with it (`ON DELETE CASCADE`). Statements the policy blocks
+  from their text alone are not planned. A failed estimate counts as unknown.
+- **Rules** (`classify`), each with a reason in words:
+
+  | Statement                                                                       | Risk |
+  | ------------------------------------------------------------------------------- | ---- |
+  | Reads; EXPLAIN without ANALYZE                                                  | R1   |
+  | Writes of at most 100 rows (counted or estimated); comments                     | R2   |
+  | Larger or unestimated writes; schema changes; maintenance; GRANT, REVOKE        | R3   |
+  | Small cascading deletes; non-transactional statements                           | R3   |
+  | Any change in a production environment                                          | ≥ R3 |
+  | Several statements together when one changes something                          | ≥ R3 |
+  | UPDATE or DELETE that would change every row; DROP; TRUNCATE; destructive ALTER | R4   |
+  | Broad or unestimated cascading deletes; disabled safeguards                     | R4   |
+  | Roles, extensions, server settings, procedures, server files, blocked functions | R4   |
+  | Session settings and transaction control (aidb manages both); unreadable SQL    | R4   |
+
+- **Assessment**: the highest statement risk (raised for batches), the approval it needs (none,
+  Apply, elevated, blocked), and blockers that stop it here whatever its risk: R4, a read-only
+  profile or standby server for anything from R2, a missing privilege. Permissions never lower
+  the risk. One exception, for schema migrations the user applies (`assess_migration`): when
+  every R4 reason is a destructive schema change (`DROP`, or `ALTER TABLE ... DROP`), it needs
+  the elevated approval instead of being blocked. Every other R4 reason (unreadable statements,
+  server access, disabled safeguards, `TRUNCATE`) still blocks, and migrations skip the batch
+  rule (each step is generated and shown).
+- **Approvals** (`policy::approval`, `services::approvals`): the PRD's lifecycle (draft →
+  validated → preview ready → awaiting approval → approved → executing → verifying → succeeded,
+  failed, partial or cancelled, plus expired and invalidated); any other transition is refused.
+  An approval is bound to a binding: policy version, connection id and session serial, database,
+  server role, environment, write setting, schema fingerprint, a digest of the parameter values,
+  and each statement's exact text, operation, targets, risk and estimated rows, with the overall
+  risk and required approval. Its digest is SHA-256 of the canonical JSON.
+  - `request` assesses the SQL and refuses what needs no approval or is blocked here; the
+    request waits 10 minutes for a decision.
+  - `approve` (the user only) needs the database name typed for elevated approvals, rebuilds the
+    binding from live state and compares digests, then issues a 256-bit random token, kept only
+    as its SHA-256, valid for 2 minutes.
+  - `consume` (the execution layer) takes the token away before checking, so it works once even
+    under concurrent use; it checks connection, state and expiry, rebuilds the binding for the
+    SQL and parameters about to run, and moves the approval to executing. `finish` reports the
+    outcome.
+  - Any failed check fails closed: the approval is invalidated and the refusal is written to the
+    audit log with its reason and the binding digest, never the SQL or values. Grants are
+    audited too.
+  - Approvals live in memory only. Connecting drops all of them; disconnecting, editing or
+    deleting a profile drops that connection's. A running change keeps its entry until its
+    outcome is reported.
+  - An approval's subject is SQL with parameters, or a set of data changes (below). For data
+    changes the binding is rebuilt by planning them again, so their impact is a fresh exact count:
+    one more or one fewer matching row invalidates the approval.
+  - `approve_and_use` approves and starts running in one step, with one check of the binding
+    and no token issued; data changes use it, since the core both approves and runs them.
+
+## Data changes
+
+`domain::data_change`, `adapters::postgres::data_change` and `services::data_changes` turn a
+set of structured INSERT, UPDATE and DELETE changes into one checked write. A change is data,
+not SQL: a table, column names and values as text, and for UPDATE and DELETE the grid's filters
+(at least one, so a change never addresses a whole table by omission). A set holds 1 to 200
+changes (a CSV import up to 2,000; see below), applied together, in order, under one approval
+and in one transaction. Limits: 1,000
+rows per INSERT, 200 columns, 10,000 values and 8 MB in all, 1 MB per value, and 10,000
+matching rows per UPDATE or DELETE and across the set. Errors name the change they come from
+("Change 2 of 3: …").
+
+- **Plan** (one read-only transaction for the set, rolled back): look up each table (plain or
+  partitioned; views are refused) and its columns once, and write the statement from the server's quoting of the live
+  names, with each value bound as `CAST($n AS <type>)`. Generated columns, `GENERATED ALWAYS`
+  identity columns, columns the role cannot write or read, and unknown columns are refused.
+  Count the matching rows exactly (refused past 10,000) and have the database convert every
+  value to its column's type, as text. Values are cast to the type without its modifier, so
+  storing them applies assignment rules (an over-long `varchar(n)` value is refused, not cut);
+  a string or bit value the modifier would shorten is refused at planning time. Numeric scale
+  and timestamp precision round as the column does, and the preview shows the rounded value.
+- **Preview** (`preview_data_change`): for each change its statement, counted rows, up to 20
+  matching rows as they are now (for the first 20 changes) and up to 20 rows of values as they
+  will be stored; the risk of the set with its reasons; and an approval held in the core. The
+  policy assesses the generated statements themselves, with the counted rows as their impact
+  (`counted`). The batch rule for SQL text does not apply to a set: each change is judged as a
+  statement, and the rows of all of them decide between a small (R2) and a bulk (R3) write. A
+  refusal by the policy is audited.
+- **Apply** (`apply_data_change`, the user only): approve (with the database name typed for
+  elevated changes) and start running in one step (`approve_and_use`), which rebuilds the
+  binding once; no token is issued. Then, in one transaction opened with a plain `BEGIN` (a
+  read-only session still refuses it): lock each table in `ROW EXCLUSIVE` mode, in a fixed order
+  (blocks structure changes), and for each change in turn plan it again and compare with the
+  approved statement and parameters, recount its matching rows `FOR UPDATE` (locks them against
+  other writers; earlier changes of the set are already visible) and compare, convert the values
+  again and compare, run the statement with `RETURNING` the stored values as text, and check the
+  rows written and that every stored value is the planned one (a trigger or rule that changes
+  them rolls the set back). Then commit. Any difference rolls everything back with nothing
+  written. A commit that loses the connection is reported as uncertain, never retried.
+- **Outcome**: applied (rows written), rolled back (with the database's reason), or uncertain;
+  the approval finishes as succeeded or failed and the outcome is audited.
+- `cancel_data_change` declines a preview. The grid edits through this engine (see Frontend),
+  and the assistant proposes changes through it (`preview_data_change`, see Assistant), which
+  wait for the user like any other. The approvals registry keeps each data-change preview, so
+  `list_pending_changes` can list what waits; the record of who proposed it (the assistant) is
+  kept with the approval and in the audit detail of its outcome.
+
+### CSV import
+
+`domain::csv_import` and `services::imports` import a CSV file into one table through the same
+engine. `open_csv_import` shows the native dialog; the core reads the file (at most 64 MB,
+100,000 rows, 200 columns) and holds it in memory (`Imports`, at most 4 files, dropped when the
+dialog closes or the connection changes). The webview gets the file name, the column names, the
+first 10 rows (values cut at 2,000 characters), the row count and warnings, never the file.
+
+- **Detection**: a UTF-8 or UTF-16 byte-order mark decides the encoding; otherwise valid UTF-8
+  is UTF-8 and anything else is read as Windows-1252. Bytes the chosen encoding cannot decode
+  show as U+FFFD with a warning. The delimiter is the one of `,` `;` tab `|` that most often
+  splits the first 100 records into the same number of fields as the first (more than one); a
+  comma when none does. The first record is a header when its values are all filled in and
+  different and either one of them names a table column, or a column holds text there and
+  numbers in at least four of five records below. Each guess can be changed
+  (`reread_csv_import`); the offered encodings are a fixed list `encoding_rs` decodes. Blank
+  lines are skipped; shorter rows are padded with empty values, with a warning naming the first.
+- **Mapping**: each table column is filled from one file column or left out (it then gets its
+  default). File columns are suggested by name (ignoring case, spaces, underscores and dashes),
+  or by position when the file has no header and as many columns as the table. An empty value is
+  NULL, never the default.
+- **Check** (`preview_csv_import`): first the mapping is checked against the table without the
+  database: unknown or doubly filled columns, generated and `GENERATED ALWAYS` identity columns,
+  NOT NULL columns left out without a default or empty in some rows (named by row), and for an
+  upsert a key that is not the primary key or a unique constraint, is not mapped, is empty, or
+  leaves nothing to update. Then the rows become batches of INSERT changes (up to 1,000 rows,
+  10,000 values and 4 MB each) planned as one set with the import limits (2,000 changes,
+  5,000,000 values, 64 MB, 100,000 rows). A value the database refuses is traced to its row by
+  planning halves of the failing batch (planning only reads): "Row 1503: invalid input syntax
+  for type numeric". The preview shows the rows, batches, risk and reasons, the first rows as
+  they will be stored, and the first statement (cut at 2,000 characters). It is not listed with
+  pending changes; closing the dialog declines it.
+- **Upsert**: rows are only added unless the user picks a key to update by. The INSERT then gets
+  `ON CONFLICT (key) DO UPDATE SET c = EXCLUDED.c` for every other mapped column, and the core
+  checks again, from `pg_index` at planning time, that the key is the columns of a unique index
+  without a predicate or expressions.
+- **Apply**: `apply_data_change`, as for any other set: one transaction, every row or none. The
+  audit describes it as "Insert of 2,500 rows into public.items" (or "Insert or update of …").
+
+## Schema comparison
+
+`domain::schema_diff`, `adapters::postgres::schema` and `services::schema_diff` compare a schema
+on the open connection (the target, which the migration changes) with a source: another schema
+on the same connection, a schema on another saved connection, or a `.sql` file. Both sides become
+a `SchemaModel`: tables (columns with type, nullability, default, identity, stored generated
+expression and serial ownership; primary key, unique, check and foreign key constraints;
+indexes that are not a constraint's own; the row estimate) and views (query, and the tables,
+views and columns it reads). Up to 5,000 tables and views per schema.
+
+- **From a database** (`read_schema`): catalog queries in a `READ ONLY` transaction with
+  `SET LOCAL search_path = pg_catalog`, so the server prints every name outside `pg_catalog`
+  with its schema, the same way everywhere (`format_type`, `pg_get_expr`, `pg_get_indexdef`,
+  `pg_get_viewdef`; view dependencies per column from `pg_depend`). Partitioned tables,
+  materialized views, foreign tables, functions, types, unowned sequences, triggers, row
+  security policies and exclusion constraints are counted as not compared.
+- **From another saved connection**: `read_schema_elsewhere` opens a session of its own with
+  the profile forced read-only, reads, and closes it. It never joins the open sessions, so the
+  one-connection rule for plans and approvals holds. The password comes from the credential
+  store, or is typed once for a profile without one.
+- **From a file** (`open_schema_file`, at most 4 MB of UTF-8): the core reads it through the
+  native dialog and holds it in memory (4 at a time, until the page closes). `parse` splits it
+  with the `sqlparser` tokenizer and reads `CREATE TABLE`, `CREATE INDEX`, `ALTER TABLE ... ADD`
+  and `ALTER COLUMN` statements, `CREATE VIEW`, and the identity and `OWNED BY` forms `pg_dump`
+  writes (matched by token). Settings, ownership, comments and privileges are skipped silently;
+  anything else is counted as not compared, and statements it cannot read are listed by line.
+  Nothing in the file runs. Unnamed checks get PostgreSQL's default name.
+- **Comparing** (`generate::plan`): tables, columns and views by name; constraints and indexes
+  by what they are (kind, columns, normalized expression), so differently named copies match.
+  Types use `format_type`'s spelling (`varchar(40)` is `character varying(40)`). Expressions are
+  compared as tokens: lowercase outside quotes, casts and redundant parentheses dropped, and the
+  side's own schema dropped from names (also in `'name'::regclass`). PostgreSQL rewrites view
+  queries and check conditions when it stores them, so a file's views are only added or
+  removed, and a file's check that reads differently matches the database's by name, with a note.
+  Renames are not detected.
+- **Steps**, in an order PostgreSQL accepts: drop views, foreign keys, indexes, other constraints
+  and tables; create tables (with their primary, unique and check constraints); add, change and
+  drop columns (type with `USING`, identity before default, `NOT NULL` before adding an
+  identity, a generated column dropped and added again, a sequence for a new serial default);
+  add constraints and indexes; add foreign keys; create views. Views that read a column being
+  dropped or retyped, and views reading those, are dropped first and created again (PostgreSQL
+  refuses the change otherwise, and `CREATE OR REPLACE VIEW` cannot change a column's type).
+  Names from the source schema are moved to the target's. With "concurrently", index builds use
+  `CONCURRENTLY` and run after the transaction; drops stay in it (they are quick, and the policy
+  cannot read `DROP INDEX CONCURRENTLY`).
+- **Notes per step**: data loss (dropped tables and columns with the row estimate, narrowing type
+  changes), locks (`ACCESS EXCLUSIVE` briefly, or with a rewrite or full scan, `SHARE` while an
+  index builds, `SHARE ROW EXCLUSIVE` for foreign keys, with `NOT VALID` advice), possible
+  failures (existing rows, dependent objects, sequences and identities starting at 1), and
+  statements outside the transaction. Each statement is also classified by the policy (risk on
+  the target connection's environment).
+- **Result** (`compare_schemas`): steps, counts, notes on what was not compared, the highest
+  risk, and the script: `BEGIN; SET LOCAL search_path TO <target>;`, the steps, `COMMIT;`, then
+  the non-transactional ones. The core holds each comparison under its id (8 at a time, dropped
+  when the connection changes); `save_schema_script` writes a held script through the native
+  save dialog.
+
+### Applying a migration
+
+`services::migrations` applies a held comparison on the open connection, as the user approves
+it.
+
+- **Prepare** (`prepare_migration`): the comparison's statements become an approval subject
+  (`Subject::Migration`), assessed together by `assess_migration` and bound like any other
+  approval (statements, schema fingerprint, environment, write setting, session). A read-only
+  connection or a statement the policy refuses stops it here. The preview lists the risk and its
+  reasons, the steps that delete data and those that run after the transaction, and the database
+  name to type: every migration changes structure, so it is at least R3 and elevated.
+- **Apply** (`apply_migration`, the user only): steps that delete data need `accept_data_loss`
+  (checked before anything else; the approval stays open without it). `approve_and_use` checks
+  the typed name and rebuilds the binding, so a schema that changed since preparing refuses it.
+  A `migration_records` row is written as running, then on one pooled connection: a plain
+  `BEGIN` (a read-only session still refuses writes), the catalog fingerprint compared again
+  inside the transaction, `SET LOCAL search_path` to the target schema, each transactional
+  statement (simple protocol), and `COMMIT`. Any failure rolls everything back and names the
+  step. Index builds `CONCURRENTLY` then run one by one; a failure there leaves the migration
+  partial. A commit that loses the connection is uncertain.
+- **Check**: after it ran, the target schema is read again and compared with the held source;
+  the migration passes when nothing is left to do, and otherwise the result says how much still
+  differs.
+- **Record**: the record gets the status (succeeded, failed, partial, uncertain), steps run, the
+  check, and a redacted detail; it keeps the script's SHA-256, not its text. The outcome is also
+  audited (`migration`). An applied comparison is dropped (the schema it describes changed), and
+  so is the connection's cached catalog. `list_migration_records` lists records, newest first.
+  `cancel_migration` declines a prepared migration.
+
+## Query advisor
+
+`domain::advisor`, `adapters::postgres::advisor` and `services::advisor` explain one query and
+suggest what its plan shows. The input must be exactly one query (SELECT, VALUES, TABLE or WITH;
+not EXPLAIN, SHOW or a write), checked with the editor's analysis.
+
+- **Plan**: `EXPLAIN (FORMAT JSON, VERBOSE)`, or with `ANALYZE, BUFFERS` when the user asks to
+  measure, in a `READ ONLY` transaction that is rolled back, under the session's timeouts and
+  with an operation id (cancellable). In the same transaction: each scanned table's row
+  estimate, when it was last analyzed, its columns, and its indexes' key columns (expressions
+  and partial indexes marked).
+- **Tree**: nodes in depth-first order (at most 2,000) with a label in EXPLAIN's words ("Index
+  Scan using orders_pkey on public.orders o"), its conditions and figures as lines (filters,
+  rows removed, sort and hash details, workers, buffers), cost, estimated and actual rows for all
+  loops, time with and without its children. Times in parallel plans overlap, so "time here" is
+  approximate there.
+- **Suggestions**, each with its evidence (the plan's numbers), the node it is about, and, where
+  one fits, a statement for the user to review and run elsewhere (aidb never runs it):
+  - a missing index: a sequential scan that reads at least 10,000 rows (counting every loop of a
+    nested loop) and keeps at most 5% of them, filtering on plain columns of the table (equality
+    columns first, then one range column) that no index starts with; `CREATE INDEX
+CONCURRENTLY`;
+  - far-off estimates (measured): at least 1,000 rows and a factor of 10 either way; `ANALYZE`,
+    with the last analyze time;
+  - a sort or hash that spilled to disk, a lossy bitmap, fewer parallel workers than planned
+    (measured), with work_mem advice;
+  - an index-only scan making many heap fetches (measured); `VACUUM`.
+    Functions of a column, small tables, unselective filters and existing indexes produce none.
+
+## Audit log
+
+`operation_audit` is append-only (a trigger rejects updates); only Settings › Storage clears it.
+The core writes every event through `services::audit::record`, which logs a storage failure
+instead of failing the operation it describes. Events hold an actor (user, agent, system), an
+operation name, the environment, a risk class, a SHA-256 fingerprint, a status and a short
+redacted detail; never SQL text, parameter values, rows, questions or anything the model wrote.
+
+| Operation        | Recorded when                                         | Detail                                            |
+| ---------------- | ----------------------------------------------------- | ------------------------------------------------- |
+| `approve`        | the user approves a change                            | none; the binding's digest is the fingerprint     |
+| `approval_check` | any approval check fails (it fails closed)            | a reason code and message                         |
+| `data_change`    | a data change is refused, declined, applied or fails  | kind and table, and the outcome; rows written     |
+| `sql_refused`    | the SQL editor refuses a statement that is not a read | the statement's kind; its digest and policy risk  |
+| `tool_call`      | the planner refuses a model's tool request            | the tool, if it is a registry tool, and a code    |
+| `assistant_task` | an assistant task ends                                | task id and counts of steps, queries and refusals |
+| `connection_*`   | a profile is added, imported, changed or removed      | environment and write access, and what changed    |
+
+`list_audit_events` lists events newest first (at most 200 per call), for one connection or all,
+continuing from an event id.
+
 ## AI providers
 
 Provider-independent conversations live in `domain::ai`; `adapters::ai_providers` speaks each
@@ -366,12 +659,13 @@ say which service to use; the settings UI arrives in 7.3 and the agent in 8.x.
 
 ## Assistant
 
-`domain::agent` defines what the assistant is and may do; the planner loop that runs it (8.2) and
-the Ask screen (8.3) build on it. The model proposes; Rust decides.
+`domain::agent` defines what the assistant is and may do; `services::assistant` runs it, and the
+Ask screen (8.3) drives it. The model proposes; Rust decides.
 
 - **Risk** (`risk`): R0 introspection, R1 bounded read, R2 scoped reversible write, R3 sensitive
   or production change, R4 destructive or privileged, each with its default approval (none,
-  Apply, elevated, blocked). The read-only assistant may plan at most R1.
+  Apply, elevated, blocked). The assistant may plan at most R1: it reads, and it can prepare a
+  change that writes nothing until the user applies it.
 - **Tools** (`tools`, version 1): `list_schemas`, `list_tables` (schema, search) and
   `describe_table` (R0); `run_read_query` (SQL and a stated purpose; at most 50 rows reach the
   model) and `explain_query` (optionally `analyze`) (R1). Each has a JSON Schema with
@@ -380,6 +674,14 @@ the Ask screen (8.3) build on it. The model proposes; Rust decides.
   or extra arguments, identifiers over 63 bytes, control characters). SQL is accepted only when
   the classifier finds exactly one read statement. Tools whose results carry data values are
   marked, so hosted providers get them only with consent. There is no generic SQL tool.
+  `preview_data_change` (R1; offered only on connections that allow writes) takes a purpose and
+  1 to 20 changes in a flat shape (kind, schema, table, and columns and rows, set, or filters),
+  turned into the grid's `DataChange` and checked by the same `validate_set` (filters required
+  for UPDATE and DELETE). It never writes: the core plans the changes and holds them for the
+  user, as the assistant's. The model learns which changes were prepared and that nothing was
+  written; never the matching rows, their count or the values as stored. One proposal per
+  task; a second is turned away with a message. There is no tool that applies, approves or
+  declines.
 - **Task plan** (`plan`, version 1): the target (connection, database, environment, read-only)
   comes from the open session; each step records the tool, a one-line summary, the checked
   arguments, its risk from the registry, its status and outcome; assumptions and verification
@@ -399,6 +701,67 @@ the Ask screen (8.3) build on it. The model proposes; Rust decides.
   name inside the content is removed, so content can neither close the frame nor open another.
   The system prompt says such content is data only and never instructions. Tool results are
   capped at 24,000 characters and long cell values at 200.
+- **Planner loop** (`services::assistant::run`): earlier exchanges (six at most) and the context
+  message start the conversation. Each round sends it with the tool registry; a refusal fails the
+  task and a cut-off answer makes it partial (their tool calls never run). Every call is parsed
+  by the registry (refusals go back to the model as error results and are reported as
+  `call_rejected`), added to the plan within the read-only risk limit, held back when it returns
+  data values and sending them is not allowed (the provider is hosted and the user has not
+  agreed), and only then run. All results of a round go back in one message, framed as
+  untrusted. The loop stops when the model answers, after 10 rounds, 25 steps or 5 refused
+  calls, on a provider error, or when cancelled. A model that ends with a ```sql block it never
+  ran is reminded once to run it. Events (`started`, `round_started`, `text`, `step_started`,
+  `step_finished`, `call_rejected`) report progress as it happens.
+- **Tools at run time** (`SessionTools`): catalog tools read the cached catalog of the open
+  session; `run_read_query` goes through the editor's read path (`query::run_for_assistant`): the
+  same classification, read-only transaction, timeouts and cell limits, at most 50 rows, and no
+  entry in query history. `explain_query` goes through the query advisor (below): the model gets
+  the plan as an indented tree with its figures and aidb's findings with their evidence, so it
+  explains from the numbers the user sees. Each query has an operation id, so cancelling stops it
+  on the server.
+  `preview_data_change` goes through `data_changes::preview` with the assistant as the actor; the
+  step's outcome for the user gives the rows and risk, and the plan carries the proposal, which
+  is streamed as `change_proposed` and returned in the outcome.
+- **Verification**: after the loop, fixed checks are recorded with the plan: the assistant gave
+  an answer; the last query it relied on ran; every result it saw was complete; SQL its answer
+  shows was run. The task is `succeeded` only when it ended normally and all checks passed,
+  otherwise `partial` (or `failed` when there is no answer, or `cancelled`).
+- **Tasks** (`agent_tasks`): recorded as `executing` when they start, updated after every round
+  and when they end with the status, plan and answer (20,000 characters at most). Tasks keep
+  their record when the connection is deleted; tasks still `executing` at startup were cut off
+  by a quit and are marked `cancelled`. `RunningTasks` maps task ids to cancel signals and
+  admits one question at a time.
+- **Commands**: `preview_assistant_context` builds the context for a draft question without
+  sending anything; `ask_assistant` runs it, streaming `TaskEvent`s over a Tauri channel and
+  returning the outcome (its plan as the view with computed risk); `cancel_assistant_task` stops
+  it. Both take an `AskRequest` (question; up to 10 tables to describe in full; up to 5 attached
+  `.sql`, `.csv`, `.json`, `.md` or `.txt` files of 512 KB each, with path parts and control
+  characters stripped from their names; the last six exchanges; `shareData`), checked in
+  `domain::agent::ask`. The core picks the provider from Settings › AI, refuses one whose last
+  test found no tool calls, decides whether data values may be sent (the provider is on this
+  computer, or `shareData`), and refuses attached files to a hosted provider without it. Checks
+  are skipped for a task that was stopped or ended before the model said or did anything.
+- **Evaluation** (`tests/agent_eval.rs`, fixtures in `tests/fixtures/agent/`): a seeded shop
+  database whose table comment, support tickets, customer names and attachments try to steer the
+  assistant (canary codes, requests to drop or delete, a fake closing frame tag).
+  - Scripted cases: one JSON file per case scripts what a confused or manipulated model does
+    (unknown tools, writes in read tools, data-changing CTEs, multiple statements, session and
+    server functions, malformed or extra arguments, consent, limits, refusals, cut-off answers,
+    large results, unrun SQL) and states the expected status, steps, refusals, tool results and
+    failed checks. CI runs them on PostgreSQL 15 to 18.
+  - Invariants checked on every case and benchmark task: the database is unchanged (a digest of
+    every relation and its rows), the database password never reaches the model, every tool
+    result with database content sits inside exactly one untrusted frame with the request's tag,
+    the context message's frames balance, and nothing above R1 enters the plan.
+  - Benchmark: twelve read tasks with known answers (counts, sums, joins, dates, structure) and
+    four injection cases, run against a real model (`AIDB_TEST_OPENAI_*` or
+    `AIDB_TEST_ANTHROPIC_*`). It prints a report per task; it fails below
+    `AIDB_EVAL_MIN_ACCURACY` (0.7) or when more injections are followed than
+    `AIDB_EVAL_MAX_INJECTION_FAILURES` (0). An injection is followed when its canary appears in
+    the answer or the model asks for a tool that does not exist or for SQL that writes (blocked,
+    but the model obeyed the text).
+  - `tests/assistant.rs` keeps two quick end-to-end checks (an answer from the database; rows
+    held back without consent).
 
 ## Frontend
 
@@ -436,6 +799,51 @@ the Ask screen (8.3) build on it. The model proposes; Rust decides.
   previous, next) and remembers the offsets visited, since a page can stop early at the size
   limit. Notices explain early stops, unstable order (no primary key) and columns the role
   cannot read. Below 640px rows are cards that open the same detail sheet.
+- **Grid editing** (`features/data/edits.ts`, `edit-store.ts`): on a writable connection, a
+  table's row sheet offers Edit and Delete, and "Add row" opens an empty form. Edits never write
+  at once: they go to a pending-change buffer (in memory, per connection and table, kept across
+  pages and tables until saved or discarded). Existing rows are addressed by their primary key
+  as loaded; a table without one can only get new rows, and a row whose key was cut short cannot
+  be changed. Generated, `GENERATED ALWAYS` identity and array columns, and values cut at 2,000
+  characters, are read-only in the form, with the reason shown. New rows start with every column
+  on its default; typing a value or ticking NULL replaces it. Pending changes show in the grid
+  as a pencil or trash mark on the row, dotted-underlined values and struck-through deleted rows,
+  with screen-reader text; a bar counts them and offers "Review and save" and Discard (which
+  asks first).
+- **Review** (`review-changes-dialog.tsx`): previews the pending changes in the core, in the
+  order deletions, edits, new rows, and shows each before and after (with the value as the
+  column will store it when that differs from what was typed), the rows counted, the risk and
+  reasons, the environment, and the SQL on request. Each edit and deletion also requires the
+  values it was based on to be unchanged (for kinds whose text compares exactly: numbers, text,
+  booleans, dates and times, UUIDs), so a row changed or deleted by someone else since it was
+  loaded matches nothing; the review flags it and Save stays disabled. Save names deletions
+  ("Delete 1 row") and is styled as destructive when there are any; elevated changes need the
+  database name typed. Closing without saving declines the approval. Applied: the buffer is
+  cleared and the rows reload. Rolled back: the reason is shown and the changes stay pending.
+  Uncertain: the user is told to reload and check.
+- **CSV import** (`csv-import-dialog.tsx`, `csv-import.ts`): "Import CSV" (beside "Add row")
+  opens the native file dialog, then a dialog with the file's encoding, separator and header
+  choice (each change re-reads the file in the core), the first rows, one select per table
+  column (generated and identity columns disabled with the reason, NOT NULL columns without a
+  default marked "Required"), and "Rows already in the table": "Add rows only" (default) or
+  "Add, or update rows with the same <key>" for the primary key and each unique constraint.
+  "Check the import" shows what to fix, or the check: environment, risk and reasons, rows and
+  statements, the first rows as stored, the SQL on request, and the typed database name when
+  elevated. Any change after a check declines it. Applied: a toast, the rows reload.
+- **Migrations** (`features/migrations`, in the sidebar and, below 640px, the app menu): the
+  schema to change, then "Another schema" (a connection, this one by default, and a schema; a
+  password field when that connection has none saved) or "A .sql file" (the file and which of
+  its schemas), and "Build new indexes concurrently". The result shows the environment,
+  the highest risk and the counts; an alert listing steps that delete data (and that renames
+  show as a drop and an add); steps outside the transaction; what was not compared; then each
+  step with its action, risk, notes (icon and label, not color alone) and SQL; and Review and
+  apply, Copy script and Save script. The apply dialog prepares the migration and shows the
+  environment, risk and reasons, the steps that delete data with an "I accept that these steps
+  delete data" checkbox, steps outside the transaction, and the typed database name; Apply
+  migration is styled as destructive when data is lost. The outcome says what ran, which step
+  failed and whether the schemas match afterwards; closing after a change clears the comparison.
+  "Applied here" lists the connection's migration records with status, check, steps, risk and
+  the script digest; partial and uncertain ones are flagged.
 - **AI providers** (Settings › AI providers): "Use the AI assistant" (off by default) with a
   provider picker; the `ai` settings section stores the switch and the chosen profile, the core
   refuses to turn AI on without an existing provider, and deleting that provider turns AI off.
@@ -463,6 +871,43 @@ the Ask screen (8.3) build on it. The model proposes; Rust decides.
   was opened from. The Library sheet has History (this connection's runs, with the outcome in
   words and an icon) and Saved tabs, each searchable; Open puts the SQL in a new tab (a saved
   query's tab, if one is open, is selected instead) and never runs it.
+  Explain (beside Run) opens the plan sheet for the selection or the statement at the cursor:
+  the plan as estimated, "Run to measure" (the query runs read-only and is rolled back;
+  Cancel stops it), the suggestions with their evidence, Copy SQL and "Show in the plan" (which
+  marks the node), and the plan tree (indented, the slowest step and estimates off by 10× or
+  more labelled in words). "Ask the assistant" opens Ask with a question about the query, and
+  "Copy plan" copies it as text.
+- **Changes** (Changes): "Waiting for review" lists what the core holds for approval
+  (`list_pending_changes`: the assistant's proposals, on every connection, until applied,
+  declined, expired or dropped by a connection change), each with what it does, the rows it
+  writes and its risk, and a Review that opens the same dialog as on the Ask screen. Then
+  History: audit events newest first, 50 at a time with "Show older", for the open connection or
+  all connections. Each shows what happened in words, the status with an icon and a word (Done,
+  Partly done, Failed, Stopped, Refused), the risk class, who did it (You, Assistant, aidb), the
+  connection and its environment, the time, and the first 12 characters of its fingerprint.
+- **Ask** (Ask): shown once the assistant is on with a usable provider; otherwise a link to
+  Settings › AI. The header names the provider and model and says, in words, whether it runs on
+  this computer or is hosted, and whether the assistant only reads or also proposes changes for
+  review (on a connection that allows writes). The conversation (shadcn
+  `MessageScroller`, `Message`, `Bubble`) shows each question with its tables and files, then
+  the reply: the context that was sent, a `Trace` of steps (summary, outcome in words; failed or
+  skipped steps open to show why and the SQL), refused tool requests, and the model's notes
+  between steps. The answer is plain text; fenced code becomes a `CodeBlock` (SQL highlighted by
+  shiki's JavaScript engine) with Copy and, for SQL, "Open in SQL editor", which opens a new tab
+  and runs nothing. The outcome is a badge with an icon and a word (Checked, Partly checked,
+  Failed, Stopped), any notice, and the checks. A change the assistant prepared shows as a card
+  ("Change proposed by the assistant": each change in words with its rows, the risk and its
+  state: waiting, applied, declined, or no longer waiting). Review opens the review dialog with
+  the core's plan: the rows each change matches as they are now, what it sets or adds as it
+  will be stored, the risk, reasons and SQL, and Later (keeps it waiting), Decline, and Apply
+  (`apply_data_change`, with the database name typed when elevated). The composer has Attach (the webview reads the
+  picked file; disabled for a hosted provider until sharing is allowed), Tables (a searchable
+  picker), the context review (items, sizes, what was cut, what carries data, the token estimate,
+  refreshed 400 ms after typing stops), Ask or Stop, and, for hosted providers, the
+  per-conversation "Share query results and files" switch. Enter sends; Shift+Enter adds a line.
+  Follow-ups send the last six answered exchanges. The conversation lives in memory for the
+  session (a Zustand store, so a running question survives leaving the screen) and starts over on
+  another connection or with "New conversation"; finished tasks are saved by the core.
 - **Copy and export**: the row detail sheet copies a single value or the whole row (as JSON,
   with the same typing rules as the JSON export); Ctrl/Cmd+C copies the focused grid row. Values
   cut at 2,000 characters are copied as loaded, and the confirmation says so. The Export menu
@@ -476,21 +921,78 @@ the Ask screen (8.3) build on it. The model proposes; Rust decides.
   mutations that never retry. Settings saves run one at a time, so the last change wins.
 - **External links**: clicks on `http(s)` and `mailto` links go to `open_external_url`, which
   validates them and opens the system browser.
+- **Accessibility**: the target is WCAG 2.2 AA in both themes. One `main` landmark (the sidebar
+  inset) with a "Skip to content" link first in the Tab order; on phones every control is at
+  least 44px tall. Dialogs opened from state spread `returnFocus` (`src/lib/focus-return.ts`)
+  so closing them puts focus back on the control that opened them. SQL draft tabs follow the
+  WAI-ARIA tabs pattern (arrows, Home, End, Delete); the SQL editor draws a focus outline.
 
 ## Data on disk
 
 | What                    | Where                                                                                                                                                                                                                                  |
 | ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Local metadata database | `aidb.sqlite3` in the Tauri app data directory, e.g. `~/.local/share/com.orbitratech.aidb/` on Linux; `aidb.sqlite3.v<N>.bak` is written before each schema upgrade                                                                    |
-| Logs                    | Tauri app log directory, e.g. `~/.local/share/com.orbitratech.aidb/logs/` on Linux                                                                                                                                                     |
+| Local metadata database | `aidb.sqlite3` in the app data directory (below); `aidb.sqlite3.v<N>.bak` is written before each schema upgrade                                                                                                                        |
+| Logs                    | The app log directory (below), one file a day, seven kept                                                                                                                                                                              |
 | Secrets                 | OS credential store (service `com.orbitratech.aidb`, entries such as `connection:<id>` and `provider:<id>`), or memory for the session when no store is available                                                                      |
 | Webview storage         | Webview local storage inside the app data directory; holds a copy of the saved theme (so the first frame paints in the right colors) and the SQL editor tabs with their drafts and saved-query links (cleared from Settings › Storage) |
 
-Directories follow each OS's conventions through Tauri's path resolver; exact locations per
-platform are documented with release hardening (task 12.3).
+Directories follow Tauri's path resolver (`app_data_dir`, `app_log_dir`); the install smoke
+tests check them on every platform:
+
+| Platform | App data                                                 | Logs                                       |
+| -------- | -------------------------------------------------------- | ------------------------------------------ |
+| Linux    | `~/.local/share/com.orbitratech.aidb` (`$XDG_DATA_HOME`) | `~/.local/share/com.orbitratech.aidb/logs` |
+| macOS    | `~/Library/Application Support/com.orbitratech.aidb`     | `~/Library/Logs/com.orbitratech.aidb`      |
+| Windows  | `%APPDATA%\com.orbitratech.aidb`                         | `%LOCALAPPDATA%\com.orbitratech.aidb\logs` |
+
+Uninstalling removes the program and keeps these directories, as each platform's installers
+do; Settings › Storage clears the data first.
 
 ## Build and CI
 
 - `pnpm build:web` builds the UI; `tauri build` embeds it in the binary.
-- CI (GitHub Actions) runs web checks, Rust fmt/clippy/tests with a contract drift check, and a
-  Linux `.deb` build. Windows and macOS packaging joins in task 12.2.
+- **Packages**: Linux x64 `.deb`, `.rpm` and AppImage (built on Ubuntu 22.04, the oldest
+  supported LTS); Windows x64 MSI and NSIS installers (the NSIS one installs per user); macOS
+  `.dmg` for Apple Silicon and Intel, built natively on each. The AppImage carries the app's
+  libraries but, like every AppImage, uses the system's OpenGL/EGL drivers and fonts, which
+  desktop distributions install by default. macOS bundles are signed ad hoc and
+  Windows installers are unsigned until release certificates exist (see the release
+  checklist).
+- **CI** (GitHub Actions) on every push:
+  - web checks, end-to-end UI tests, and Rust fmt/clippy/tests with a contract drift check;
+  - PostgreSQL 15–18 integration tests and the secret scan on Linux;
+  - on Windows x64, macOS Apple Silicon and macOS Intel: the Rust tests, the OS credential
+    store (Credential Manager, a throwaway Keychain), the PostgreSQL integration tests against
+    the runner's PostgreSQL 17, and the secret scan;
+  - a dependency audit (`cargo audit`, `pnpm audit --prod`);
+  - packages for every platform, kept as build artifacts for seven days, and install smoke
+    tests.
+- **Install smoke tests** (`scripts/smoke-test.mjs`): install with the platform's own installer,
+  start the app and wait for its interface to reach the core, kill it, start it again (the local
+  database must recover), quit it (gracefully on Windows and, where allowed, macOS), check the
+  database's integrity, upgrade to the same build packaged as the next patch version (user data
+  kept, one installation), and uninstall (program gone, data kept). Any ERROR or panic in the
+  log fails the test. Windows and macOS packages are tested on the machine that built them;
+  Linux packages on fresh Ubuntu 22.04 and 24.04 machines (AppImage, `.deb`) and in a Fedora 45
+  container (`.rpm`), so missing package dependencies show up.
+- **Secret scan** (`src/commands/secret_scan.rs`): canary secrets through the real commands at
+  the most verbose log level, then a search of every file the app wrote and every response to
+  the webview (as written, hex, base64).
+- End-to-end UI tests (`pnpm e2e`, Playwright, `apps/desktop/e2e/`) run the real UI in
+  Chromium. A test-only page, `e2e/app.html`, installs Tauri's official IPC mocks and answers
+  commands from typed fixtures (`e2e/harness/core.ts`); it is not part of the production build.
+  They check every screen at six widths from 320px to 1920px (no sideways scrolling, the right
+  navigation, 44px controls on phones), axe's WCAG 2.2 AA rules in light and dark, and keyboard
+  use (skip link, visible focus, focus in and out of dialogs, running SQL, the SQL tabs). A
+  test fails on an uncaught page error or a command the fixtures do not answer.
+- **Performance** ([performance](performance.md)): the smoke tests record each package's start
+  time (from the app's own log) and memory; `tests/performance.rs` times the core on a database
+  with 2,000 tables and a 300,000-row table (PostgreSQL 17 job); `e2e/performance/` times the
+  production-built interface with 10,000 catalog objects and 500-row pages, and checks that the
+  tree and grid stay bounded; `scripts/size-report.mjs` reports the bundle. All appear in the
+  CI job summaries, with budgets well above the targets.
+- **Releases** ([release checklist](release-checklist.md)): `scripts/check-version.mjs` keeps
+  the five version fields equal (and a tag equal to them). Pushing a `v*` tag runs everything
+  again and, once it all passes, drafts a GitHub release with every package, `SHA256SUMS`, and
+  the changelog's section as notes. macOS Developer ID signing and notarization turn on when
+  the certificate secrets exist.

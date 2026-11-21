@@ -1,0 +1,173 @@
+use super::*;
+
+/// The shape `pg_dump --schema-only` writes.
+const DUMP: &str = r"
+--
+-- PostgreSQL database dump
+--
+SET statement_timeout = 0;
+SELECT pg_catalog.set_config('search_path', '', false);
+
+CREATE TYPE public.mood AS ENUM ('ok', 'sad');
+
+CREATE FUNCTION public.touch() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN NEW.updated_at := now(); RETURN NEW; END; $$;
+
+CREATE TABLE public.customers (
+    id integer NOT NULL,
+    name character varying(80) NOT NULL,
+    mood public.mood DEFAULT 'ok'::public.mood
+);
+
+ALTER TABLE public.customers OWNER TO app;
+
+CREATE SEQUENCE public.customers_id_seq AS integer START WITH 1 INCREMENT BY 1 NO MINVALUE NO MAXVALUE CACHE 1;
+ALTER SEQUENCE public.customers_id_seq OWNED BY public.customers.id;
+
+CREATE TABLE public.orders (
+    id bigint NOT NULL,
+    customer_id integer NOT NULL,
+    total numeric(10,2),
+    placed_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT orders_total_check CHECK ((total >= (0)::numeric))
+);
+
+ALTER TABLE public.orders ALTER COLUMN id ADD GENERATED ALWAYS AS IDENTITY (
+    SEQUENCE NAME public.orders_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1
+);
+
+CREATE VIEW public.big_orders AS
+ SELECT id, total FROM public.orders WHERE (total > (100)::numeric);
+
+ALTER TABLE ONLY public.customers ALTER COLUMN id SET DEFAULT nextval('public.customers_id_seq'::regclass);
+ALTER TABLE ONLY public.customers ADD CONSTRAINT customers_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY public.orders ADD CONSTRAINT orders_pkey PRIMARY KEY (id);
+CREATE INDEX orders_placed_idx ON public.orders USING btree (placed_at DESC);
+ALTER TABLE ONLY public.orders
+    ADD CONSTRAINT orders_customer_id_fkey FOREIGN KEY (customer_id) REFERENCES public.customers(id) ON DELETE CASCADE;
+CREATE TRIGGER touch BEFORE UPDATE ON public.orders FOR EACH ROW EXECUTE FUNCTION public.touch();
+COMMENT ON TABLE public.orders IS 'Placed orders';
+CREATE TABLE audit.log (id integer);
+";
+
+#[test]
+fn a_dump_reads_as_its_tables_views_and_keys() {
+    let (schemas, statements) = survey(DUMP).expect("splits");
+    assert_eq!(schemas, vec!["public".to_owned(), "audit".to_owned()]);
+    assert!(statements > 15);
+
+    let model = read(DUMP, "public").expect("reads");
+    assert_eq!(model.schema, "public");
+    assert!(!model.stored_text);
+    let names: Vec<&str> = model.tables.iter().map(|t| t.name.as_str()).collect();
+    assert_eq!(names, ["customers", "orders"]);
+
+    let customers = &model.tables[0];
+    let id = &customers.columns[0];
+    assert_eq!(id.data_type, "integer");
+    assert!(id.serial, "the sequence it owns makes it serial");
+    assert!(!id.nullable);
+    assert_eq!(customers.columns[1].data_type, "character varying(80)");
+    assert_eq!(customers.columns[2].data_type, "public.mood");
+    assert_eq!(
+        customers.constraints,
+        vec![Constraint {
+            name: Some("customers_pkey".into()),
+            kind: ConstraintKind::PrimaryKey(vec!["id".into()]),
+        }]
+    );
+
+    let orders = &model.tables[1];
+    assert_eq!(orders.columns[0].identity, Some(Identity::Always));
+    assert_eq!(orders.columns[3].data_type, "timestamp with time zone");
+    assert_eq!(orders.columns[3].default.as_deref(), Some("now()"));
+    let kinds: Vec<&ConstraintKind> = orders.constraints.iter().map(|c| &c.kind).collect();
+    assert!(
+        matches!(kinds[0], ConstraintKind::Check(expression) if expression.contains("total >= "))
+    );
+    assert!(matches!(kinds[1], ConstraintKind::PrimaryKey(_)));
+    match kinds[2] {
+        ConstraintKind::ForeignKey(key) => {
+            assert_eq!(key.schema.as_deref(), Some("public"));
+            assert_eq!(key.table, "customers");
+            assert_eq!(key.referenced, ["id"]);
+            assert_eq!(key.on_delete, ReferentialAction::Cascade);
+        }
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(orders.indexes.len(), 1);
+    assert_eq!(orders.indexes[0].name.as_deref(), Some("orders_placed_idx"));
+    assert!(
+        orders.indexes[0]
+            .definition
+            .starts_with("USING btree (placed_at DESC)")
+    );
+
+    assert_eq!(model.views.len(), 1);
+    assert_eq!(model.views[0].name, "big_orders");
+
+    let notes = model.not_compared.join("; ");
+    assert!(notes.contains("1 function"), "{notes}");
+    assert!(notes.contains("1 type"), "{notes}");
+    assert!(notes.contains("1 trigger"), "{notes}");
+    assert!(notes.contains("other schemas"), "{notes}");
+}
+
+#[test]
+fn hand_written_files_use_inline_keys_and_serials() {
+    let file = r"
+        create table Customers (id serial primary key, email text unique not null);
+        create table orders (
+            id bigserial primary key,
+            customer_id int references customers on delete set null,
+            note varchar(200),
+            total numeric generated always as (1 + 1) stored,
+            code int generated by default as identity
+        );
+        create unique index on orders (note) where note is not null;
+        create materialized view totals as select 1;
+        this is not sql;
+    ";
+    let model = read(file, "public").expect("reads");
+    let customers = &model.tables[0];
+    assert_eq!(customers.name, "customers");
+    assert!(customers.columns[0].serial);
+    assert_eq!(
+        customers.columns[0].default.as_deref(),
+        Some("nextval('customers_id_seq'::regclass)")
+    );
+    assert!(!customers.columns[1].nullable);
+    assert!(matches!(&customers.constraints[1].kind, ConstraintKind::Unique(c) if c == &["email"]));
+
+    let orders = &model.tables[1];
+    assert_eq!(orders.columns[0].data_type, "bigint");
+    match &orders.constraints[1].kind {
+        // `references customers` means its primary key.
+        ConstraintKind::ForeignKey(key) => {
+            assert_eq!(key.referenced, ["id"]);
+            assert_eq!(key.on_delete, ReferentialAction::SetNull);
+            assert_eq!(key.schema, None);
+        }
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(orders.columns[3].generated.as_deref(), Some("1 + 1"));
+    assert_eq!(orders.columns[4].identity, Some(Identity::ByDefault));
+    assert_eq!(orders.indexes[0].name, None);
+    assert!(orders.indexes[0].unique);
+    assert!(orders.indexes[0].definition.contains("WHERE"));
+
+    let notes = model.not_compared.join("; ");
+    assert!(notes.contains("materialized view"), "{notes}");
+    assert!(notes.contains("could not read: line 12"), "{notes}");
+}
+
+#[test]
+fn unclosed_quotes_are_refused() {
+    assert!(read("create table t (a text default 'x);", "public").is_err());
+    assert!(survey("select $$").is_err());
+}

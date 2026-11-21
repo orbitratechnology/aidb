@@ -57,6 +57,7 @@ import {
   type ProviderFormValues,
 } from './provider-form'
 import { PROVIDERS_QUERY_KEY } from './queries'
+import { returnFocus } from '@/lib/focus-return'
 
 export type ProviderFormMode = { kind: 'create' } | { kind: 'edit'; provider: ProviderDetails }
 
@@ -76,6 +77,7 @@ export function ProviderSheet({
   return (
     <Sheet open={mode !== null} onOpenChange={(open) => !open && onClose()}>
       <SheetContent
+        {...returnFocus}
         side="right"
         className="gap-0 data-[side=right]:w-full data-[side=right]:sm:max-w-xl"
       >

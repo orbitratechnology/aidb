@@ -22,6 +22,7 @@ import {
   STRUCTURED_OUTPUT_LABELS,
 } from './provider-display'
 import { PROVIDERS_QUERY_KEY } from './queries'
+import { returnFocus } from '@/lib/focus-return'
 
 /** Runs "Test provider" when opened and shows each check. */
 export function ProviderTestDialog({
@@ -33,7 +34,7 @@ export function ProviderTestDialog({
 }) {
   return (
     <Dialog open={provider !== null} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="sm:max-w-lg">
+      <DialogContent {...returnFocus} className="sm:max-w-lg">
         {provider && <TestRun key={provider.id} provider={provider} onClose={onClose} />}
       </DialogContent>
     </Dialog>

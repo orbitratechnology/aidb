@@ -474,7 +474,7 @@ jobs:
       image: fedora:45
     steps:
       - name: Install Node.js and a virtual display
-        run: dnf install -y --setopt=install_weak_deps=False nodejs xorg-x11-server-Xvfb xauth which
+        run: dnf install -y --setopt=install_weak_deps=False nodejs xorg-x11-server-Xvfb xauth which procps-ng
       - uses: actions/checkout@v7
       - uses: actions/download-artifact@v7
         with:

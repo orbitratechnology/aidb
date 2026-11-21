@@ -23,16 +23,33 @@ development container; a developer laptop is usually faster.
 
 ### Starting the app
 
-Time from launching the installed app to its interface talking to the core, on CI machines.
-The first start of a fresh install includes one-time work (the webview's first start, creating
-the local database); later starts are the everyday case.
+Time from launching the installed app to its interface talking to the core. The first start of
+a fresh install includes one-time work (the webview's first start, creating the local
+database); later starts are the everyday case.
 
-| Package                                                                        | First start | Later starts | Memory after start |
-| ------------------------------------------------------------------------------ | ----------- | ------------ | ------------------ |
-| _Filled in from the CI run of the release commit (see the release checklist)._ |             |              |                    |
+CI run 44877450530 (21 November 2026), GitHub-hosted runners:
 
-Memory counts the app and, on Linux and Windows, the webview processes it starts; on macOS
-WebKit's processes run under the system and are not included.
+| Package                | First start | After a crash | After an upgrade | Memory after start |
+| ---------------------- | ----------- | ------------- | ---------------- | ------------------ |
+| Windows MSI            | 8.7 s       | 0.9 s         | 1.5 s            | 406 MB             |
+| Windows NSIS           | 0.9 s       | 1.6 s         | 1.3 s            | 395 MB             |
+| macOS Apple Silicon    | 5.2 s       | 2.3 s         | 2.2 s            | 105 MB             |
+| macOS Intel            | 4.0 s       | 1.0 s         | 1.1 s            | 52 MB              |
+| Ubuntu 22.04, `.deb`   | 0.5 s       | 0.5 s         | 0.5 s            | 428 MB             |
+| Ubuntu 22.04, AppImage | 1.2 s       | 0.7 s         | 1.2 s            | 457 MB             |
+| Ubuntu 24.04, `.deb`   | 1.1 s       | 0.9 s         | 0.9 s            | 409 MB             |
+| Ubuntu 24.04, AppImage | 1.4 s       | 0.6 s         | 0.9 s            | 450 MB             |
+| Fedora 45, `.rpm`      | 0.5 s       | 0.5 s         | 0.5 s            | (not in this run)  |
+
+Every start after the first is within the 3-second target. The first start of a fresh install
+is slower on Windows and macOS: WebView2 creates its profile (the MSI's 8.7 s; the NSIS
+install ran second, on a machine where WebView2 had already started), and macOS checks the
+newly installed app. The AppImage unpacks itself on each start, as it does on machines without
+FUSE.
+
+Memory counts the app and, on Linux and Windows, the webview processes it starts (most of the
+total); on macOS WebKit's processes run under the system and are not counted, so the macOS
+figures are the app's own process only.
 
 ### The core, with a large database
 

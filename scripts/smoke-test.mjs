@@ -428,11 +428,11 @@ async function main() {
   checkVersion(packageVersion(first), 'install')
 
   step('Start, then crash')
-  const first = await start('first start')
+  const running = await start('first start')
   // Settled memory: a few seconds after the interface is up.
   await sleep(5000)
-  measurements.push({ step: 'memory after start', memory: memoryMb(first.child) })
-  await crash(first)
+  measurements.push({ step: 'memory after start', memory: memoryMb(running.child) })
+  await crash(running)
 
   step('Start after the crash, then quit')
   await quit(await start('start after a crash'), 'quit')
